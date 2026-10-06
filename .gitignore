@@ -1,0 +1,12 @@
+node_modules/
+out/
+dist/
+release/
+tests/.out/
+tests/*.png
+*.log
+*.tsbuildinfo
+.DS_Store
+Thumbs.db
+# 历史误建文件(文件名含反引号),永不入库
+{`r`n

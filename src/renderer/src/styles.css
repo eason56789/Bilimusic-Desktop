@@ -1,0 +1,254 @@
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+}
+
+/* 玻璃模式:页面背景透明,让窗口材质透出 */
+html,
+body {
+  background: transparent !important;
+}
+
+body {
+  font-family: 'Segoe UI Variable', 'Segoe UI', 'Microsoft YaHei UI', 'Microsoft YaHei',
+    sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* 全局按钮反馈 */
+button {
+  transition:
+    transform 0.12s ease,
+    filter 0.15s ease;
+}
+button:active:not(:disabled) {
+  transform: scale(0.96);
+  filter: brightness(1.1);
+}
+/* 列表行/卡片按压反馈 */
+[role='button'],
+.fui-Button:active {
+  transform: scale(0.98);
+}
+
+/* ============ 页面切换动画 ============ */
+@keyframes page-fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+@keyframes page-slide {
+  from {
+    opacity: 0;
+    transform: translateX(28px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+@keyframes page-scale {
+  from {
+    opacity: 0;
+    transform: scale(0.965);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+.page-anim-fade {
+  animation: page-fade 0.26s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.page-anim-slide {
+  animation: page-slide 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.page-anim-scale {
+  animation: page-scale 0.28s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+/* ============ 全屏播放页开关动画 ============ */
+@keyframes np-in {
+  from {
+    opacity: 0;
+    transform: translateY(36px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+@keyframes np-out {
+  from {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: translateY(28px) scale(0.985);
+  }
+}
+.np-root {
+  transition:
+    opacity 0.24s cubic-bezier(0.16, 1, 0.3, 1),
+    transform 0.24s cubic-bezier(0.16, 1, 0.3, 1),
+    visibility 0s linear 0s;
+}
+.np-root[data-open='false'] {
+  opacity: 0;
+  transform: translateY(36px) scale(0.985);
+  visibility: hidden;
+  transition:
+    opacity 0.22s cubic-bezier(0.16, 1, 0.3, 1),
+    transform 0.22s cubic-bezier(0.16, 1, 0.3, 1),
+    visibility 0s linear 0.22s;
+  pointer-events: none;
+}
+.np-root[data-open='true'] {
+  animation: np-in 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+/* ============ 对话框/通用淡入 ============ */
+@keyframes fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.fade-up {
+  animation: fade-up 0.24s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+/* ============ 首启引导背景 ============ */
+.ob-bg {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  background: linear-gradient(135deg, #0b1220 0%, #101a2e 45%, #1a1030 100%);
+}
+.ob-blob {
+  position: absolute;
+  border-radius: 50%;
+  filter: blur(90px);
+  opacity: 0.5;
+  animation: ob-float 14s ease-in-out infinite alternate;
+}
+@keyframes ob-float {
+  from {
+    transform: translate(0, 0) scale(1);
+  }
+  to {
+    transform: translate(40px, -30px) scale(1.15);
+  }
+}
+
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+*::-webkit-scrollbar-thumb {
+  background: rgba(128, 128, 128, 0.4);
+  border-radius: 5px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: rgba(128, 128, 128, 0.7);
+  background-clip: content-box;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/** 自定义标题栏拖动区 */
+.titlebar-drag {
+  -webkit-app-region: drag;
+}
+.titlebar-nodrag {
+  -webkit-app-region: no-drag;
+}
+
+/** 歌词滚动容器 */
+.lyrics-scroll {
+  scrollbar-width: none;
+}
+.lyrics-scroll::-webkit-scrollbar {
+  display: none;
+}
+
+/** 封面图占位 */
+.cover-fallback {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(135deg, rgba(96, 125, 139, 0.35), rgba(55, 71, 79, 0.5));
+  color: rgba(255, 255, 255, 0.85);
+}
+
+/** 正在播放的行高亮动画 */
+@keyframes pulse-eq {
+  0%,
+  100% {
+    transform: scaleY(0.4);
+  }
+  50% {
+    transform: scaleY(1);
+  }
+}
+.eq-bar {
+  display: inline-block;
+  width: 3px;
+  border-radius: 2px;
+  background: var(--colorBrandForeground1, #0f6cbd);
+  animation: pulse-eq 0.9s ease-in-out infinite;
+  transform-origin: bottom;
+}
+
+/** 引导页:步骤切换过渡(前进右滑入/后退左滑入) */
+@keyframes ob-step-fwd {
+  from { opacity: 0; transform: translateX(40px) scale(0.98); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes ob-step-back {
+  from { opacity: 0; transform: translateX(-40px) scale(0.98); }
+  to { opacity: 1; transform: none; }
+}
+.ob-step-fwd { animation: ob-step-fwd 0.32s cubic-bezier(0.16, 1, 0.3, 1); }
+.ob-step-back { animation: ob-step-back 0.32s cubic-bezier(0.16, 1, 0.3, 1); }
+
+/** 引导页:完成时整卡缩放退场 + 背景淡出 */
+@keyframes ob-card-out {
+  to { opacity: 0; transform: scale(0.94) translateY(16px); }
+}
+@keyframes ob-bg-out {
+  to { opacity: 0; }
+}
+.ob-bg-out { animation: ob-bg-out 0.3s ease forwards; }
+
+/** KTV 前奏倒计时圆点呼吸(对齐手机端 1.4s 往返) */
+@keyframes ktv-dot-breathe {
+  0%,
+  100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.35);
+  }
+}
+
+/** 引导完成:主界面入场(放大淡入,与引导退场衔接) */
+@keyframes shell-enter {
+  from { opacity: 0; transform: scale(0.965); }
+  to { opacity: 1; transform: none; }
+}
+.shell-enter { animation: shell-enter 0.45s cubic-bezier(0.16, 1, 0.3, 1); }

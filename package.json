@@ -1,0 +1,68 @@
+{
+  "name": "bilimusic-desktop",
+  "productName": "BiliMusic",
+  "version": "1.0.0",
+  "description": "基于哔哩哔哩与网易云音乐的音乐播放器 - 桌面版 (Fluent UI)",
+  "main": "out/main/index.js",
+  "author": "BiliMusic",
+  "license": "MIT",
+  "private": true,
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
+    "start": "electron-vite preview",
+    "dist": "electron-vite build && electron-builder --win"
+  },
+  "dependencies": {
+    "qrcode": "^1.5.4",
+    "zustand": "^5.0.3"
+  },
+  "devDependencies": {
+    "@fluentui/react-components": "^9.0.0",
+    "@fluentui/react-icons": "^2.0.270",
+    "@types/node": "^22.10.0",
+    "@types/qrcode": "^1.5.5",
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@vitejs/plugin-react": "^4.3.4",
+    "electron": "^38.2.0",
+    "electron-builder": "^25.1.8",
+    "electron-vite": "^3.1.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "typescript": "^5.7.2",
+    "vite": "^6.0.7"
+  },
+  "allowScripts": {
+    "electron@38.8.6": true,
+    "esbuild@0.25.12": true
+  },
+  "build": {
+    "appId": "com.bilimusic.desktop",
+    "productName": "BiliMusic",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "out/**/*",
+      "package.json",
+      "build/icon.ico",
+      "build/icon.png"
+    ],
+    "asar": true,
+    "win": {
+      "icon": "build/icon.ico",
+      "target": [
+        "nsis"
+      ],
+      "artifactName": "${productName}-${version}-setup.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "shortcutName": "BiliMusic"
+    }
+  }
+}
