@@ -46,8 +46,14 @@ import { Cover } from './Cover'
 import { NiceSlider } from './NiceSlider'
 import { SpectrumBars } from './SpectrumBars'
 import { LyricLineRow } from './LyricLineRow'
+import { CommentsBody } from './PlayerDialogs'
 import { badgeOf } from '../lib/sourceBadge'
 import { formatTime } from './SongList'
+
+/** 右侧评论停靠面板宽度(px):播放内容整体左移同样的量 */
+const COMMENTS_PANEL_W = 360
+/** 面板滑入/内容左移的同一条曲线 */
+const PANEL_EASE = 'cubic-bezier(0.22, 1, 0.36, 1)'
 
 const useStyles = makeStyles({
   fullscreen: {
@@ -68,13 +74,14 @@ const useStyles = makeStyles({
     transform: 'scale(1.2)'
   },
   content: {
-    position: 'relative',
-    zIndex: 1,
-    display: 'flex',
-    flexDirection: 'column',
-    height: '100%',
-    width: '100%'
-  },
+        position: 'relative',
+        zIndex: 1,
+        display: 'flex',
+        flexDirection: 'column',
+        height: '100%'
+        // 不设 width:100%:定宽会无视 margin-right,评论面板展开时无法左移
+        // (列flex子项默认stretch,收起时等效满宽)
+      },
   topBar: {
     display: 'flex',
     alignItems: 'center',
@@ -161,7 +168,30 @@ const useStyles = makeStyles({
     justifyContent: 'space-between',
     gap: '12px'
   },
-  timeText: { color: 'rgba(255,255,255,0.7)', fontSize: tokens.fontSizeBase200, minWidth: '42px' }
+  timeText: { color: 'rgba(255,255,255,0.7)', fontSize: tokens.fontSizeBase200, minWidth: '42px' },
+  /** 右侧评论停靠面板(默认收起到屏外,open 时滑入) */
+  commentsPanel: {
+    position: 'absolute',
+    top: 0,
+    right: 0,
+    bottom: 0,
+    width: `${COMMENTS_PANEL_W}px`,
+    zIndex: 5,
+    display: 'flex',
+    flexDirection: 'column',
+    // 顶部让开40px原生窗口按钮区(关闭/最大化/最小化),排序行不再被盖住
+    padding: '46px 16px 14px',
+    boxSizing: 'border-box',
+    // 半透明玻璃:透出播放页的模糊封面背景
+    background: 'rgba(18,18,18,0.42)',
+    backdropFilter: 'blur(40px) saturate(1.3)',
+    borderLeft: '1px solid rgba(255,255,255,0.12)',
+    borderRadius: '14px 0 0 14px',
+    transform: `translateX(${COMMENTS_PANEL_W + 24}px)`,
+    transition: `transform 0.32s ${PANEL_EASE}`,
+    pointerEvents: 'none'
+  },
+  commentsPanelOpen: { transform: 'translateX(0)', pointerEvents: 'auto' }
 })
 
 export function NowPlaying() {
@@ -187,6 +217,8 @@ export function NowPlaying() {
   const leftAlign = lyricAlign === 'left'
   const dlg = useStore((s) => s.activeDialog)
   const setDlg = useStore((s) => s.setActiveDialog)
+  const commentsOpen = dlg === 'comments'
+  const floatLyric = useStore((s) => s.library?.settings.floatLyric ?? false)
   const { setNowPlayingOpen, togglePlay, next, prev, seek, setVolume, cycleMode } =
     useStore.getState()
 
@@ -224,9 +256,27 @@ export function NowPlaying() {
     useStore.getState().seek(timeMs / 1000)
   }, [])
 
+  // 歌词手动浏览:滚轮/触摸滚动介入后暂停跟随与分层模糊,
+  // 停止滚动 3 秒后才回到当前句,回位后模糊恢复
+  const wheelAtRef = useRef(0)
+  const [lyricsBrowsing, setLyricsBrowsing] = useState(false)
+  const noteBrowsing = useCallback(() => {
+    wheelAtRef.current = Date.now()
+    setLyricsBrowsing(true)
+  }, [])
+  useEffect(() => {
+    if (!lyricsBrowsing) return
+    const t = setInterval(() => {
+      if (Date.now() - wheelAtRef.current >= 3000) setLyricsBrowsing(false)
+    }, 300)
+    return () => clearInterval(t)
+  }, [lyricsBrowsing])
+
   // 切句滚动:手动 500ms easeInOutCubic(对齐手机端 0.5s FastOutSlowIn;
   // 替代 scrollIntoView——其动画时长不可控且每帧争抢)
+  // 手动浏览期间挂起,回位(lyricsBrowsing→false)时立即补一次滚动
   useEffect(() => {
+    if (lyricsBrowsing) return
     const el = activeRef.current
     const container = el?.closest('.lyrics-scroll') as HTMLElement | null
     if (!el || !container) return
@@ -244,11 +294,13 @@ export function NowPlaying() {
     }
     raf = requestAnimationFrame(step)
     return () => cancelAnimationFrame(raf)
-  }, [activeIdx, open])
+  }, [activeIdx, open, lyricsBrowsing])
 
   /** 分层模糊(对齐手机端):按与当前句的距离分档;前奏(未命中当前行)时不模糊。
+   *  手动浏览歌词期间同样不模糊,回位后恢复。
    *  桌面字号(16px)远小于手机(24sp),同数值视觉更重,乘0.6的桌面系数。 */
   const lineBlur = (i: number): number => {
+    if (lyricsBrowsing) return 0
     if (!st || !st.lyricBlurEnabled || st.lyricBlurAmount <= 0) return 0
     if (activeIdx < 0) return 0
     const d = Math.abs(i - activeIdx)
@@ -260,11 +312,14 @@ export function NowPlaying() {
     return Math.round(v * 0.6 * 10) / 10
   }
 
-  // Esc 收起
+  // Esc:先关打开的弹窗/评论面板,再收起播放页
   useEffect(() => {
     if (!open) return
     const onKey = (e: KeyboardEvent): void => {
-      if (e.key === 'Escape' && !dlg) setNowPlayingOpen(false)
+      if (e.key === 'Escape') {
+        if (dlg) setDlg(null)
+        else setNowPlayingOpen(false)
+      }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
@@ -321,7 +376,14 @@ export function NowPlaying() {
             />
           ) : null}
         </div>
-        <div className={styles.content}>
+        <div
+          className={styles.content}
+          style={{
+            // 评论面板展开时内容整体左移(收起时回到0)
+            marginRight: commentsOpen ? COMMENTS_PANEL_W : 0,
+            transition: `margin-right 0.32s ${PANEL_EASE}`
+          }}
+        >
           {/* 顶栏:左=收起,右=更多(避开原生窗口按钮) */}
           <div className={styles.topBar}>
             <Tooltip content="收起(Esc)" relationship="label">
@@ -339,11 +401,18 @@ export function NowPlaying() {
             <div style={{ width: 140, flexShrink: 0 }} />
           </div>
 
-          {/* 主体:左右等分平衡 */}
-          <div className={styles.middle}>
+          {/* 主体:左右等分平衡(评论面板展开时压缩两栏最小宽,避免溢出) */}
+          <div
+            className={styles.middle}
+            style={
+              commentsOpen
+                ? { gridTemplateColumns: 'minmax(200px, 0.9fr) minmax(260px, 1.2fr)' }
+                : undefined
+            }
+          >
             <div className={styles.leftCol}>
               <div className={styles.coverShadow}>
-                <Cover url={current?.coverUrl} size={340} radius={16} iconSize={68} />
+                <Cover url={current?.coverUrl} size={commentsOpen ? 220 : 340} radius={16} iconSize={68} />
               </div>
               <div className={styles.meta}>
                 <Text
@@ -421,6 +490,8 @@ export function NowPlaying() {
               <div
                 className={`${styles.lyrics} lyrics-scroll`}
                 style={{ textAlign: leftAlign ? 'left' : 'center' }}
+                onWheel={noteBrowsing}
+                onTouchMove={noteBrowsing}
               >
                 {lyrics && lyrics.lines.length > 0 ? (
                   lyrics.lines.map((line, i) => {
@@ -578,6 +649,12 @@ export function NowPlaying() {
                     <MenuItem icon={<ArrowSwapRegular />} disabled={!current} onClick={() => setDlg('source')}>
                       更换音源
                     </MenuItem>
+                    <MenuItem
+                      icon={floatLyric ? <CheckmarkRegular /> : <OpenRegular />}
+                      onClick={() => void useStore.getState().updateSetting('floatLyric', !floatLyric)}
+                    >
+                      悬浮歌词窗
+                    </MenuItem>
                     <Menu>
                       <MenuTrigger disableButtonEnhancement>
                         <MenuItem icon={<ClockRegular />}>定时关闭{sleepText ? ` (${sleepText})` : ''}</MenuItem>
@@ -623,6 +700,16 @@ export function NowPlaying() {
               )}
             </div>
           </div>
+        </div>
+
+        {/* 右侧评论停靠面板:打开时上层内容(marginRight)整体左移让位 */}
+        <div className={`${styles.commentsPanel} ${commentsOpen ? styles.commentsPanelOpen : ''}`}>
+          <CommentsBody
+            song={current}
+            active={open && commentsOpen}
+            fill
+            onClose={() => setDlg(null)}
+          />
         </div>
       </div>
     </>

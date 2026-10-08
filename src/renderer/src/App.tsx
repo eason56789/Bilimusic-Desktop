@@ -26,6 +26,8 @@ import { PlayerBar } from './components/PlayerBar'
 import { NowPlaying } from './components/NowPlaying'
 import { Onboarding } from './components/Onboarding'
 import { GlobalDialogs } from './components/GlobalDialogs'
+import { FloatBridge } from './components/FloatBridge'
+import { FloatLyricApp } from './components/FloatLyricApp'
 import { SearchPage } from './pages/SearchPage'
 import { PlaylistsPage, RecentPage } from './pages/PlaylistsPage'
 import { DownloadsPage } from './pages/DownloadsPage'
@@ -282,6 +284,12 @@ function buildPresetCss(s: Settings | undefined): string {
 }
 
 export function App() {
+  // 悬浮歌词窗与主界面共用同一份渲染包,按 hash 分流(悬浮窗不初始化库/引导)
+  if (window.location.hash === '#float') return <FloatLyricApp />
+  return <MainApp />
+}
+
+function MainApp() {
   const library = useStore((s) => s.library)
   const init = useStore((s) => s.init)
   const systemDark = useSystemDark()
@@ -343,6 +351,7 @@ export function App() {
       {/* obDone:刚完成引导时主界面播放入场动画(放大淡入) */}
       <Shell className={obDone ? 'shell-enter' : undefined} />
       <GlobalDialogs />
+      <FloatBridge />
       {showOnboarding && <Onboarding onDone={() => setObDone(true)} />}
     </FluentProvider>
   )

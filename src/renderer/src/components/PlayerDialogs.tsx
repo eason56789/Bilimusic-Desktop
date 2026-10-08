@@ -1,5 +1,5 @@
 /** 播放器功能弹窗组:评论/分P/详情/歌词编辑/更换歌词/歌词偏移/播放队列/均衡器 */
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   Button,
   Dialog,
@@ -10,6 +10,8 @@ import {
   DialogTitle,
   Field,
   Input,
+  Radio,
+  RadioGroup,
   Slider,
   Spinner,
   Switch,
@@ -27,7 +29,7 @@ import {
   PlayRegular,
   SearchRegular
 } from '@fluentui/react-icons'
-import type { BiliPage, CommentsResult, Song } from '@shared/types'
+import type { BiliPage, CommentOrder, CommentPlatform, CommentsResult, Song } from '@shared/types'
 import { api } from '../lib/api'
 import { pagesToSongs } from '../lib/pages'
 import { useStore, EQ_FREQS, applyEqSettings } from '../store'
@@ -37,6 +39,16 @@ import { formatTime } from './SongList'
 
 const useStyles = makeStyles({
   list: { display: 'flex', flexDirection: 'column', gap: '2px', maxHeight: '420px', overflowY: 'auto' },
+  /** 面板模式:列表撑满剩余高度(不设420上限) */
+  listFill: { maxHeight: 'none', flex: 1, minHeight: 0 },
+  sortRow: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '12px',
+    marginBottom: '8px',
+    flexShrink: 0
+  },
+  dialogColumn: { display: 'flex', flexDirection: 'column', minHeight: '240px' },
   row: {
     display: 'flex',
     gap: '10px',
@@ -76,86 +88,212 @@ function timeAgo(t: number): string {
   return new Date(t).toLocaleDateString()
 }
 
-/** 评论弹窗(B站视频 / 网易云歌曲) */
-export function CommentsDialog({ song, open, onClose }: { song: Song | null; open: boolean; onClose: () => void }) {
+/** 评论内容(状态自持):排序切换 + 列表 + 加载更多。弹窗与右侧停靠面板共用。 */
+export function CommentsBody({
+  song,
+  active,
+  fill = false,
+  onClose
+}: {
+  song: Song | null
+  /** 是否正在展示(挂载但隐藏时不发请求) */
+  active: boolean
+  /** 面板模式:列表撑满容器高度 */
+  fill?: boolean
+  /** 面板右上角关闭按钮(弹窗版不传) */
+  onClose?: () => void
+}) {
   const styles = useStyles()
   const [data, setData] = useState<CommentsResult | null>(null)
   const [loading, setLoading] = useState(false)
   const [offset, setOffset] = useState(0)
   const [error, setError] = useState('')
+  // 默认排序:网易云原曲默认"时间"(公开接口的热门池太浅),B站默认"热度"
+  const [order, setOrder] = useState<CommentOrder>(() => (song?.neteaseId ? 'time' : 'hot'))
+  // 兜底场景(网易云垫底B站/QQ酷狗B站取流)双平台可切:B站兜底视频评论 或 网易云原曲评论
+  const [platform, setPlatform] = useState<CommentPlatform>(() =>
+    song?.neteaseId ? 'netease' : song?.bvid ? 'bilibili' : 'netease'
+  )
+  const canBili = !!song?.bvid
+  const canNe = !!song?.neteaseId || song?.source === 'QQMUSIC' || song?.source === 'KUGOU'
+  const dual = !!(song && canBili && canNe)
+  /** 滑到底自动加载的防重入(滚动事件密集,不能只靠 loading state) */
+  const loadingRef = useRef(false)
+  // 首次拿到歌曲/换歌时校准默认排序:挂载时 song 常为 null,一次性初始化算不准;
+  // 同一首歌内保留用户手动选择,换下一首时重置为该来源的默认
+  const lastSongIdRef = useRef<string | null>(null)
+  useEffect(() => {
+    if (!song) return
+    if (lastSongIdRef.current === song.id) return
+    lastSongIdRef.current = song.id
+    const def: CommentOrder = song.neteaseId ? 'time' : 'hot'
+    setOrder((o) => (o === def ? o : def))
+    const defPlat: CommentPlatform = song.neteaseId ? 'netease' : song.bvid ? 'bilibili' : 'netease'
+    setPlatform((p) => (p === defPlat ? p : defPlat))
+  }, [song])
 
   useEffect(() => {
-    if (!open || !song) return
+    if (!active || !song) return
     setData(null)
     setOffset(0)
     setError('')
     setLoading(true)
     api
-      .commentsGet(song, 0)
+      .commentsGet(song, 0, order, dual ? platform : undefined)
       .then((r) => {
         if (r.ok && r.data) setData(r.data)
         else setError(r.error || '加载失败')
       })
       .catch((e) => setError(String(e)))
       .finally(() => setLoading(false))
-  }, [open, song])
+  }, [active, song, order, dual, platform])
 
   const loadMore = async () => {
-    if (!song || !data) return
+    if (!song || !data || loadingRef.current) return
+    loadingRef.current = true
     setLoading(true)
     try {
-      const r = await api.commentsGet(song, offset + 20)
+      const r = await api.commentsGet(song, offset + 20, order, dual ? platform : undefined)
       if (r.ok && r.data) {
         setData({ ...r.data, comments: [...data.comments, ...r.data.comments] })
         setOffset(offset + 20)
       }
     } finally {
       setLoading(false)
+      loadingRef.current = false
     }
   }
 
+  if (!song) return null
+  const emptyText = order === 'hot' ? '还没有热门评论,可切换到「时间」查看最新' : '还没有评论'
+  return (
+    <>
+      {dual && (
+        <div className={styles.sortRow} style={{ marginBottom: '4px' }}>
+          <RadioGroup
+            layout="horizontal"
+            value={platform}
+            onChange={(_, d) => setPlatform(d.value as CommentPlatform)}
+          >
+            <Radio value="bilibili" label="哔哩哔哩" />
+            <Radio value="netease" label="网易云" />
+          </RadioGroup>
+          <div style={{ flex: 1 }} />
+          <span className={styles.muted}>评论来源</span>
+        </div>
+      )}
+      <div className={styles.sortRow}>
+        <RadioGroup
+          layout="horizontal"
+          value={order}
+          onChange={(_, d) => setOrder(d.value as CommentOrder)}
+        >
+          <Radio value="hot" label="热度" />
+          <Radio value="time" label="时间" />
+        </RadioGroup>
+        <div style={{ flex: 1 }} />
+        {data && data.comments.length > 0 && (
+          <span className={styles.muted}>
+            {/* 网易云热度榜无分页,total 是热门池条数而非全曲评论数,标注避免误读 */}
+            {song.neteaseId && order === 'hot' ? `热门 ${data.total} 条` : `${data.total} 条`}
+          </span>
+        )}
+        {onClose && (
+          <Button appearance="subtle" size="small" icon={<DismissRegular />} onClick={onClose} title="关闭评论" />
+        )}
+      </div>
+      {loading && !data && (
+        <div className={styles.center}>
+          <Spinner />
+        </div>
+      )}
+      {error && <div className={styles.center}><Text>{error}</Text></div>}
+      {data && data.comments.length === 0 && !loading && (
+        <div className={styles.center}><Text>{emptyText}</Text></div>
+      )}
+      {data && data.comments.length > 0 && (
+        <div
+          className={fill ? `${styles.list} ${styles.listFill}` : styles.list}
+          // 下滑到底自动加载下一页(替代"加载更多"按钮)
+          onScroll={(e) => {
+            const el = e.currentTarget
+            if (
+              data.hasMore &&
+              !loadingRef.current &&
+              el.scrollTop + el.clientHeight >= el.scrollHeight - 80
+            ) {
+              void loadMore()
+            }
+          }}
+        >
+          {data.comments.map((c) => (
+            <div key={c.id} className={styles.row}>
+              <Cover url={c.avatar} size={36} radius={18} iconSize={14} />
+              <div className={styles.meta}>
+                <div style={{ display: 'flex', gap: 8, alignItems: 'baseline' }}>
+                  <Text weight="semibold" size={300}>{c.user}</Text>
+                  <span className={styles.muted}>{timeAgo(c.time)}</span>
+                </div>
+                <Text size={300} style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+                  {c.content}
+                </Text>
+                <span className={styles.muted}>♡ {c.likes}</span>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+      {data &&
+        order === 'hot' &&
+        (dual ? platform === 'netease' : !!song.neteaseId) &&
+        !data.hasMore &&
+        data.comments.length > 0 && (
+          <div style={{ flexShrink: 0, padding: '6px 2px 0' }}>
+            <span className={styles.muted}>热度榜仅展示前排评论,切换「时间」可分页查看全部</span>
+          </div>
+        )}
+      {data &&
+        order === 'time' &&
+        (dual ? platform === 'bilibili' : !song.neteaseId) &&
+        !data.hasMore &&
+        data.total > data.comments.length &&
+        data.comments.length > 0 && (
+          <div style={{ flexShrink: 0, padding: '6px 2px 0' }}>
+            <span className={styles.muted}>
+              B站未登录时仅返回最新几条评论,登录B站账号后可分页查看全部
+            </span>
+          </div>
+        )}
+      {/* 加载更多改为滑到底自动加载,不再显示按钮;底部留一条细进度指示 */}
+      {loading && data && data.comments.length > 0 && (
+        <div
+          style={{
+            display: 'flex',
+            justifyContent: 'center',
+            padding: '6px 0 2px',
+            flexShrink: 0
+          }}
+        >
+          <Spinner size="tiny" />
+        </div>
+      )}
+    </>
+  )
+}
+
+/** 评论弹窗(B站视频 / 网易云歌曲):未开全屏播放页时的兜底形态 */
+export function CommentsDialog({ song, open, onClose }: { song: Song | null; open: boolean; onClose: () => void }) {
+  const styles = useStyles()
   if (!song) return null
   return (
     <Dialog open={open} onOpenChange={(_, d) => !d.open && onClose()}>
       <DialogSurface style={{ maxWidth: 640, width: '92vw' }}>
         <DialogBody>
-          <DialogTitle>评论{data ? ` (${data.total})` : ''}</DialogTitle>
-          <DialogContent>
-            {loading && !data && (
-              <div className={styles.center}>
-                <Spinner />
-              </div>
-            )}
-            {error && <div className={styles.center}><Text>{error}</Text></div>}
-            {data && data.comments.length === 0 && !loading && (
-              <div className={styles.center}><Text>还没有评论</Text></div>
-            )}
-            {data && (
-              <div className={styles.list}>
-                {data.comments.map((c) => (
-                  <div key={c.id} className={styles.row}>
-                    <Cover url={c.avatar} size={36} radius={18} iconSize={14} />
-                    <div className={styles.meta}>
-                      <div style={{ display: 'flex', gap: 8, alignItems: 'baseline' }}>
-                        <Text weight="semibold" size={300}>{c.user}</Text>
-                        <span className={styles.muted}>{timeAgo(c.time)}</span>
-                      </div>
-                      <Text size={300} style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
-                        {c.content}
-                      </Text>
-                      <span className={styles.muted}>♡ {c.likes}</span>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
+          <DialogTitle>评论</DialogTitle>
+          <DialogContent className={styles.dialogColumn}>
+            <CommentsBody song={song} active={open} />
           </DialogContent>
           <DialogActions>
-            {data && data.hasMore && (
-              <Button onClick={loadMore} disabled={loading}>
-                {loading ? <Spinner size="tiny" /> : '加载更多'}
-              </Button>
-            )}
             <Button appearance="primary" onClick={onClose}>关闭</Button>
           </DialogActions>
         </DialogBody>

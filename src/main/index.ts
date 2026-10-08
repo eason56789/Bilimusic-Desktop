@@ -5,9 +5,15 @@ import { initStore, getStore, saveStore } from './store'
 import { initAudio, registerAudioProtocol } from './audio'
 import { registerIpc } from './ipc'
 import { finalizeStaleDownloads } from './downloads'
+import { initFloat, showFloat, destroyFloatWindow } from './float'
 import { setBiliCookie } from './api/bilibili'
 import { setNeteaseCookies, onNeteaseCookieChange } from './api/netease'
 import { setNeteaseCookieStore } from './store'
+
+// 防御:从 ZCode 等 Electron 宿主内启动时会继承宿主的 CHROME_CRASHPAD_PIPE_NAME,
+// 渲染进程会去连宿主的崩溃服务管道并卡死(表现为导航永不完成/窗口永不显示)。
+// 启动即清除,让本应用的 crashpad 自建管道。
+delete process.env.CHROME_CRASHPAD_PIPE_NAME
 
 let mainWindow: BrowserWindow | null = null
 
@@ -93,6 +99,8 @@ function createWindow(): void {
 
   mainWindow.on('closed', () => {
     mainWindow = null
+    // 主窗口关闭即退出(悬浮窗随之销毁),避免后台留一个无主小窗
+    destroyFloatWindow()
   })
 }
 
@@ -111,12 +119,19 @@ app.whenReady().then(() => {
   })
 
   finalizeStaleDownloads()
+  initFloat(() => mainWindow)
   registerIpc()
   createWindow()
+
+  // 记住上次的悬浮歌词窗状态
+  if (getStore().settings.floatLyric) showFloat(true)
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()
   })
+}).catch((e) => {
+  // 启动链失败不允许静默(此前无 catch,出错表现为无窗口无日志)
+  console.error('[boot] whenReady FAILED:', e)
 })
 
 app.on('window-all-closed', () => {

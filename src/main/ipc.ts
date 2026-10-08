@@ -39,6 +39,7 @@ import {
   addToPlaylist,
   removeFromPlaylist,
   addRecent,
+  addListenTime,
   setSetting,
   addSearchHistory,
   removeSearchHistory,
@@ -50,6 +51,14 @@ import {
 } from './store'
 import { setBiliCookie, onBiliCookieChange } from './api/bilibili'
 import { setNeteaseCookies, onNeteaseCookieChange, getNeteaseCookies } from './api/netease'
+import {
+  showFloat,
+  getFloatWindow,
+  forwardFloatState,
+  forwardFloatControl,
+  openMainWindow
+} from './float'
+import type { FloatLyricState, FloatControlCmd } from '@shared/types'
 import QRCode from 'qrcode'
 
 /** 对话框宿主窗口:优先当前聚焦窗口,退回第一个窗口(避免 getFocusedWindow() 为 null 时崩溃) */
@@ -90,7 +99,8 @@ function librarySnapshot(): Library {
     downloadedIds: d.downloadedIds,
     settings: d.settings,
     biliProfile: d.biliProfile,
-    neteaseProfile: d.neteaseProfile
+    neteaseProfile: d.neteaseProfile,
+    listenStats: d.listenStats
   }
 }
 
@@ -165,12 +175,17 @@ export function registerIpc(): void {
       return err(e)
     }
   })
-  ipcMain.handle('api:comments', async (_e, song: Song, offset: number) => {
-    try {
-      if (song.neteaseId) {
-        // 原曲为网易云(垫底/换源):评论取网易云原曲
-        const r = await netease.getMusicComments(song.neteaseId, offset)
-        return ok({
+  ipcMain.handle(
+    'api:comments',
+    async (
+      _e,
+      song: Song,
+      offset: number,
+      order: 'hot' | 'time' = 'hot',
+      platform?: 'bilibili' | 'netease'
+    ) => {
+      try {
+        const nePayload = (r: { total: number; hasMore: boolean; comments: any[] }) => ({
           total: r.total,
           hasMore: r.hasMore,
           comments: r.comments.map((c) => ({
@@ -182,15 +197,37 @@ export function registerIpc(): void {
             likes: c.likedCount
           }))
         })
+        const fetchBili = async () => {
+          if (!song.bvid) return { ok: false as const, error: '没有可查看的B站评论' }
+          return ok(await bilibili.getVideoComments(bvidOf(song), offset, order))
+        }
+        const fetchNetease = async () => {
+          let id = song.neteaseId
+          if (!id) {
+            // QQ音乐/酷狗等仅元数据歌曲:按"标题+歌手"搜网易云,取时长最接近的一首的评论
+            const kw = `${song.title} ${song.artist}`.trim()
+            const res = await netease.searchSongs(kw, 5, 0)
+            const pool = (res.songs ?? []).filter((s: Song) => s.neteaseId > 0)
+            if (pool.length === 0) return { ok: false as const, error: '网易云未找到对应歌曲' }
+            id = pool.reduce((best, s) =>
+              Math.abs(s.duration - song.duration) < Math.abs(best.duration - song.duration) ? s : best
+            ).neteaseId
+          }
+          const r = await netease.getMusicComments(id, offset, 20, order)
+          return ok(nePayload(r))
+        }
+        // 兜底场景显式指定平台(网易云垫底B站 / QQ酷狗B站取流时,两个平台都可看)
+        if (platform === 'bilibili') return fetchBili()
+        if (platform === 'netease') return fetchNetease()
+        // 默认:原曲平台优先;放宽为"有bvid就能看B站"(QQ/酷狗兜底视频同样适用)
+        if (song.neteaseId) return fetchNetease()
+        if (song.bvid) return fetchBili()
+        return { ok: false, error: '该来源暂不支持评论(可在播放后查看B站评论)' }
+      } catch (e) {
+        return err(e)
       }
-      if (song.source === 'BILIBILI' && song.bvid) {
-        return ok(await bilibili.getVideoComments(bvidOf(song), offset))
-      }
-      return { ok: false, error: '该来源暂不支持评论(可在播放后查看B站评论)' }
-    } catch (e) {
-      return err(e)
     }
-  })
+  )
   ipcMain.handle('api:songDetail', async (_e, song: Song) => {
     try {
       const rows: Record<string, string> = {
@@ -325,6 +362,14 @@ export function registerIpc(): void {
   )
 
   // ===== 导入 =====
+  ipcMain.handle('library:addListenTime', (_e, ms: number) => {
+    const v = Number(ms)
+    if (!isFinite(v) || v <= 0) {
+      return getStore().listenStats ?? { totalMs: 0, todayMs: 0, date: '' }
+    }
+    return addListenTime(v)
+  })
+
   ipcMain.handle('bili:favFolders', () => bilibili.getFavoriteFolders())
   // 在线视图:收藏夹/播放记录分页拉取(打开时才获取)
   ipcMain.handle('bili:favPage', (_e, folderId: number, page: number) =>
@@ -948,5 +993,21 @@ export function registerIpc(): void {
       console.warn('[Window] set effect failed', e)
       return false
     }
+  })
+
+  // ===== 悬浮歌词窗 =====
+  ipcMain.handle('float:show', (_e, show: boolean) => showFloat(show))
+  ipcMain.on('float:state', (e, state: FloatLyricState) => {
+    // 只接受主窗口推送(悬浮窗自己不回灌,防止回环)
+    if (BrowserWindow.fromWebContents(e.sender) === getFloatWindow()) return
+    forwardFloatState(state)
+  })
+  ipcMain.on('float:control', (e, cmd: FloatControlCmd) => {
+    // 只接受悬浮窗发起的指令
+    if (BrowserWindow.fromWebContents(e.sender) !== getFloatWindow()) return
+    forwardFloatControl(cmd)
+  })
+  ipcMain.handle('float:openMain', () => {
+    openMainWindow()
   })
 }

@@ -784,6 +784,16 @@ export function PlaylistsPage() {
   )
 }
 
+/** 听歌时长人性化文案:3600000→"1 小时 5 分"、120000→"2 分" */
+function fmtListenMs(ms: number): string {
+  const totalMin = Math.floor(ms / 60000)
+  const h = Math.floor(totalMin / 60)
+  const m = totalMin % 60
+  if (h > 0) return `${h} 小时 ${m} 分`
+  if (m > 0) return `${m} 分`
+  return `${Math.floor(ms / 1000)} 秒`
+}
+
 /** 最近播放页(与下载页统一布局) */
 export function RecentPage() {
   const styles = useStyles()
@@ -792,11 +802,20 @@ export function RecentPage() {
   const playQueue = useStore((s) => s.playQueue)
   if (!library) return null
   const songs = library.recentPlays.map((r) => r.song)
+  const ls = library.listenStats
+  const listenPart =
+    ls && ls.totalMs > 0 ? ` · 今日听歌 ${fmtListenMs(ls.todayMs)} · 累计 ${fmtListenMs(ls.totalMs)}` : ''
+  const subtitle =
+    songs.length > 0
+      ? `${songs.length} 首${listenPart}`
+      : ls && ls.totalMs > 0
+        ? `今日听歌 ${fmtListenMs(ls.todayMs)} · 累计 ${fmtListenMs(ls.totalMs)}`
+        : '播放过的歌曲会出现在这里'
   return (
     <PageLayout
       icon={<HeartRegular />}
       title="最近播放"
-      subtitle={songs.length > 0 ? `${songs.length} 首` : '播放过的歌曲会出现在这里'}
+      subtitle={subtitle}
       actions={
         <>
           <Button

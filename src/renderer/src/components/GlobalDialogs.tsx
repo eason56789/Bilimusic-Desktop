@@ -289,9 +289,15 @@ export function GlobalDialogs() {
   const current = useStore((s) => s.current)
   const dlg = useStore((s) => s.activeDialog)
   const setDlg = useStore((s) => s.setActiveDialog)
+  // 全屏播放页内评论走右侧停靠面板(NowPlaying 内渲染),这里只兜底非全屏场景
+  const nowPlayingOpen = useStore((s) => s.nowPlayingOpen)
   return (
     <>
-      <CommentsDialog song={current} open={dlg === 'comments'} onClose={() => setDlg(null)} />
+      <CommentsDialog
+        song={current}
+        open={dlg === 'comments' && !nowPlayingOpen}
+        onClose={() => setDlg(null)}
+      />
       <PagesDialog open={dlg === 'pages'} onClose={() => setDlg(null)} />
       <SongInfoDialog song={current} open={dlg === 'info'} onClose={() => setDlg(null)} />
       <LyricEditDialog song={current} open={dlg === 'lyricEdit'} onClose={() => setDlg(null)} />

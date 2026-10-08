@@ -516,6 +516,13 @@ export function SettingsPage() {
         </div>
         <div className={styles.row}>
           <Switch
+            checked={s.floatLyric ?? false}
+            label="悬浮歌词小窗(置顶显示当前歌词,可拖动/缩放)"
+            onChange={(_, d) => update('floatLyric', d.checked)}
+          />
+        </div>
+        <div className={styles.row}>
+          <Switch
             checked={s.eqEnabled}
             label="均衡器"
             onChange={(_, d) => {

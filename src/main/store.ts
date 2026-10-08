@@ -37,6 +37,7 @@ const defaultSettings: Settings = {
   uiScale: 'standard',
   lyricSize: 'standard',
   density: 'standard',
+  floatLyric: false,
   uiModules: {
     navSearch: true,
     navPlaylists: true,
@@ -99,8 +100,16 @@ const emptyData = (): StoreData => ({
   biliCookie: '',
   neteaseCookies: {},
   biliProfile: null,
-  neteaseProfile: null
+  neteaseProfile: null,
+  listenStats: { totalMs: 0, todayMs: 0, date: localToday() }
 })
+
+/** 本地时区日期 YYYY-MM-DD(听歌时长按自然日分桶) */
+function localToday(): string {
+  const d = new Date()
+  const p = (n: number): string => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`
+}
 
 let data: StoreData = emptyData()
 let filePath = ''
@@ -174,6 +183,15 @@ export function initStore(): void {
   s.volume = Math.min(1, Math.max(0, s.volume))
   // 设置页入口永远可用:历史存档可能把它关掉导致无法回到设置,无条件恢复
   s.uiModules.navSettings = true
+  // 听歌时长:旧存档缺失则初始化;跨天加载则今日清零(累计保留)
+  const today = localToday()
+  const ls = data.listenStats
+  if (!ls || typeof ls.totalMs !== 'number' || typeof ls.todayMs !== 'number' || !ls.date) {
+    data.listenStats = { totalMs: 0, todayMs: 0, date: today }
+  } else if (ls.date !== today) {
+    ls.todayMs = 0
+    ls.date = today
+  }
 }
 
 /** 默认下载目录(初始化与恢复出厂共用) */
@@ -237,6 +255,25 @@ export function saveStore(): void {
 function scheduleSave(): void {
   if (saveTimer) clearTimeout(saveTimer)
   saveTimer = setTimeout(saveStore, 300)
+}
+
+/**
+ * 累加听歌时长(渲染层播放中每10s/暂停时冲刷)。
+ * 单次上限1分钟:防御异常灌入;跨天自动分桶,累计不清零。
+ */
+export function addListenTime(ms: number): { totalMs: number; todayMs: number; date: string } {
+  if (!isFinite(ms) || ms <= 0) {
+    return data.listenStats ?? { totalMs: 0, todayMs: 0, date: localToday() }
+  }
+  const today = localToday()
+  if (!data.listenStats || data.listenStats.date !== today) {
+    data.listenStats = { totalMs: data.listenStats?.totalMs ?? 0, todayMs: 0, date: today }
+  }
+  const capped = Math.min(Math.round(ms), 60_000)
+  data.listenStats.totalMs += capped
+  data.listenStats.todayMs += capped
+  scheduleSave()
+  return { ...data.listenStats }
 }
 
 // ============ Library 操作 ============

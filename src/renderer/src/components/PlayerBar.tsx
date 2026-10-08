@@ -132,6 +132,7 @@ export function PlayerBar() {
   const sleepRemainingMs = useStore((s) => s.sleepRemainingMs)
   const rate = useStore((s) => s.library?.settings.playbackRate ?? 1)
   const ui = useStore((s) => s.library?.settings.uiModules)
+  const floatLyric = useStore((s) => s.library?.settings.floatLyric ?? false)
   const setDlg = useStore((s) => s.setActiveDialog)
   const { togglePlay, next, prev, seek, setVolume, setMuted, cycleMode, setNowPlayingOpen } =
     useStore.getState()
@@ -267,6 +268,12 @@ export function PlayerBar() {
                 </MenuItem>
                 <MenuItem icon={<ArrowSwapRegular />} disabled={!current} onClick={() => setDlg('source')}>
                   更换音源
+                </MenuItem>
+                <MenuItem
+                  icon={floatLyric ? <CheckmarkRegular /> : <OpenRegular />}
+                  onClick={() => void useStore.getState().updateSetting('floatLyric', !floatLyric)}
+                >
+                  悬浮歌词窗
                 </MenuItem>
                 <Menu>
                   <MenuTrigger disableButtonEnhancement>

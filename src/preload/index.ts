@@ -10,7 +10,9 @@ import type {
   NeteaseSearchResult,
   DownloadRecord,
   Playlist,
-  DesktopApi
+  DesktopApi,
+  FloatLyricState,
+  FloatControlCmd
 } from '@shared/types'
 
 const invoke = async <T>(channel: string, ...args: unknown[]): Promise<T> =>
@@ -30,7 +32,7 @@ const api: DesktopApi = {
     invoke('audio:prepare', song, html5Fallback),
   lyricsGet: (song: Song) => invoke('lyrics:get', song),
   pagesGet: (bvid: string) => invoke('pages:get', bvid),
-  commentsGet: (song, offset) => invoke('api:comments', song, offset),
+  commentsGet: (song, offset, order, platform) => invoke('api:comments', song, offset, order, platform),
   songDetail: (song) => invoke('api:songDetail', song),
   appCopy: (text) => invoke('app:copy', text),
   appOpenExternal: (url) => invoke('app:openExternal', url),
@@ -53,6 +55,7 @@ const api: DesktopApi = {
   libraryRemoveSearchHistory: (q) => invoke('library:removeSearchHistory', q),
   libraryClearSearchHistory: () => invoke('library:clearSearchHistory'),
   librarySetSetting: (key, value) => invoke<Settings>('library:setSetting', key, value),
+  libraryAddListenTime: (ms) => invoke('library:addListenTime', ms),
 
   importBiliFavorites: (folderId, folderName) =>
     invoke<Playlist | null>('bili:importFav', folderId, folderName),
@@ -120,7 +123,23 @@ const api: DesktopApi = {
     const listener = (_e: unknown, record: DownloadRecord) => cb(record)
     ipcRenderer.on('dl:update', listener)
     return () => ipcRenderer.removeListener('dl:update', listener)
-  }
+  },
+
+  // 悬浮歌词窗
+  floatShow: (show) => invoke<boolean>('float:show', show),
+  floatPostState: (state) => ipcRenderer.send('float:state', state),
+  onFloatState: (cb) => {
+    const listener = (_e: unknown, state: FloatLyricState) => cb(state)
+    ipcRenderer.on('float:state', listener)
+    return () => ipcRenderer.removeListener('float:state', listener)
+  },
+  floatSendControl: (cmd) => ipcRenderer.send('float:control', cmd),
+  onFloatControl: (cb) => {
+    const listener = (_e: unknown, cmd: FloatControlCmd) => cb(cmd)
+    ipcRenderer.on('float:control', listener)
+    return () => ipcRenderer.removeListener('float:control', listener)
+  },
+  floatOpenMain: () => invoke('float:openMain')
 } as DesktopApi
 
 contextBridge.exposeInMainWorld('api', api)

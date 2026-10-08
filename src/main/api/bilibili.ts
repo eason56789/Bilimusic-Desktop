@@ -745,11 +745,13 @@ export async function getUserInfo(): Promise<{
   }
 }
 
-/** 视频评论(offset=已加载条数,每页20条) */
+/** 视频评论(offset=已加载条数,每页20条;order: hot=综合热度(legacy 分页) / time=按时间(游标)) */
 export async function getVideoComments(
   bvid: string,
-  offset: number
+  offset: number,
+  order: 'hot' | 'time' = 'hot'
 ): Promise<{ total: number; hasMore: boolean; comments: { id: string; user: string; avatar: string; content: string; time: number; likes: number }[] }> {
+  if (order === 'time') return getVideoCommentsByTime(bvid, offset)
   try {
     const detail = await getVideoDetail(bvid)
     if (!detail) return { total: 0, hasMore: false, comments: [] }
@@ -773,6 +775,68 @@ export async function getVideoComments(
     return { total, hasMore: offset + comments.length < total, comments }
   } catch (e) {
     console.error('[Bilibili] comments error', e)
+    return { total: 0, hasMore: false, comments: [] }
+  }
+}
+
+/** x/v2/reply/wbi/main 的按时间分页游标(存 pagination_reply.offset;offset=0 开新页时覆盖) */
+const timeReplyCursors = new Map<string, string>()
+
+/**
+ * 按时间排序的评论:x/v2/reply/wbi/main,WBI 签名,mode=2=最新评论(实测 ctime 严格倒序;
+ * legacy 端点的 sort=0 实测恒返回空)。参数与网页端发起的请求逐项一致
+ * (无 ps/next,恒带 pagination_str/seek_rpid/web_location/locate-json)。
+ * 分页用 cursor.pagination_reply.offset(与手机端一致)。
+ * 注意:匿名访问服务端降级为"最新3条 + is_end=true"(浏览器满指纹 cookie 实测同样如此),
+ * 登录(B站扫码)后应返回完整分页——降级结果如实返回,由 UI 提示登录。
+ */
+async function getVideoCommentsByTime(
+  bvid: string,
+  offset: number
+): Promise<{ total: number; hasMore: boolean; comments: { id: string; user: string; avatar: string; content: string; time: number; likes: number }[] }> {
+  try {
+    const detail = await getVideoDetail(bvid)
+    if (!detail) return { total: 0, hasMore: false, comments: [] }
+    let paginationOffset = ''
+    if (offset > 0) {
+      const stored = timeReplyCursors.get(bvid)
+      if (!stored || stored === 'END') return { total: 0, hasMore: false, comments: [] }
+      paginationOffset = stored
+    }
+    const json = await wbiGetJson(
+      (q) => 'https://api.bilibili.com/x/v2/reply/wbi/main?' + new URLSearchParams(q).toString(),
+      {
+        oid: String(detail.aid),
+        type: '1',
+        mode: '2',
+        pagination_str: JSON.stringify({ offset: paginationOffset }),
+        plat: '1',
+        seek_rpid: '',
+        web_location: '1315875',
+        'x-bili-locale-json': '{"c_locale":{"language":"zh","script":"Hans"},"always_translate":false}'
+      }
+    )
+    if (json.code !== 0) return { total: 0, hasMore: false, comments: [] }
+    const d = json.data ?? {}
+    const replies: any[] = d.replies ?? []
+    const cursor = d.cursor ?? {}
+    const nextOffset = cursor.pagination_reply && cursor.pagination_reply.offset
+      ? String(cursor.pagination_reply.offset)
+      : ''
+    const isEnd = cursor.is_end === true || replies.length === 0 || !nextOffset
+    timeReplyCursors.set(bvid, isEnd ? 'END' : nextOffset)
+    const comments = replies.map((r) => ({
+      id: String(r.rpid),
+      user: r.member?.uname ?? '',
+      avatar: r.member?.avatar ?? '',
+      content: r.content?.message ?? '',
+      time: (r.ctime ?? 0) * 1000,
+      likes: r.like ?? 0
+    }))
+    const total = cursor.all_count ?? 0
+    return { total, hasMore: !isEnd, comments }
+  } catch (e) {
+    console.error('[Bilibili] time comments error', e)
     return { total: 0, hasMore: false, comments: [] }
   }
 }

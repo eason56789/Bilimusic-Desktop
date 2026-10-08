@@ -734,3 +734,33 @@ export function applyEqSettings(settings: Settings): void {
 export function getAudioElement(): HTMLAudioElement {
   return getAudio()
 }
+
+// ===== 听歌时长累计 =====
+// 每秒轮询播放态:播放中 +1s,每 10 秒与暂停(或切歌间隙)时冲刷到主进程;
+// 冲刷失败把毫秒数回补进累加器,不丢账。跨天分桶由主进程处理。
+let listenAccMs = 0
+let listenLastFlush = 0
+async function flushListenTime(): Promise<void> {
+  if (listenAccMs <= 0) return
+  const ms = listenAccMs
+  listenAccMs = 0
+  try {
+    const stats = await api.libraryAddListenTime(ms)
+    const lib = useStore.getState().library
+    if (lib) useStore.setState({ library: { ...lib, listenStats: stats } })
+  } catch {
+    listenAccMs += ms
+  }
+}
+setInterval(() => {
+  const st = useStore.getState()
+  if (st.playing && st.current) {
+    listenAccMs += 1000
+    if (Date.now() - listenLastFlush >= 10_000) {
+      listenLastFlush = Date.now()
+      void flushListenTime()
+    }
+  } else if (listenAccMs > 0) {
+    void flushListenTime()
+  }
+}, 1000)

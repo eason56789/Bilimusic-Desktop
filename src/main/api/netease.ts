@@ -483,7 +483,8 @@ export interface NeteaseComment {
 export async function getMusicComments(
   songId: number,
   offset = 0,
-  limit = 20
+  limit = 20,
+  order: 'hot' | 'time' = 'hot'
 ): Promise<{ total: number; comments: NeteaseComment[]; hasMore: boolean }> {
   const json = await getApi(
     `https://music.163.com/api/v1/resource/comments/R_SO_4_${songId}?limit=${limit}&offset=${offset}`
@@ -496,6 +497,13 @@ export async function getMusicComments(
     time: c.time ?? 0,
     likedCount: c.likedCount ?? 0
   })
+  // 该公开接口的 comments 恒为时间倒序(实测 sortType/sort 参数被忽略),
+  // 热度排序取响应内置的 hotComments(仅首页返回,无分页)。
+  if (order === 'hot') {
+    if (offset > 0) return { total: json?.total ?? 0, comments: [], hasMore: false }
+    const hot = (json?.hotComments ?? []).map(map)
+    return { total: hot.length, comments: hot, hasMore: false }
+  }
   return {
     total: json?.total ?? 0,
     comments: (json?.comments ?? []).map(map),

@@ -130,7 +130,30 @@ export interface Settings {
     /** 搜索页 */
     searchRecommend: boolean
   }
+  /** 悬浮歌词小窗(独立置顶小窗,主窗口推送播放状态) */
+  floatLyric: boolean
+  /** 悬浮歌词窗位置与尺寸(拖动/缩放后记忆) */
+  floatLyricBounds?: { x: number; y: number; width: number; height: number }
 }
+
+/** 悬浮歌词窗状态载荷(主窗口渲染层 → 悬浮窗) */
+export interface FloatLyricState {
+  hasCurrent: boolean
+  title: string
+  artist: string
+  playing: boolean
+  /** 当前歌词行文本(前奏时为空) */
+  lineText: string
+  /** 下一句歌词(预告) */
+  nextText: string
+  lineIndex: number
+  lineCount: number
+  dark: boolean
+  accent: string
+}
+
+/** 悬浮歌词窗 → 主窗口的控制指令 */
+export type FloatControlCmd = 'toggle' | 'prev' | 'next' | 'hide'
 
 export interface UserProfile {
   uid: number
@@ -149,6 +172,16 @@ export interface Library {
   settings: Settings
   biliProfile?: UserProfile | null
   neteaseProfile?: UserProfile | null
+  /** 听歌时长统计(date=自然日,跨天加载时 todayMs 清零、累计保留) */
+  listenStats?: ListenStats
+}
+
+/** 听歌时长统计 */
+export interface ListenStats {
+  totalMs: number
+  todayMs: number
+  /** YYYY-MM-DD(本地时区) */
+  date: string
 }
 
 export interface PreparedAudio {
@@ -204,6 +237,12 @@ export interface CommentsResult {
   comments: CommentItem[]
 }
 
+/** 评论排序:热度(B站综合/点赞,网易云热门评论) / 时间(最新在前) */
+export type CommentOrder = 'hot' | 'time'
+
+/** 评论来源平台:兜底场景(网易云垫底B站/QQ酷狗B站取流)下可切换查看 */
+export type CommentPlatform = 'bilibili' | 'netease'
+
 export interface NeteasePlaylistBrief {
   id: number
   name: string
@@ -239,7 +278,12 @@ export interface DesktopApi {
   audioPrepare(song: Song, html5Fallback?: boolean): Promise<PreparedAudio>
   lyricsGet(song: Song): Promise<LyricsResult>
   pagesGet(bvid: string): Promise<BiliPage[]>
-  commentsGet(song: Song, offset: number): Promise<ApiResponse<CommentsResult>>
+  commentsGet(
+    song: Song,
+    offset: number,
+    order?: CommentOrder,
+    platform?: CommentPlatform
+  ): Promise<ApiResponse<CommentsResult>>
   songDetail(song: Song): Promise<ApiResponse<Record<string, string>>>
   // 应用操作
   appCopy(text: string): Promise<void>
@@ -260,6 +304,8 @@ export interface DesktopApi {
   libraryRemoveSearchHistory(q: string): Promise<void>
   libraryClearSearchHistory(): Promise<void>
   librarySetSetting<K extends keyof Settings>(key: K, value: Settings[K]): Promise<Settings>
+  /** 累加听歌时长(渲染层播放中每10s/暂停时冲刷),返回最新统计 */
+  libraryAddListenTime(ms: number): Promise<ListenStats>
   // 导入
   importBiliFavorites(folderId: number, folderName: string): Promise<Playlist | null>
   biliFavFolders(): Promise<{ id: number; title: string; coverUrl?: string; songCount: number }[]>
@@ -323,4 +369,17 @@ export interface DesktopApi {
   windowClose(): void
   /** 主进程推送事件 */
   onDlUpdate(cb: (record: DownloadRecord) => void): () => void
+  // 悬浮歌词窗
+  /** 创建/销毁悬浮歌词窗 */
+  floatShow(show: boolean): Promise<boolean>
+  /** 主窗口推送播放状态到悬浮窗 */
+  floatPostState(state: FloatLyricState): void
+  /** 悬浮窗接收状态(悬浮窗内注册) */
+  onFloatState(cb: (state: FloatLyricState) => void): () => void
+  /** 悬浮窗发送控制指令(悬浮窗内注册) */
+  floatSendControl(cmd: FloatControlCmd): void
+  /** 主窗口接收控制指令(主窗口内注册) */
+  onFloatControl(cb: (cmd: FloatControlCmd) => void): () => void
+  /** 从悬浮窗唤起主窗口 */
+  floatOpenMain(): Promise<void>
 }
