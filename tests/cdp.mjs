@@ -1,6 +1,6 @@
 /** CDP 诊断/截图工具:连上应用的 remote-debugging-port,执行 evaluate / 截图
  *  用法:node cdp.mjs eval "表达式"  |  node cdp.mjs shot out.png  |  node cdp.mjs evalfile file.js */
-import { writeFileSync } from 'node:fs'
+import { writeFileSync, readFileSync } from 'node:fs'
 
 const port = process.env.CDP_PORT ?? '9222'
 const [, , cmd, arg] = process.argv

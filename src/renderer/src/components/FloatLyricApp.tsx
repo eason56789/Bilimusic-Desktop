@@ -17,7 +17,7 @@ const useStyles = makeStyles({
     width: '100%',
     height: '100%',
     boxSizing: 'border-box',
-    borderRadius: 14,
+    borderRadius: '14px',
     overflow: 'hidden',
     border: '1px solid rgba(255,255,255,0.12)',
     background: 'rgba(24,24,24,0.82)',
@@ -35,16 +35,16 @@ const useStyles = makeStyles({
   top: {
     display: 'flex',
     alignItems: 'center',
-    height: 28,
-    paddingLeft: 12,
-    paddingRight: 4,
+    height: '28px',
+    paddingLeft: '12px',
+    paddingRight: '4px',
     flexShrink: 0,
     WebkitAppRegion: 'drag' as unknown as 'drag'
   },
   title: {
     flex: 1,
     minWidth: 0,
-    fontSize: 12,
+    fontSize: '12px',
     whiteSpace: 'nowrap',
     overflow: 'hidden',
     textOverflow: 'ellipsis',
@@ -57,12 +57,12 @@ const useStyles = makeStyles({
     display: 'flex',
     flexDirection: 'column',
     justifyContent: 'center',
-    gap: 4,
+    gap: '4px',
     padding: '0 14px',
     minHeight: 0
   },
   current: {
-    fontSize: 17,
+    fontSize: '17px',
     fontWeight: 600,
     whiteSpace: 'nowrap',
     overflow: 'hidden',
@@ -70,7 +70,7 @@ const useStyles = makeStyles({
     lineHeight: 1.35
   },
   next: {
-    fontSize: 12,
+    fontSize: '12px',
     whiteSpace: 'nowrap',
     overflow: 'hidden',
     textOverflow: 'ellipsis',
@@ -80,8 +80,8 @@ const useStyles = makeStyles({
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 6,
-    height: 36,
+    gap: '6px',
+    height: '36px',
     flexShrink: 0,
     WebkitAppRegion: 'drag' as unknown as 'drag'
   }

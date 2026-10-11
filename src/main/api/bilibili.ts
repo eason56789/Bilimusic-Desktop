@@ -3,6 +3,7 @@
  */
 import type { Song, BiliPage } from '@shared/types'
 import { wbiSign, buildQuery, refreshWbiKey } from './wbi'
+import { activateBuvid, fetchReplyMain, genBuvid3 } from './bilibili-grpc'
 
 const UA =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
@@ -746,12 +747,84 @@ export async function getUserInfo(): Promise<{
 }
 
 /** 视频评论(offset=已加载条数,每页20条;order: hot=综合热度(legacy 分页) / time=按时间(游标)) */
+/** ===== 评论(App gRPC 匿名全量 + Web 接口兜底,方案参考 PiliPlus) ===== */
+
+/** gRPC 匿名评论的设备指纹:优先复用登录 cookie 里的 buvid3(稳定),否则生成 */
+let grpcBuvid = ''
+let grpcBuvidActivating = false
+function getGrpcBuvid(): string {
+  if (grpcBuvid) return grpcBuvid
+  const m = /(?:^|;\s*)buvid3=([^;]+)/.exec(biliCookie)
+  grpcBuvid = m?.[1] ? decodeURIComponent(m[1]) : genBuvid3()
+  if (!grpcBuvidActivating) {
+    grpcBuvidActivating = true
+    // 未激活的 buvid 在 gRPC 侧会被风控拒绝;激活失败不阻塞(部分场景仍可用,重启进程会再试)
+    void activateBuvid(grpcBuvid).catch(() => {})
+  }
+  return grpcBuvid
+}
+
+/** aid 缓存:评论翻页每页都需要 oid,避免每页都打一次 view 接口 */
+const commentAidCache = new Map<string, number>()
+async function aidOfBvid(bvid: string): Promise<number> {
+  const hit = commentAidCache.get(bvid)
+  if (hit) return hit
+  const detail = await getVideoDetail(bvid)
+  if (!detail) return 0
+  commentAidCache.set(bvid, detail.aid)
+  return detail.aid
+}
+
+/** gRPC 数值游标(按 bvid+order 记忆;offset=0 表示从头取) */
+const grpcReplyCursors = new Map<string, number | 'END'>()
+
 export async function getVideoComments(
   bvid: string,
   offset: number,
   order: 'hot' | 'time' = 'hot'
 ): Promise<{ total: number; hasMore: boolean; comments: { id: string; user: string; avatar: string; content: string; time: number; likes: number }[] }> {
+  // 主路径:App gRPC——匿名可拿全量评论,"时间排序"不再被服务端降级为 3 条
+  try {
+    const aid = await aidOfBvid(bvid)
+    if (aid > 0) {
+      const key = bvid + '|' + order
+      let next = 0
+      if (offset > 0) {
+        const stored = grpcReplyCursors.get(key)
+        if (stored === undefined || stored === 'END') return { total: 0, hasMore: false, comments: [] }
+        next = stored
+      }
+      try {
+        const page = await fetchReplyMain({ aid, mode: order === 'time' ? 2 : 3, next, buvid: getGrpcBuvid() })
+        grpcReplyCursors.set(key, page.isEnd || page.replies.length === 0 ? 'END' : page.next)
+        const comments = page.replies.map((r) => ({
+          id: r.id,
+          user: r.user,
+          avatar: r.avatar,
+          content: r.content,
+          // gRPC ctime 是 Unix 秒,统一乘 1000 转毫秒(与网易云评论时间单位一致)
+          time: r.time * 1000,
+          likes: r.likes
+        }))
+        return { total: page.total, hasMore: !page.isEnd && comments.length > 0, comments }
+      } catch (e) {
+        grpcReplyCursors.delete(key)
+        console.warn('[Bilibili] grpc comments failed, fallback to web api:', e instanceof Error ? e.message : e)
+      }
+    }
+  } catch (e) {
+    console.warn('[Bilibili] grpc comments aid resolve failed:', e instanceof Error ? e.message : e)
+  }
+  // 兜底:Web 接口(热度=legacy sort=2 每页20;时间=wbi/main,匿名仅 3 条)
   if (order === 'time') return getVideoCommentsByTime(bvid, offset)
+  return getVideoCommentsLegacy(bvid, offset)
+}
+
+/** 热度评论兜底:legacy /x/v2/reply sort=2(匿名每页 20 条) */
+async function getVideoCommentsLegacy(
+  bvid: string,
+  offset: number
+): Promise<{ total: number; hasMore: boolean; comments: { id: string; user: string; avatar: string; content: string; time: number; likes: number }[] }> {
   try {
     const detail = await getVideoDetail(bvid)
     if (!detail) return { total: 0, hasMore: false, comments: [] }

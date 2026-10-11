@@ -38,6 +38,7 @@ const defaultSettings: Settings = {
   lyricSize: 'standard',
   density: 'standard',
   floatLyric: false,
+  closeBehavior: 'ask',
   uiModules: {
     navSearch: true,
     navPlaylists: true,
@@ -191,6 +192,10 @@ export function initStore(): void {
   } else if (ls.date !== today) {
     ls.todayMs = 0
     ls.date = today
+  }
+  // 关闭窗口行为:旧存档缺失(由 defaultSettings 补齐)或非法值兜底
+  if (s.closeBehavior !== 'ask' && s.closeBehavior !== 'tray' && s.closeBehavior !== 'quit') {
+    s.closeBehavior = 'ask'
   }
 }
 

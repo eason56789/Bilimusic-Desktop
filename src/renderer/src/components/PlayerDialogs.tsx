@@ -260,7 +260,7 @@ export function CommentsBody({
         data.comments.length > 0 && (
           <div style={{ flexShrink: 0, padding: '6px 2px 0' }}>
             <span className={styles.muted}>
-              B站未登录时仅返回最新几条评论,登录B站账号后可分页查看全部
+              评论服务本次走了降级通道(仅部分评论),稍后重试可恢复完整列表;登录B站账号可提高成功率
             </span>
           </div>
         )}

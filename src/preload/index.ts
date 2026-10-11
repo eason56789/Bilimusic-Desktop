@@ -118,6 +118,13 @@ const api: DesktopApi = {
   windowMinimize: () => ipcRenderer.send('window:minimize'),
   windowMaximizeToggle: () => ipcRenderer.send('window:maximizeToggle'),
   windowClose: () => ipcRenderer.send('window:close'),
+  // 关闭窗口询问(主进程 → 渲染层弹窗)
+  onWindowCloseAsk: (cb) => {
+    const listener = () => cb()
+    ipcRenderer.on('window:closeAsk', listener)
+    return () => ipcRenderer.removeListener('window:closeAsk', listener)
+  },
+  windowCloseDecide: (action) => invoke('window:closeDecide', action),
 
   onDlUpdate: (cb: (record: DownloadRecord) => void) => {
     const listener = (_e: unknown, record: DownloadRecord) => cb(record)

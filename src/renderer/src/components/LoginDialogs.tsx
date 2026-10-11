@@ -16,6 +16,7 @@ import {
   makeStyles,
   tokens
 } from '@fluentui/react-components'
+import { Eye24Regular, EyeOff24Regular } from '@fluentui/react-icons'
 import { useStore } from '../store'
 import { api } from '../lib/api'
 import { toastSuccess, toastError } from '../lib/toast'
@@ -205,6 +206,7 @@ export function NeteaseLoginDialog({ open, onClose }: { open: boolean; onClose: 
   const [phone, setPhone] = useState('')
   const [captcha, setCaptcha] = useState('')
   const [password, setPassword] = useState('')
+  const [showPassword, setShowPassword] = useState(false)
   const [countdown, setCountdown] = useState(0)
   const [busy, setBusy] = useState(false)
   const keyRef = useRef<string | null>(null)
@@ -367,10 +369,18 @@ export function NeteaseLoginDialog({ open, onClose }: { open: boolean; onClose: 
                 </Field>
                 <Field label="密码">
                   <Input
-                    type="password"
+                    type={showPassword ? 'text' : 'password'}
                     value={password}
                     onChange={(_, d) => setPassword(d.value)}
                     onKeyDown={(e) => e.key === 'Enter' && phoneOk && password && doLoginPassword()}
+                    fieldEnd={
+                      <Button
+                        appearance="transparent"
+                        aria-label={showPassword ? '隐藏密码' : '显示密码'}
+                        icon={showPassword ? <EyeOff24Regular /> : <Eye24Regular />}
+                        onClick={() => setShowPassword((v) => !v)}
+                      />
+                    }
                   />
                 </Field>
                 <Button

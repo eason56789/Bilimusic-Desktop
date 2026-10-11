@@ -134,6 +134,8 @@ export interface Settings {
   floatLyric: boolean
   /** 悬浮歌词窗位置与尺寸(拖动/缩放后记忆) */
   floatLyricBounds?: { x: number; y: number; width: number; height: number }
+  /** 关闭主窗口行为:每次询问 / 后台运行(隐藏到托盘,音乐继续) / 直接退出 */
+  closeBehavior: 'ask' | 'tray' | 'quit'
 }
 
 /** 悬浮歌词窗状态载荷(主窗口渲染层 → 悬浮窗) */
@@ -367,6 +369,10 @@ export interface DesktopApi {
   windowMinimize(): void
   windowMaximizeToggle(): void
   windowClose(): void
+  /** 关闭窗口询问:主进程推送,渲染层弹窗让用户选择(后台运行/直接退出) */
+  onWindowCloseAsk(cb: () => void): () => void
+  /** 用户对关闭询问的决定:tray=后台运行 quit=直接退出 cancel=取消 */
+  windowCloseDecide(action: 'tray' | 'quit' | 'cancel'): Promise<void>
   /** 主进程推送事件 */
   onDlUpdate(cb: (record: DownloadRecord) => void): () => void
   // 悬浮歌词窗

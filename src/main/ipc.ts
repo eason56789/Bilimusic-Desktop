@@ -207,7 +207,9 @@ export function registerIpc(): void {
             // QQ音乐/酷狗等仅元数据歌曲:按"标题+歌手"搜网易云,取时长最接近的一首的评论
             const kw = `${song.title} ${song.artist}`.trim()
             const res = await netease.searchSongs(kw, 5, 0)
-            const pool = (res.songs ?? []).filter((s: Song) => s.neteaseId > 0)
+            const pool = (res.songs ?? []).filter(
+              (s: Song): s is Song & { neteaseId: number } => (s.neteaseId ?? 0) > 0
+            )
             if (pool.length === 0) return { ok: false as const, error: '网易云未找到对应歌曲' }
             id = pool.reduce((best, s) =>
               Math.abs(s.duration - song.duration) < Math.abs(best.duration - song.duration) ? s : best

@@ -26,6 +26,7 @@ import { PlayerBar } from './components/PlayerBar'
 import { NowPlaying } from './components/NowPlaying'
 import { Onboarding } from './components/Onboarding'
 import { GlobalDialogs } from './components/GlobalDialogs'
+import { CloseAskDialog } from './components/CloseAskDialog'
 import { FloatBridge } from './components/FloatBridge'
 import { FloatLyricApp } from './components/FloatLyricApp'
 import { SearchPage } from './pages/SearchPage'
@@ -351,6 +352,7 @@ function MainApp() {
       {/* obDone:刚完成引导时主界面播放入场动画(放大淡入) */}
       <Shell className={obDone ? 'shell-enter' : undefined} />
       <GlobalDialogs />
+      <CloseAskDialog />
       <FloatBridge />
       {showOnboarding && <Onboarding onDone={() => setObDone(true)} />}
     </FluentProvider>

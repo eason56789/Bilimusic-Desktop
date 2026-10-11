@@ -277,6 +277,20 @@ export function SettingsPage() {
           </RadioGroup>
         </div>
 
+        {/* 关闭窗口行为 */}
+        <div className={styles.row}>
+          <Text size={300}>关闭窗口时:</Text>
+          <RadioGroup
+            layout="horizontal"
+            value={s.closeBehavior}
+            onChange={(_, d) => update('closeBehavior', d.value as typeof s.closeBehavior)}
+          >
+            <Radio value="ask" label="每次询问" />
+            <Radio value="tray" label="后台运行" />
+            <Radio value="quit" label="直接退出" />
+          </RadioGroup>
+        </div>
+
         {/* 界面定制:模块显隐 */}
         <div className={styles.row} style={{ flexDirection: 'column', alignItems: 'stretch', gap: 10 }}>
           <Text size={300} weight="semibold">界面定制(显示/隐藏模块)</Text>
