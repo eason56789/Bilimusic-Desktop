@@ -72,6 +72,7 @@ export function SettingsPage() {
   const [neLoginOpen, setNeLoginOpen] = useState(false)
   const [version, setVersion] = useState('')
   const [cssDraft, setCssDraft] = useState('')
+  const [checking, setChecking] = useState(false)
 
   useEffect(() => {
     api.appVersion().then((v) => setVersion(`${v.version} (Electron ${v.electron})`))
@@ -208,6 +209,17 @@ export function SettingsPage() {
       {/* 外观 */}
       <div className={styles.section}>
         <SectionTitle>外观</SectionTitle>
+        <div className={styles.row}>
+          <Text size={300}>界面样式:</Text>
+          <RadioGroup
+            layout="horizontal"
+            value={s.uiStyle}
+            onChange={(_, d) => update('uiStyle', d.value as 'fluent' | 'md3')}
+          >
+            <Radio value="fluent" label="经典 Fluent" />
+            <Radio value="md3" label="Material 3 Expressive" />
+          </RadioGroup>
+        </div>
         <RadioGroup
           layout="horizontal"
           value={s.theme}
@@ -605,6 +617,33 @@ export function SettingsPage() {
             onChange={(_, d) => update('lyricBlurEnabled', d.checked)}
           />
         </div>
+        {/* 歌词不透明度(对齐手机端:当前句 / 非当前句 双值) */}
+        <div className={styles.row} style={{ maxWidth: 460 }}>
+          <Text size={300} style={{ minWidth: 210 }}>
+            当前歌词不透明度 {Math.round((s.lyricAlphaCurrent ?? 1) * 100)}%
+          </Text>
+          <Slider
+            min={0.3}
+            max={1}
+            step={0.05}
+            value={s.lyricAlphaCurrent ?? 1}
+            style={{ flex: 1 }}
+            onChange={(_, d) => update('lyricAlphaCurrent', d.value)}
+          />
+        </div>
+        <div className={styles.row} style={{ maxWidth: 460 }}>
+          <Text size={300} style={{ minWidth: 210 }}>
+            非当前歌词不透明度 {Math.round((s.lyricAlphaInactive ?? 0.15) * 100)}%
+          </Text>
+          <Slider
+            min={0.05}
+            max={1}
+            step={0.05}
+            value={s.lyricAlphaInactive ?? 0.15}
+            style={{ flex: 1 }}
+            onChange={(_, d) => update('lyricAlphaInactive', d.value)}
+          />
+        </div>
         {s.lyricBlurEnabled && (
           <>
             {(
@@ -645,6 +684,26 @@ export function SettingsPage() {
       {/* 搜索 */}
       <div className={styles.section}>
         <SectionTitle>搜索</SectionTitle>
+        <div className={styles.row}>
+          <Text size={300}>默认音源:</Text>
+          <RadioGroup
+            layout="horizontal"
+            value={s.defaultSearchSource ?? 'netease'}
+            onChange={(_, d) => update('defaultSearchSource', d.value as typeof s.defaultSearchSource)}
+          >
+            <Radio value="netease" label="网易云音乐" />
+            <Radio value="bili" label="哔哩哔哩" />
+            <Radio value="qq" label="QQ音乐" />
+            <Radio value="kugou" label="酷狗" />
+          </RadioGroup>
+        </div>
+        <div className={styles.row}>
+          <Switch
+            checked={s.neteaseFallback !== false}
+            label="网易云兜底:无音源时自动到 B站 / QQ音乐 / 酷狗搜索"
+            onChange={(_, d) => update('neteaseFallback', d.checked)}
+          />
+        </div>
         <div className={styles.row}>
           <Switch
             checked={s.filterLongVideo}
@@ -765,6 +824,27 @@ export function SettingsPage() {
             onClick={() => void api.appOpenExternal('https://space.bilibili.com/88981336')}
           >
             Bilibili
+          </Button>
+          <Button
+            icon={<ArrowClockwiseRegular />}
+            disabled={checking}
+            onClick={async () => {
+              setChecking(true)
+              try {
+                const info = await api.checkUpdate()
+                if (info) {
+                  useStore.setState({ updateInfo: info })
+                } else {
+                  toastSuccess('已是最新版本', '未发现比当前更高的版本')
+                }
+              } catch (e) {
+                toastError('检查更新失败', String(e))
+              } finally {
+                setChecking(false)
+              }
+            }}
+          >
+            {checking ? '检查中…' : '检查更新'}
           </Button>
         </div>
         <Text size={200} style={{ color: tokens.colorNeutralForeground3 }}>

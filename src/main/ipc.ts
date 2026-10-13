@@ -24,11 +24,14 @@ import type {
 } from '@shared/types'
 import * as bilibili from './api/bilibili'
 import * as netease from './api/netease'
+import * as qqmusic from './api/qqmusic'
+import * as kugou from './api/kugou'
 import { fetchPlaylistByLink } from './api/linkImport'
 import { computeSyncPlan } from './syncDelta'
 import { getLyrics } from './api/lyrics'
 import { prepareAudio, coverProxyUrl, clearAudioCache, getCacheDir } from './audio'
 import { enqueueDownload, cancelDownload, removeDownload } from './downloads'
+import { checkUpdateAvailable } from './update'
 import {
   getStore,
   saveStore,
@@ -117,6 +120,49 @@ function formatDuration(sec: number): string {
   return `${m}:${String(s).padStart(2, '0')}`
 }
 
+/** 解析粘贴的 B站 Cookie:支持裸值(SESSDATA=xxx; bili_jct=xxx)、多行、JSON 片段 */
+function parseBiliCookieString(raw: string): string | null {
+  const text = String(raw ?? '').trim()
+  if (!text) return null
+  let src = text
+  // 兼容从浏览器复制 JSON(cookie 数组或 {name,value} 对象)
+  if (text.startsWith('[') || text.startsWith('{')) {
+    try {
+      const j = JSON.parse(text)
+      const arr = Array.isArray(j) ? j : [j]
+      src = arr
+        .map((c: any) => (c?.name && c?.value != null ? `${c.name}=${c.value}` : ''))
+        .filter(Boolean)
+        .join('; ')
+    } catch {
+      /* 按普通字符串继续 */
+    }
+  }
+  // 去掉 "Cookie:" 前缀、换行、多余逗号
+  src = src.replace(/^\s*cookie\s*:\s*/i, '').replace(/[\r\n]+/g, '; ').replace(/(;\s*)+/g, '; ')
+  const pairs: string[] = []
+  for (const seg of src.split(';')) {
+    const s = seg.trim()
+    if (!s) continue
+    const eq = s.indexOf('=')
+    if (eq <= 0) continue
+    const name = s.slice(0, eq).trim()
+    const value = s.slice(eq + 1).trim()
+    if (!name || !/^[A-Za-z0-9_.-]+$/.test(name)) continue
+    // 过滤掉粘贴 URL 时带出来的查询参数名
+    if (['https', 'http', 'www'].includes(name.toLowerCase())) continue
+    pairs.push(`${name}=${value}`)
+  }
+  // 必需字段:SESSDATA(登录态核心);bili_jct 用于写操作,能带就带
+  const has = (n: string) => pairs.some((p) => p.startsWith(n + '='))
+  if (!has('SESSDATA')) return null
+  if (!has('DedeUserID')) {
+    // 部分用户只粘了 SESSDATA:补空 DedeUserID 让后续接口自行判断(资料拉取会给出准确结果)
+    pairs.push('DedeUserID=')
+  }
+  return pairs.join('; ')
+}
+
 export function registerIpc(): void {
   // B站设备 cookie 合并后持久化(收藏夹/播放记录等接口需要 buvid3)
   onBiliCookieChange(setBiliCookieStore)
@@ -168,6 +214,34 @@ export function registerIpc(): void {
       return err(e)
     }
   })
+  ipcMain.handle('api:neteasePlaylistMeta', async (_e, id: number) => {
+    try {
+      return ok(await netease.getPlaylistMeta(id))
+    } catch (e) {
+      return err(e)
+    }
+  })
+  ipcMain.handle('api:neteaseArtistDetail', async (_e, id: number) => {
+    try {
+      return ok(await netease.getArtistDetail(id))
+    } catch (e) {
+      return err(e)
+    }
+  })
+  ipcMain.handle('api:qqSearch', async (_e, keyword: string, page: number) => {
+    try {
+      return ok(await qqmusic.searchQqSongs(keyword, page, 30))
+    } catch (e) {
+      return err(e)
+    }
+  })
+  ipcMain.handle('api:kugouSearch', async (_e, keyword: string, page: number) => {
+    try {
+      return ok(await kugou.searchKugouSongs(keyword, page, 30))
+    } catch (e) {
+      return err(e)
+    }
+  })
   ipcMain.handle('api:neteasePersonalized', async () => {
     try {
       return ok(await netease.getPersonalizedPlaylists(12))
@@ -182,7 +256,7 @@ export function registerIpc(): void {
       song: Song,
       offset: number,
       order: 'hot' | 'time' = 'hot',
-      platform?: 'bilibili' | 'netease'
+      platform?: 'bilibili' | 'netease' | 'qq'
     ) => {
       try {
         const nePayload = (r: { total: number; hasMore: boolean; comments: any[] }) => ({
@@ -218,10 +292,31 @@ export function registerIpc(): void {
           const r = await netease.getMusicComments(id, offset, 20, order)
           return ok(nePayload(r))
         }
-        // 兜底场景显式指定平台(网易云垫底B站 / QQ酷狗B站取流时,两个平台都可看)
+        // QQ 音乐原生评论(搜索/导入的 QQ 歌曲都带 qqId;取不到时用网易云兜底)
+        const fetchQq = async () => {
+          let qid = song.qqId
+          if (!qid && song.qqMid) {
+            // 旧数据只有 mid:搜同款解析数字 id
+            try {
+              const hits = await qqmusic.searchQqSongs(`${song.title} ${song.artist}`, 1, 5)
+              const hit = hits.find((h) => h.qqMid === song.qqMid) ?? hits[0]
+              qid = hit?.qqId
+            } catch {
+              /* ignore */
+            }
+          }
+          if (!qid) return fetchNetease()
+          const r = await qqmusic.getQqComments(qid, offset, 20, order)
+          return ok(r)
+        }
+        // 兜底场景显式指定平台(网易云垫底B站 / QQ酷狗B站取流时,平台间可切)
         if (platform === 'bilibili') return fetchBili()
         if (platform === 'netease') return fetchNetease()
-        // 默认:原曲平台优先;放宽为"有bvid就能看B站"(QQ/酷狗兜底视频同样适用)
+        if (platform === 'qq') return fetchQq()
+        // 默认:原曲平台优先
+        if (song.source === 'QQMUSIC' || song.qqMid) return fetchQq()
+        // 酷狗无公开评论接口:默认按"标题+歌手"搜网易云评论兜底
+        if (song.source === 'KUGOU') return fetchNetease()
         if (song.neteaseId) return fetchNetease()
         if (song.bvid) return fetchBili()
         return { ok: false, error: '该来源暂不支持评论(可在播放后查看B站评论)' }
@@ -265,12 +360,37 @@ export function registerIpc(): void {
               ? '已下载'
               : '在线播放'
         rows['链接'] = `https://music.163.com/song?id=${song.neteaseId}`
-        const detail = await netease.getSongDetail([song.neteaseId]).catch(() => [])
-        const d = detail[0]
-        if (d) {
-          rows['专辑'] = d.album ?? rows['专辑']
-          rows['专辑ID/曲风'] = String(d.neteaseId)
+        // 更详细的歌曲信息:专辑/曲风/发行时间/人气(weapi v3 明细)
+        const raw = await netease.getSongDetailRaw(song.neteaseId).catch(() => null)
+        if (raw) {
+          rows['专辑'] = raw.albumName ?? rows['专辑']
+          rows['歌曲ID'] = String(song.neteaseId)
+          if (raw.publishTime) {
+            const d = new Date(raw.publishTime)
+            rows['发行时间'] = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+          }
+          if (raw.pop != null) rows['人气'] = `${raw.pop} / 100`
+          if (raw.fee === 1) rows['付费'] = 'VIP 专享'
+          else if (raw.fee === 4) rows['付费'] = '购买专辑'
+          else if (raw.fee === 8) rows['付费'] = '低音质免费'
+          if (raw.artistId) {
+            const fans = await netease
+              .getArtistDetail(raw.artistId)
+              .then((d) => d.fansCount)
+              .catch(() => undefined)
+            if (fans != null) rows['歌手粉丝数'] = String(fans)
+          }
         }
+      } else if (song.source === 'QQMUSIC') {
+        rows['来源'] = 'QQ音乐'
+        rows['链接'] = song.qqMid ? `https://y.qq.com/n/ryqq/songDetail/${song.qqMid}` : ''
+        rows['状态'] = getStore().downloadedIds.includes(song.id) ? '已下载' : '在线播放'
+        if (song.qqId) rows['歌曲ID'] = String(song.qqId)
+      } else if (song.source === 'KUGOU') {
+        rows['来源'] = '酷狗音乐'
+        rows['状态'] = getStore().downloadedIds.includes(song.id) ? '已下载' : '在线播放'
+        if (song.kugouHash) rows['文件Hash'] = song.kugouHash
+        if (song.kugouAlbumId) rows['专辑ID'] = song.kugouAlbumId
       } else if (song.source === 'BILIBILI' && song.bvid) {
         const p = song.page > 1 ? `?p=${song.page}` : ''
         rows['链接'] = `https://www.bilibili.com/video/${bvidOf(song)}${p}`
@@ -293,8 +413,16 @@ export function registerIpc(): void {
   // ===== 播放 =====
   ipcMain.handle(
     'audio:prepare',
-    async (_e, song: Song, html5Fallback?: boolean): Promise<PreparedAudio> => {
-      return prepareAudio(song, html5Fallback, getStore().settings.neteaseQuality)
+    async (e, song: Song, html5Fallback?: boolean): Promise<PreparedAudio> => {
+      // 加载进度实时推给请求方窗口(全屏播放页进度条)
+      const sender = e.sender
+      return prepareAudio(song, html5Fallback, getStore().settings.neteaseQuality, (p) => {
+        try {
+          if (!sender.isDestroyed()) sender.send('audio:progress', p)
+        } catch {
+          /* 窗口销毁竞态忽略 */
+        }
+      })
     }
   )
   ipcMain.handle('lyrics:get', (_e, song: Song) => getLyrics(song))
@@ -615,6 +743,24 @@ export function registerIpc(): void {
       win.loadURL('https://passport.bilibili.com/login')
     })
   })
+  // Cookie 登录:粘贴 SESSDATA 等字段,解析后写入并拉取资料验证
+  ipcMain.handle('auth:biliCookieLogin', async (_e, rawCookie: string) => {
+    try {
+      const parsed = parseBiliCookieString(rawCookie)
+      if (!parsed) {
+        return { ok: false, message: '未找到有效字段。请粘贴包含 SESSDATA=... 的完整 Cookie' }
+      }
+      await finishBiliLogin(parsed)
+      const info = await bilibili.getUserInfo().catch(() => null)
+      if (info && info.isLogin) {
+        return { ok: true, message: `登录成功:${info.nickname}` }
+      }
+      // cookie 已保存但资料没拉回来:仍算成功(部分接口受限),提示用户
+      return { ok: true, message: 'Cookie 已保存(资料拉取失败,可能已过期,请核对 SESSDATA)' }
+    } catch (e) {
+      return { ok: false, message: e instanceof Error ? e.message : String(e) }
+    }
+  })
   ipcMain.handle('auth:biliLogout', () => {
     setBiliCookie('')
     setBiliCookieStore('')
@@ -770,6 +916,11 @@ export function registerIpc(): void {
     electron: process.versions.electron,
     platform: process.platform
   }))
+  // 手动检查更新(渲染层"关于"区按钮;启动自动检查在 index.ts)
+  ipcMain.handle('app:checkUpdate', async () => {
+    const info = await checkUpdateAvailable()
+    return info
+  })
 
   // ===== 备份 / 恢复 / 恢复出厂 =====
   const execFileAsync = promisify(execFile)

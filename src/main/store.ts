@@ -39,6 +39,11 @@ const defaultSettings: Settings = {
   density: 'standard',
   floatLyric: false,
   closeBehavior: 'ask',
+  uiStyle: 'fluent',
+  lyricAlphaCurrent: 1,
+  lyricAlphaInactive: 0.15,
+  defaultSearchSource: 'netease',
+  neteaseFallback: true,
   uiModules: {
     navSearch: true,
     navPlaylists: true,

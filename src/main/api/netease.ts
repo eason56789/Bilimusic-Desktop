@@ -1,7 +1,7 @@
 /**
  * 网易云音乐 API 客户端 (移植自安卓端 NeteaseApiClient.kt)
  */
-import type { Song } from '@shared/types'
+import type { Song, NeteasePlaylistMeta, NeteaseArtistDetail } from '@shared/types'
 import { weApiEncrypt, eApiEncrypt, linuxApiEncrypt, md5Hex } from './neteaseCrypto'
 
 const UA =
@@ -340,6 +340,29 @@ export async function getSongDetail(ids: number[]): Promise<Song[]> {
   return (json?.songs ?? []).map(songFromNetease)
 }
 
+/** 单曲原始明细(歌曲详情弹窗展示:发行时间/人气/VIP 标记/歌手 id 等) */
+export async function getSongDetailRaw(id: number): Promise<{
+  albumName?: string
+  publishTime?: number
+  pop?: number
+  fee?: number
+  artistId?: number
+} | null> {
+  const json = await callWeApi('/v3/song/detail', {
+    c: `[{"id":${id}}]`,
+    ids: `[${id}]`
+  })
+  const s = json?.songs?.[0]
+  if (!s) return null
+  return {
+    albumName: s.al?.name ?? s.album?.name,
+    publishTime: s.publishTime ?? s.album?.publishTime,
+    pop: typeof s.pop === 'number' ? Math.round(s.pop) : undefined,
+    fee: typeof s.fee === 'number' ? s.fee : undefined,
+    artistId: s.ar?.[0]?.id ?? s.artists?.[0]?.id
+  }
+}
+
 export interface NeteaseLyric {
   lrc: string
   yrc?: string
@@ -433,6 +456,59 @@ export async function getArtistSongs(artistId: number): Promise<Song[]> {
     order: 'hot'
   })
   return (json?.songs ?? []).map(songFromNetease)
+}
+
+/** 歌单元信息(详情页展示:描述/播放量/创建时间/创作者等) */
+export async function getPlaylistMeta(playlistId: number): Promise<NeteasePlaylistMeta> {
+  const json = await request(
+    `https://music.163.com/api/v6/playlist/detail?id=${playlistId}&n=10&s=8`,
+    {},
+    'API',
+    { method: 'GET' }
+  ).then((t) => JSON.parse(t))
+  const p = json?.playlist ?? {}
+  return {
+    id: playlistId,
+    name: p.name ?? '',
+    coverUrl: p.coverImgUrl ?? undefined,
+    description: p.description ?? undefined,
+    playCount: p.playCount ?? undefined,
+    subscribedCount: p.subscribedCount ?? undefined,
+    shareCount: p.shareCount ?? undefined,
+    commentCount: p.commentCount ?? undefined,
+    createTime: p.createTime ?? undefined,
+    updateTime: p.updateTime ?? undefined,
+    creator: p.creator?.nickname ?? undefined,
+    tags: Array.isArray(p.tags) && p.tags.length > 0 ? p.tags : undefined,
+    trackCount: p.trackCount ?? undefined
+  }
+}
+
+/** 歌手详情(简介/图片/歌曲数/专辑数 + 粉丝数) */
+export async function getArtistDetail(artistId: number): Promise<NeteaseArtistDetail> {
+  // 基础资料 + 热歌列表(附带 musicSize/albumSize/briefDesc)
+  const json = await callWeApi(`/v1/artist/${artistId}`, {})
+  const a = json?.artist ?? {}
+  let fansCount: number | undefined
+  try {
+    const fans = await callWeApi('/artist/follow/count/get', { id: String(artistId) })
+    const n = Number(fans?.data?.fansCnt)
+    if (isFinite(n) && n >= 0) fansCount = n
+  } catch {
+    /* 粉丝数拿不到不影响主流程 */
+  }
+  return {
+    id: artistId,
+    name: a.name ?? '',
+    avatar: a.picUrl ?? undefined,
+    cover: a.picUrl ?? undefined,
+    briefDesc: a.briefDesc ?? undefined,
+    alias: Array.isArray(a.alias) && a.alias.length > 0 ? a.alias : undefined,
+    musicSize: a.musicSize ?? undefined,
+    albumSize: a.albumSize ?? undefined,
+    mvSize: a.mvSize ?? undefined,
+    fansCount
+  }
 }
 
 /** 歌单搜索结果 → 简要信息 */

@@ -10,6 +10,7 @@ import { initFloat, showFloat, destroyFloatWindow } from './float'
 import { setBiliCookie } from './api/bilibili'
 import { setNeteaseCookies, onNeteaseCookieChange } from './api/netease'
 import { setNeteaseCookieStore } from './store'
+import { checkUpdateAvailable } from './update'
 
 // 防御:从 ZCode 等 Electron 宿主内启动时会继承宿主的 CHROME_CRASHPAD_PIPE_NAME,
 // 渲染进程会去连宿主的崩溃服务管道并卡死(表现为导航永不完成/窗口永不显示)。
@@ -191,6 +192,19 @@ app.whenReady().then(() => {
 
   // 记住上次的悬浮歌词窗状态
   if (getStore().settings.floatLyric) showFloat(true)
+
+  // 启动自动检查更新:窗口就绪后延迟检查,发现新版本推给渲染层弹窗
+  // (延迟 4s 避开启动高峰;失败静默不影响使用)
+  setTimeout(() => {
+    checkUpdateAvailable()
+      .then((info) => {
+        if (!info) return
+        if (getStore().settings.skippedUpdateVersion === info.version) return
+        const win = mainWindow
+        if (win && !win.isDestroyed()) win.webContents.send('update:available', info)
+      })
+      .catch(() => {})
+  }, 4000)
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()

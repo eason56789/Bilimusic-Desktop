@@ -18,7 +18,7 @@ import {
   SettingsRegular
 } from '@fluentui/react-icons'
 import { useStore } from './store'
-import { buildTheme } from './lib/theme'
+import { buildTheme, buildMd3PresetCss } from './lib/theme'
 import { setToastController } from './lib/toast'
 import brandIconUrl from './assets/brand.png'
 import type { Settings } from '@shared/types'
@@ -27,12 +27,14 @@ import { NowPlaying } from './components/NowPlaying'
 import { Onboarding } from './components/Onboarding'
 import { GlobalDialogs } from './components/GlobalDialogs'
 import { CloseAskDialog } from './components/CloseAskDialog'
+import { UpdateDialog } from './components/UpdateDialog'
 import { FloatBridge } from './components/FloatBridge'
 import { FloatLyricApp } from './components/FloatLyricApp'
 import { SearchPage } from './pages/SearchPage'
 import { PlaylistsPage, RecentPage } from './pages/PlaylistsPage'
 import { DownloadsPage } from './pages/DownloadsPage'
 import { SettingsPage } from './pages/SettingsPage'
+import { ArtistPage } from './components/ArtistPage'
 
 const useStyles = makeStyles({
   frame: {
@@ -177,6 +179,7 @@ function Shell({ className }: { className?: string }) {
   const styles = useStyles()
   const page = useStore((s) => s.page)
   const setPage = useStore((s) => s.setPage)
+  const artistPageId = useStore((s) => s.artistPageId)
   const anim = useStore((s) => s.library?.settings.pageAnimation ?? 'scale')
   const ui = useStore((s) => s.library?.settings.uiModules)
 
@@ -237,6 +240,11 @@ function Shell({ className }: { className?: string }) {
         </nav>
 
         <main className={styles.content}>
+          {artistPageId ? (
+            <div className={anim !== 'none' ? `page-anim-${anim}` : undefined} style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
+              <ArtistPage />
+            </div>
+          ) : (
           <div
             key={page}
             className={anim !== 'none' ? `page-anim-${anim}` : undefined}
@@ -248,6 +256,7 @@ function Shell({ className }: { className?: string }) {
             {page === 'recent' && <RecentPage />}
             {page === 'settings' && <SettingsPage />}
           </div>
+          )}
         </main>
       </div>
 
@@ -309,9 +318,10 @@ function MainApp() {
   }, [dispatchToast, dismissToast])
 
   const dark = library ? (library.settings.theme === 'system' ? systemDark : library.settings.theme === 'dark') : true
+  const uiStyle = library?.settings.uiStyle ?? 'fluent'
   const theme = useMemo(
-    () => buildTheme(dark, library?.settings.accent ?? '#0f6cbd'),
-    [dark, library?.settings.accent]
+    () => buildTheme(dark, library?.settings.accent ?? '#0f6cbd', uiStyle),
+    [dark, library?.settings.accent, uiStyle]
   )
 
   const effect = library?.settings.windowEffect ?? 'acrylic'
@@ -321,7 +331,7 @@ function MainApp() {
   useGlassVars(dark, effect, glassAlpha)
   useGlobalShortcuts()
 
-  // 界面样式注入:预设(大小/歌词字号/密度/圆角) + 用户自定义 CSS
+  // 界面样式注入:预设(大小/歌词字号/密度) + MD3 Expressive 造型层 + 用户自定义 CSS
   useEffect(() => {
     let el = document.getElementById('user-custom-css') as HTMLStyleElement | null
     if (!el) {
@@ -329,8 +339,9 @@ function MainApp() {
       el.id = 'user-custom-css'
       document.head.appendChild(el)
     }
-    el.textContent = presetCss + (customCss ? '\n' + customCss : '')
-  }, [presetCss, customCss])
+    const md3Css = uiStyle === 'md3' ? buildMd3PresetCss() : ''
+    el.textContent = presetCss + (md3Css ? '\n' + md3Css : '') + (customCss ? '\n' + customCss : '')
+  }, [presetCss, customCss, uiStyle])
 
   // 仅当材质设置本身变化时通知主进程
   // (此前依赖 library,而 library 会随下载进度/播放记录整对象刷新,导致 IPC 风暴)
@@ -343,6 +354,7 @@ function MainApp() {
   return (
     <FluentProvider
       theme={theme}
+      className={uiStyle === 'md3' ? 'md3-ui' : undefined}
       style={{
         height: '100%',
         background: 'var(--app-frame-bg, transparent)'
@@ -353,6 +365,7 @@ function MainApp() {
       <Shell className={obDone ? 'shell-enter' : undefined} />
       <GlobalDialogs />
       <CloseAskDialog />
+      <UpdateDialog />
       <FloatBridge />
       {showOnboarding && <Onboarding onDone={() => setObDone(true)} />}
     </FluentProvider>

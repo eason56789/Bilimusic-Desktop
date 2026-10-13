@@ -12,6 +12,7 @@ import {
   Spinner,
   TabList,
   Tab,
+  Textarea,
   Text,
   makeStyles,
   tokens
@@ -84,16 +85,18 @@ function QRPanel({
   )
 }
 
-/** B站登录(扫码 / 官方网页登录,对齐手机端) */
+/** B站登录(扫码 / 官方网页登录 / Cookie 登录,对齐手机端) */
 export function BiliLoginDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
   const styles = useStyles()
   const refreshLibrary = useStore((s) => s.refreshLibrary)
-  const [tab, setTab] = useState<'qr' | 'web'>('qr')
+  const [tab, setTab] = useState<'qr' | 'web' | 'cookie'>('qr')
   const [image, setImage] = useState<string | null>(null)
   const [status, setStatus] = useState<QRStatus>('loading')
   const [message, setMessage] = useState('')
   const keyRef = useRef<string | null>(null)
   const [webBusy, setWebBusy] = useState(false)
+  const [cookieText, setCookieText] = useState('')
+  const [cookieBusy, setCookieBusy] = useState(false)
 
   const start = async () => {
     setStatus('loading')
@@ -152,6 +155,25 @@ export function BiliLoginDialog({ open, onClose }: { open: boolean; onClose: () 
     }
   }
 
+  /** Cookie 登录:粘贴浏览器里的 B站 Cookie(SESSDATA 必需) */
+  const doCookieLogin = async () => {
+    if (!cookieText.trim() || cookieBusy) return
+    setCookieBusy(true)
+    try {
+      const r = await api.biliCookieLogin(cookieText.trim())
+      if (r.ok) {
+        await refreshLibrary()
+        toastSuccess('B站登录成功', r.message)
+        setCookieText('')
+        onClose()
+      } else {
+        toastError('Cookie 登录失败', r.message)
+      }
+    } finally {
+      setCookieBusy(false)
+    }
+  }
+
   return (
     <Dialog open={open} onOpenChange={(_, d) => !d.open && onClose()}>
       <DialogSurface style={{ minWidth: 400 }}>
@@ -166,6 +188,7 @@ export function BiliLoginDialog({ open, onClose }: { open: boolean; onClose: () 
             >
               <Tab value="qr">扫码登录</Tab>
               <Tab value="web">网页登录</Tab>
+              <Tab value="cookie">Cookie 登录</Tab>
             </TabList>
 
             {tab === 'qr' && (
@@ -186,6 +209,30 @@ export function BiliLoginDialog({ open, onClose }: { open: boolean; onClose: () 
                   在官方登录页中可用密码、短信验证码、扫码等任意方式登录,
                   需要滑块验证时也能正常完成,登录成功后自动回到 BiliMusic。
                 </Text>
+              </div>
+            )}
+
+            {tab === 'cookie' && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                <Textarea
+                  value={cookieText}
+                  onChange={(_, d) => setCookieText(d.value)}
+                  placeholder="SESSDATA=xxxxxx; bili_jct=xxxxxx; DedeUserID=xxxxxx"
+                  resize="vertical"
+                  rows={4}
+                />
+                <Text size={200} style={{ color: tokens.colorNeutralForeground3, lineHeight: 1.7 }}>
+                  获取方式:浏览器登录 bilibili.com → F12 开发者工具 → Application →
+                  Cookies → https://www.bilibili.com → 复制整行 Cookie
+                  (至少需要包含 SESSDATA;可整段粘贴,格式不限)。
+                </Text>
+                <Button
+                  appearance="primary"
+                  disabled={cookieBusy || !cookieText.trim()}
+                  onClick={doCookieLogin}
+                >
+                  {cookieBusy ? <Spinner size="tiny" /> : '登录'}
+                </Button>
               </div>
             )}
           </DialogContent>
@@ -373,9 +420,10 @@ export function NeteaseLoginDialog({ open, onClose }: { open: boolean; onClose: 
                     value={password}
                     onChange={(_, d) => setPassword(d.value)}
                     onKeyDown={(e) => e.key === 'Enter' && phoneOk && password && doLoginPassword()}
-                    fieldEnd={
+                    contentAfter={
                       <Button
                         appearance="transparent"
+                        size="small"
                         aria-label={showPassword ? '隐藏密码' : '显示密码'}
                         icon={showPassword ? <EyeOff24Regular /> : <Eye24Regular />}
                         onClick={() => setShowPassword((v) => !v)}

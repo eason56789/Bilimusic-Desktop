@@ -27,9 +27,18 @@ const api: DesktopApi = {
   neteaseArtistSongs: (artistId) => invoke('api:neteaseArtistSongs', artistId),
   neteasePlaylistSongs: (id) => invoke('api:neteasePlaylistSongs', id),
   neteasePersonalized: () => invoke('api:neteasePersonalized'),
+  qqSearch: (keyword, page) => invoke('api:qqSearch', keyword, page),
+  kugouSearch: (keyword, page) => invoke('api:kugouSearch', keyword, page),
+  neteasePlaylistMeta: (id) => invoke('api:neteasePlaylistMeta', id),
+  neteaseArtistDetail: (id) => invoke('api:neteaseArtistDetail', id),
 
   audioPrepare: (song: Song, html5Fallback?: boolean) =>
     invoke('audio:prepare', song, html5Fallback),
+  onAudioProgress: (cb) => {
+    const listener = (_e: unknown, p: import('@shared/types').AudioLoadProgress) => cb(p)
+    ipcRenderer.on('audio:progress', listener)
+    return () => ipcRenderer.removeListener('audio:progress', listener)
+  },
   lyricsGet: (song: Song) => invoke('lyrics:get', song),
   pagesGet: (bvid: string) => invoke('pages:get', bvid),
   commentsGet: (song, offset, order, platform) => invoke('api:comments', song, offset, order, platform),
@@ -85,6 +94,7 @@ const api: DesktopApi = {
   biliLogout: () => invoke('auth:biliLogout'),
   /** 打开内嵌官方登录窗口(密码/短信/滑块全由B站页面处理) */
   biliWebLogin: () => invoke<{ ok: boolean; message: string }>('auth:biliWebLogin'),
+  biliCookieLogin: (cookie) => invoke<{ ok: boolean; message: string }>('auth:biliCookieLogin', cookie),
   neteaseQRStart: () => invoke<{ imageDataUrl: string; key: string } | null>('auth:neQRStart'),
   neteaseQRPoll: (key) =>
     invoke<{ status: 'waiting' | 'scanned' | 'ok' | 'expired' | 'error'; message: string }>(
@@ -111,6 +121,12 @@ const api: DesktopApi = {
   appClearCache: () => invoke<number>('app:clearCache'),
   appVersion: () => invoke<{ version: string; electron: string; platform: string }>('app:version'),
   appPickLocalAudio: () => invoke<string[]>('app:pickLocalAudio'),
+  checkUpdate: () => invoke('app:checkUpdate'),
+  onUpdateAvailable: (cb) => {
+    const listener = (_e: unknown, info: import('@shared/types').UpdateInfo) => cb(info)
+    ipcRenderer.on('update:available', listener)
+    return () => ipcRenderer.removeListener('update:available', listener)
+  },
   appBackupCreate: () => invoke('app:backupCreate'),
   appRestoreBackup: () => invoke('app:restoreBackup'),
   appFactoryReset: () => invoke<boolean>('app:factoryReset'),

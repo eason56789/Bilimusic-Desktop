@@ -23,6 +23,8 @@ import {
   pageFromSongId
 } from './api/bilibili'
 import { getSongUrl } from './api/netease'
+import { getQqSongUrl } from './api/qqmusic'
+import { getKugouSongUrl } from './api/kugou'
 
 let cacheDir = ''
 
@@ -173,7 +175,19 @@ function serveLocalFile(p: string, req: Request): Response {
 
 // ============ 音频准备 ============
 
-function downloadToCache(url: string, cachePath: string, referer: string): Promise<boolean> {
+/** 音频加载进度回调(ipc 层转发到渲染层,全屏播放页展示进度) */
+export type AudioProgressFn = (p: {
+  stage: 'resolving' | 'downloading' | 'done'
+  received?: number
+  total?: number
+}) => void
+
+function downloadToCache(
+  url: string,
+  cachePath: string,
+  referer: string,
+  onProgress?: (received: number, total: number) => void
+): Promise<boolean> {
   return new Promise((resolve) => {
     fetch(url, {
       headers: {
@@ -187,17 +201,28 @@ function downloadToCache(url: string, cachePath: string, referer: string): Promi
           resolve(false)
           return
         }
+        const total = Number(resp.headers.get('content-length') ?? 0)
         const writer = createWriteStream(cachePath)
         ;(async () => {
           const reader = body.getReader()
+          let received = 0
+          let lastReport = 0
           try {
             for (;;) {
               const { done, value } = await reader.read()
               if (done) break
+              received += value.byteLength
+              // 进度节流 200ms,避免 IPC 风暴
+              const now = Date.now()
+              if (onProgress && now - lastReport > 200) {
+                lastReport = now
+                onProgress(received, total)
+              }
               if (!writer.write(Buffer.from(value))) {
                 await new Promise<void>((r) => writer.once('drain', r))
               }
             }
+            if (onProgress) onProgress(received, total)
             writer.end()
             writer.on('finish', () => resolve(true))
             writer.on('error', () => resolve(false))
@@ -214,6 +239,10 @@ function downloadToCache(url: string, cachePath: string, referer: string): Promi
 /** 网易云 CDN 直链带签名会过期(约 20 分钟),缓存需带 TTL,避免重放过期链接 */
 const NETEASE_URL_TTL_MS = 10 * 60 * 1000
 const neteaseUrlCache = new Map<string, { url: string; quality: string; at: number }>()
+/** QQ vkey / 酷狗直链同样带签名过期,统一 8 分钟 TTL */
+const STREAM_URL_TTL_MS = 8 * 60 * 1000
+const qqUrlCache = new Map<string, { url: string; quality: string; at: number }>()
+const kgUrlCache = new Map<string, { url: string; quality: string; at: number }>()
 
 /** 网易云 level → 中文音质描述 */
 function neteaseLevelText(level: string, type: string): string {
@@ -243,7 +272,8 @@ function neteaseLevelText(level: string, type: string): string {
 export async function prepareAudio(
   song: Song,
   html5Fallback = false,
-  neteaseQuality = 'exhigh'
+  neteaseQuality = 'exhigh',
+  onProgress?: AudioProgressFn
 ): Promise<PreparedAudio> {
   if (song.source === 'LOCAL' && song.localPath && existsSync(song.localPath)) {
     return {
@@ -254,6 +284,7 @@ export async function prepareAudio(
   }
 
   if (song.source === 'NETEASE' && song.neteaseId) {
+    onProgress?.({ stage: 'resolving' })
     const cacheKey = `${song.neteaseId}@${neteaseQuality}`
     const hit = neteaseUrlCache.get(cacheKey)
     const fresh = hit && Date.now() - hit.at < NETEASE_URL_TTL_MS ? hit : null
@@ -277,15 +308,59 @@ export async function prepareAudio(
     throw new Error('netease-no-source')
   }
 
+  // QQ 音乐:平台原生音源(vkey 直链,免费/试听曲目可用;VIP 专享抛错交由渲染层垫底)
+  if (song.source === 'QQMUSIC' && song.qqMid) {
+    onProgress?.({ stage: 'resolving' })
+    const cacheKey = `qq:${song.qqMid}`
+    const hit = qqUrlCache.get(cacheKey)
+    const fresh = hit && Date.now() - hit.at < STREAM_URL_TTL_MS ? hit : null
+    let info = fresh ? { url: fresh.url, quality: fresh.quality } : null
+    if (!info) {
+      if (hit) qqUrlCache.delete(cacheKey)
+      info = await getQqSongUrl(song.qqMid)
+      if (info) qqUrlCache.set(cacheKey, { ...info, at: Date.now() })
+    }
+    if (info) {
+      return {
+        url: `bmedia://proxy/?url=${encodeURIComponent(info.url)}&referer=${encodeURIComponent('https://y.qq.com/')}`,
+        quality: info.quality
+      }
+    }
+    throw new Error('qq-no-source')
+  }
+
+  // 酷狗:平台原生音源(免费曲目直链;VIP 专享抛错交由渲染层垫底)
+  if (song.source === 'KUGOU' && song.kugouHash) {
+    onProgress?.({ stage: 'resolving' })
+    const cacheKey = `kg:${song.kugouHash}`
+    const hit = kgUrlCache.get(cacheKey)
+    const fresh = hit && Date.now() - hit.at < STREAM_URL_TTL_MS ? hit : null
+    let info = fresh ? { url: fresh.url, quality: fresh.quality } : null
+    if (!info) {
+      if (hit) kgUrlCache.delete(cacheKey)
+      info = await getKugouSongUrl(song.kugouHash)
+      if (info) kgUrlCache.set(cacheKey, { ...info, at: Date.now() })
+    }
+    if (info) {
+      return {
+        url: `bmedia://proxy/?url=${encodeURIComponent(info.url)}&referer=${encodeURIComponent('https://www.kugou.com/')}`,
+        quality: info.quality
+      }
+    }
+    throw new Error('kugou-no-source')
+  }
+
   if (song.source === 'BILIBILI' && song.bvid) {
     const bvid = bvidFromSongId(song.bvid || song.id)
     const page = song.page || pageFromSongId(song.id)
+    onProgress?.({ stage: 'resolving' })
     const cid = await getCidForPage(bvid, page)
     if (cid <= 0) throw new Error('no-cid')
     const suffix = page > 1 ? `_p${page}` : ''
     const ext = html5Fallback ? 'mp4' : 'm4s'
     const cachePath = join(cacheDir, `${bvid}${suffix}.${ext}`)
     if (existsSync(cachePath) && statSync(cachePath).size > 10240) {
+      onProgress?.({ stage: 'done' })
       return {
         url: `bmedia://local/?path=${encodeURIComponent(cachePath)}`,
         cachePath,
@@ -294,8 +369,11 @@ export async function prepareAudio(
     }
     const resolved = await resolvePlayUrl(bvid, cid, { preferHtml5: html5Fallback })
     if (!resolved) throw new Error('no-audio-url')
-    const ok = await downloadToCache(resolved.url, cachePath, 'https://www.bilibili.com/')
+    const ok = await downloadToCache(resolved.url, cachePath, 'https://www.bilibili.com/', (received, total) =>
+      onProgress?.({ stage: 'downloading', received, total })
+    )
     if (ok && existsSync(cachePath) && statSync(cachePath).size > 10240) {
+      onProgress?.({ stage: 'done' })
       return {
         url: `bmedia://local/?path=${encodeURIComponent(cachePath)}`,
         cachePath,
@@ -303,6 +381,7 @@ export async function prepareAudio(
       }
     }
     // 下载失败 → 边播边代理
+    onProgress?.({ stage: 'done' })
     return {
       url: `bmedia://proxy/?url=${encodeURIComponent(resolved.url)}&referer=${encodeURIComponent('https://www.bilibili.com/')}`,
       isFragmented: resolved.fragmented,

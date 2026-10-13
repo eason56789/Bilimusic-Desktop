@@ -7,6 +7,8 @@ import {
   MenuItem,
   MenuPopover,
   MenuTrigger,
+  Spinner,
+  ProgressBar,
   Text,
   Tooltip,
   makeStyles,
@@ -199,6 +201,8 @@ export function NowPlaying() {
   const open = useStore((s) => s.nowPlayingOpen)
   const current = useStore((s) => s.current)
   const playing = useStore((s) => s.playing)
+  const loading = useStore((s) => s.loading)
+  const loadProgress = useStore((s) => s.loadProgress)
   const lyrics = useStore((s) => s.lyrics)
   const position = useStore((s) => s.position)
   const duration = useStore((s) => s.duration)
@@ -412,7 +416,14 @@ export function NowPlaying() {
           >
             <div className={styles.leftCol}>
               <div className={styles.coverShadow}>
-                <Cover url={current?.coverUrl} size={commentsOpen ? 220 : 340} radius={16} iconSize={68} />
+                {/* 全屏播放才加载完整大图;列表/播放条统一用 CDN 缩略图 */}
+                <Cover
+                  url={current?.coverUrl}
+                  size={commentsOpen ? 220 : 340}
+                  radius={16}
+                  iconSize={68}
+                  quality="full"
+                />
               </div>
               <div className={styles.meta}>
                 <Text
@@ -493,6 +504,42 @@ export function NowPlaying() {
                 onWheel={noteBrowsing}
                 onTouchMove={noteBrowsing}
               >
+                {/* 音源加载进度:加载中的遮罩(歌词区中央),避免用户误以为卡死 */}
+                {loading && current && (
+                  <div
+                    style={{
+                      position: 'absolute',
+                      inset: 0,
+                      display: 'flex',
+                      flexDirection: 'column',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      gap: 14,
+                      zIndex: 3,
+                      background: 'rgba(10,10,12,0.55)',
+                      backdropFilter: 'blur(10px)',
+                      borderRadius: 16
+                    }}
+                  >
+                    <Spinner size="large" />
+                    <Text style={{ color: 'rgba(255,255,255,0.92)' }}>
+                      {loadProgress?.stage === 'downloading' ? '正在下载音频…' : '正在解析音源…'}
+                    </Text>
+                    {loadProgress?.stage === 'downloading' && loadProgress.total ? (
+                      <div style={{ width: 220 }}>
+                        <ProgressBar
+                          value={Math.min(0.999, (loadProgress.received ?? 0) / loadProgress.total)}
+                        />
+                        <Text
+                          size={200}
+                          style={{ color: 'rgba(255,255,255,0.7)', display: 'block', textAlign: 'center', marginTop: 4 }}
+                        >
+                          {Math.round(((loadProgress.received ?? 0) / loadProgress.total) * 100)}%
+                        </Text>
+                      </div>
+                    ) : null}
+                  </div>
+                )}
                 {lyrics && lyrics.lines.length > 0 ? (
                   lyrics.lines.map((line, i) => {
                     const isActive = i === activeIdx
@@ -573,9 +620,17 @@ export function NowPlaying() {
                 shape="circular"
                 size="large"
                 style={{ width: '60px', height: '60px', minWidth: '60px', padding: 0 }}
-                icon={playing ? <PauseRegular fontSize={24} /> : <PlayRegular fontSize={24} />}
+                icon={
+                  loading ? (
+                    <Spinner size="tiny" style={{ color: '#fff' }} />
+                  ) : playing ? (
+                    <PauseRegular fontSize={24} />
+                  ) : (
+                    <PlayRegular fontSize={24} />
+                  )
+                }
                 onClick={() => togglePlay()}
-                disabled={!current}
+                disabled={!current || loading}
               />
               <Tooltip content="下一首" relationship="label">
                 <Button

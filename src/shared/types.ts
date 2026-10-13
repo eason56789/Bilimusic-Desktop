@@ -9,7 +9,7 @@ export interface Song {
   artist: string
   coverUrl?: string | null
   duration: number // 秒
-  /** 来源平台(QQMUSIC/KUGOU 歌曲只存元数据:播放时自动经B站搜索取流、歌词经网易云搜索) */
+  /** 来源平台(QQMUSIC/KUGOU 歌曲元数据优先,播放时先试平台原生音源,失败自动跨平台垫底) */
   source: MusicSource
   bvid?: string
   page: number
@@ -21,6 +21,16 @@ export interface Song {
   vipOnly?: boolean
   /** 换源播放:保留原曲的封面/歌词/标题,仅用新的 source/bvid/neteaseId 取音频流 */
   keepMeta?: boolean
+  /** QQ 音乐 songmid(vkey 取流所需) */
+  qqMid?: string
+  /** QQ 音乐数字 id(评论区 topid 所需) */
+  qqId?: number
+  /** 酷狗 FileHash(取流/评论所需,一般等于 id 去掉 kg- 前缀) */
+  kugouHash?: string
+  /** 酷狗 album_audio_id / MixSongID(新版接口用) */
+  kugouMixId?: string
+  /** 酷狗 albumid(取流所需) */
+  kugouAlbumId?: string
 }
 
 export interface Playlist {
@@ -136,6 +146,67 @@ export interface Settings {
   floatLyricBounds?: { x: number; y: number; width: number; height: number }
   /** 关闭主窗口行为:每次询问 / 后台运行(隐藏到托盘,音乐继续) / 直接退出 */
   closeBehavior: 'ask' | 'tray' | 'quit'
+  /** 界面样式:经典 Fluent / Material 3 Expressive */
+  uiStyle: 'fluent' | 'md3'
+  /** 当前歌词不透明度 0.3~1(对齐手机端) */
+  lyricAlphaCurrent: number
+  /** 非当前歌词不透明度 0.05~1(对齐手机端) */
+  lyricAlphaInactive: number
+  /** 搜索默认音源 */
+  defaultSearchSource: 'netease' | 'bili' | 'qq' | 'kugou'
+  /** 网易云无音源时自动到 B站/QQ/酷狗搜索垫底 */
+  neteaseFallback: boolean
+  /** 已忽略更新的版本号(启动检查到该版本不再提示) */
+  skippedUpdateVersion?: string
+}
+
+/** 网易云歌单元信息(详情页展示) */
+export interface NeteasePlaylistMeta {
+  id: number
+  name: string
+  coverUrl?: string
+  description?: string
+  playCount?: number
+  subscribedCount?: number
+  shareCount?: number
+  commentCount?: number
+  createTime?: number
+  updateTime?: number
+  creator?: string
+  tags?: string[]
+  trackCount?: number
+}
+
+/** 网易云歌手详情(歌手主页展示) */
+export interface NeteaseArtistDetail {
+  id: number
+  name: string
+  avatar?: string
+  cover?: string
+  briefDesc?: string
+  alias?: string[]
+  musicSize?: number
+  albumSize?: number
+  mvSize?: number
+  fansCount?: number
+}
+
+/** 音频加载进度(主进程 → 渲染层) */
+export interface AudioLoadProgress {
+  /** 音源解析中(URL 获取) */
+  stage: 'resolving' | 'downloading' | 'done'
+  /** 已下载字节(仅 downloading 阶段) */
+  received?: number
+  /** 总字节(未知时为 0) */
+  total?: number
+}
+
+/** 更新信息(GitHub release) */
+export interface UpdateInfo {
+  version: string
+  url: string
+  notes: string
+  publishedAt?: string
 }
 
 /** 悬浮歌词窗状态载荷(主窗口渲染层 → 悬浮窗) */
@@ -243,7 +314,7 @@ export interface CommentsResult {
 export type CommentOrder = 'hot' | 'time'
 
 /** 评论来源平台:兜底场景(网易云垫底B站/QQ酷狗B站取流)下可切换查看 */
-export type CommentPlatform = 'bilibili' | 'netease'
+export type CommentPlatform = 'bilibili' | 'netease' | 'qq'
 
 export interface NeteasePlaylistBrief {
   id: number
@@ -276,8 +347,18 @@ export interface DesktopApi {
   neteaseArtistSongs(artistId: number): Promise<ApiResponse<Song[]>>
   neteasePlaylistSongs(id: number): Promise<ApiResponse<Song[]>>
   neteasePersonalized(): Promise<ApiResponse<NeteasePlaylistBrief[]>>
+  /** QQ音乐搜索 */
+  qqSearch(keyword: string, page: number): Promise<ApiResponse<Song[]>>
+  /** 酷狗搜索 */
+  kugouSearch(keyword: string, page: number): Promise<ApiResponse<Song[]>>
+  /** 网易云歌单元信息(描述/播放量/创建时间等) */
+  neteasePlaylistMeta(id: number): Promise<ApiResponse<NeteasePlaylistMeta>>
+  /** 网易云歌手详情(简介/粉丝数等) */
+  neteaseArtistDetail(id: number): Promise<ApiResponse<NeteaseArtistDetail>>
   // 播放
   audioPrepare(song: Song, html5Fallback?: boolean): Promise<PreparedAudio>
+  /** 音频加载进度(主进程推送,stage=resolving/downloading/done) */
+  onAudioProgress(cb: (p: AudioLoadProgress) => void): () => void
   lyricsGet(song: Song): Promise<LyricsResult>
   pagesGet(bvid: string): Promise<BiliPage[]>
   commentsGet(
@@ -345,6 +426,8 @@ export interface DesktopApi {
   biliQRPoll(key: string): Promise<{ status: 'waiting' | 'scanned' | 'ok' | 'expired' | 'error'; message: string }>
   /** 打开内嵌官方登录窗口(密码/短信/滑块验证全由B站页面处理),登录成功自动回填 */
   biliWebLogin(): Promise<{ ok: boolean; message: string }>
+  /** Cookie 登录:B站 Cookie 字符串(SESSDATA=xxx; bili_jct=xxx; DedeUserID=xxx) */
+  biliCookieLogin(cookie: string): Promise<{ ok: boolean; message: string }>
   biliLogout(): Promise<void>
   neteaseQRStart(): Promise<{ imageDataUrl: string; key: string } | null>
   neteaseQRPoll(key: string): Promise<{ status: 'waiting' | 'scanned' | 'ok' | 'expired' | 'error'; message: string }>
@@ -366,6 +449,10 @@ export interface DesktopApi {
   appClearCache(): Promise<number>
   appVersion(): Promise<{ version: string; electron: string; platform: string }>
   appPickLocalAudio(): Promise<string[]>
+  /** 检查 GitHub release 是否有新版本(启动时自动调用;返回 null = 已是最新/检查失败) */
+  checkUpdate(): Promise<UpdateInfo | null>
+  /** 主进程推送"发现新版本"(启动自动检查命中时) */
+  onUpdateAvailable(cb: (info: UpdateInfo) => void): () => void
   windowMinimize(): void
   windowMaximizeToggle(): void
   windowClose(): void

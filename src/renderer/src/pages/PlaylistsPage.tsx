@@ -29,9 +29,10 @@ import {
   OpenRegular,
   PlayRegular,
   QrCodeRegular,
-  SaveRegular
+  SaveRegular,
+  SearchRegular
 } from '@fluentui/react-icons'
-import type { Playlist, Song } from '@shared/types'
+import type { NeteasePlaylistMeta, Playlist, Song } from '@shared/types'
 import { api } from '../lib/api'
 import { useStore } from '../store'
 import { SongList } from '../components/SongList'
@@ -65,6 +66,210 @@ const useStyles = makeStyles({
 export type RemoteView =
   | { kind: 'history' }
   | { kind: 'fav'; id: number; title: string; coverUrl?: string; count: number }
+
+/** 是否可同步(B站收藏夹 / 网易云歌单 / 播放记录) */
+const isSyncable = (pl: Playlist | null | undefined): boolean =>
+  !!(pl && (pl.favoriteFolderId || pl.neteasePlaylistId || pl.biliHistory))
+
+/**
+ * 歌单详情主体:头部(封面/名称/描述)+ 网易云元信息(播放量/创建时间/创作者/标签)
+ * + 页内搜索 + 歌曲列表。
+ */
+function PlaylistDetailBody({
+  playlist,
+  songs,
+  onBack,
+  syncingId,
+  onSync,
+  onRename,
+  onDelete,
+  onRemoveSong
+}: {
+  playlist: Playlist | null
+  songs: Song[]
+  onBack: () => void
+  syncingId: string | null
+  onSync: (p: Playlist) => void
+  onRename: (p: Playlist) => void
+  onDelete: (p: Playlist) => void
+  onRemoveSong: (song: Song) => Promise<void>
+}) {
+  const styles = useStyles()
+  const playQueue = useStore((s) => s.playQueue)
+  const [kw, setKw] = useState('')
+  const [meta, setMeta] = useState<NeteasePlaylistMeta | null>(null)
+  const neteaseId = playlist?.neteasePlaylistId ?? null
+  // 网易云歌单:打开时拉元信息(描述/播放量/创建时间/创作者/标签)
+  useEffect(() => {
+    if (!neteaseId) {
+      setMeta(null)
+      return
+    }
+    let cancelled = false
+    api
+      .neteasePlaylistMeta(neteaseId)
+      .then((r) => {
+        if (!cancelled && r.ok && r.data) setMeta(r.data)
+      })
+      .catch(() => {})
+    return () => {
+      cancelled = true
+    }
+  }, [neteaseId])
+
+  const filtered = kw.trim()
+    ? songs.filter((s) => {
+        const q = kw.trim().toLowerCase()
+        return (
+          s.title.toLowerCase().includes(q) ||
+          s.artist.toLowerCase().includes(q) ||
+          (s.album ?? '').toLowerCase().includes(q)
+        )
+      })
+    : songs
+
+  const fmtCount = (n?: number): string => {
+    if (n == null) return ''
+    if (n >= 100000000) return `${(n / 100000000).toFixed(1)}亿`
+    if (n >= 10000) return `${(n / 10000).toFixed(1)}万`
+    return String(n)
+  }
+  const fmtDate = (t?: number): string => {
+    if (!t) return ''
+    const d = new Date(t)
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+  }
+
+  return (
+    <div className={styles.root}>
+      <div className={styles.header}>
+        <Tooltip content="返回" relationship="label">
+          <Button appearance="subtle" icon={<ArrowLeftRegular />} onClick={onBack} />
+        </Tooltip>
+        <Cover url={playlist?.coverUrl ?? meta?.coverUrl} size={64} radius={8} iconSize={28} />
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <Text size={600} weight="semibold">
+            {playlist?.name}
+          </Text>
+          <div>
+            <Text size={300} style={{ color: tokens.colorNeutralForeground3 }}>
+              {/* 描述为空时不显示多余的分隔符;老数据描述里带"N首",避免与右侧计数重复 */}
+              {[playlist?.description?.replace(/ · \d+\s*首$/, ''), `${songs.length} 首`]
+                .filter(Boolean)
+                .join(' · ')}
+            </Text>
+          </div>
+          {/* 网易云歌单附加信息:创作者 / 播放量 / 创建时间 / 标签 */}
+          {meta && (
+            <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginTop: 4 }}>
+              {meta.creator && (
+                <Text size={200} style={{ color: tokens.colorNeutralForeground3 }}>
+                  创建者:{meta.creator}
+                </Text>
+              )}
+              {meta.playCount != null && (
+                <Text size={200} style={{ color: tokens.colorNeutralForeground3 }}>
+                  播放:{fmtCount(meta.playCount)}
+                </Text>
+              )}
+              {meta.subscribedCount != null && (
+                <Text size={200} style={{ color: tokens.colorNeutralForeground3 }}>
+                  收藏:{fmtCount(meta.subscribedCount)}
+                </Text>
+              )}
+              {meta.createTime != null && (
+                <Text size={200} style={{ color: tokens.colorNeutralForeground3 }}>
+                  创建:{fmtDate(meta.createTime)}
+                </Text>
+              )}
+              {meta.tags && meta.tags.length > 0 && (
+                <Text size={200} style={{ color: tokens.colorNeutralForeground3 }}>
+                  标签:{meta.tags.join(' / ')}
+                </Text>
+              )}
+            </div>
+          )}
+        </div>
+        <Button
+          appearance="primary"
+          icon={<PlayRegular />}
+          disabled={songs.length === 0}
+          onClick={() => playQueue(songs, 0)}
+        >
+          播放全部
+        </Button>
+        {playlist && isSyncable(playlist) && (
+          <Button
+            icon={syncingId === playlist.id ? <Spinner size="tiny" /> : <ArrowClockwiseRegular />}
+            disabled={syncingId !== null}
+            onClick={() => onSync(playlist)}
+          >
+            {syncingId === playlist.id ? '同步中…' : '同步'}
+          </Button>
+        )}
+        <Tooltip content="重命名" relationship="label">
+          <Button
+            appearance="subtle"
+            icon={<EditRegular />}
+            disabled={!playlist}
+            onClick={() => playlist && onRename(playlist)}
+          />
+        </Tooltip>
+        <Tooltip content="删除歌单" relationship="label">
+          <Button
+            appearance="subtle"
+            icon={<DeleteRegular />}
+            disabled={!playlist}
+            onClick={() => playlist && onDelete(playlist)}
+          />
+        </Tooltip>
+      </div>
+
+      {/* 网易云歌单描述(MD3:整块宽行) */}
+      {meta?.description && (
+        <Text
+          size={200}
+          style={{
+            color: tokens.colorNeutralForeground3,
+            whiteSpace: 'pre-line',
+            lineHeight: 1.7,
+            maxWidth: 900,
+            maxHeight: 96,
+            overflowY: 'auto'
+          }}
+        >
+          {meta.description}
+        </Text>
+      )}
+
+      {/* 页内搜索 */}
+      <Input
+        placeholder="在歌单内搜索歌曲(标题 / 歌手 / 专辑)"
+        value={kw}
+        onChange={(_, d) => setKw(d.value)}
+        contentBefore={<SearchRegular />}
+        style={{ maxWidth: 420 }}
+      />
+
+      <div className={styles.scroll}>
+        {filtered.length > 0 ? (
+          <SongList songs={filtered} onRemove={onRemoveSong} />
+        ) : songs.length > 0 ? (
+          <div className={styles.empty}>
+            <SearchRegular fontSize={36} />
+            <Text size={400}>没有匹配的歌曲</Text>
+          </div>
+        ) : (
+          <div className={styles.empty}>
+            <MusicNote2Regular fontSize={40} />
+            <Text size={400}>歌单还是空的</Text>
+            <Text size={300}>去搜索页添加歌曲,或导入B站收藏夹/网易云歌单</Text>
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
 
 /**
  * B站在线歌单详情:打开时拉第一页(20条),滚动接近底部自动加载下一页。
@@ -275,10 +480,6 @@ export function PlaylistsPage() {
 
   if (!library) return null
 
-  /** 是否可同步(B站收藏夹 / 网易云歌单 / 播放记录) */
-  const isSyncable = (pl: Playlist | null | undefined): boolean =>
-    !!(pl && (pl.favoriteFolderId || pl.neteasePlaylistId || pl.biliHistory))
-
   /** 同步一个歌单(远端增量拉取,保留手动加入的歌曲) */
   const syncOne = async (pl: Playlist): Promise<void> => {
     if (syncingId) return
@@ -395,83 +596,23 @@ export function PlaylistsPage() {
         className={animCls}
         style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}
       >
-      <div className={styles.root}>
-        <div className={styles.header}>
-          <Tooltip content="返回" relationship="label">
-            <Button appearance="subtle" icon={<ArrowLeftRegular />} onClick={() => setSelected(null)} />
-          </Tooltip>
-          <Cover url={current?.coverUrl} size={64} radius={8} iconSize={28} />
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <Text size={600} weight="semibold">
-              {current?.name}
-            </Text>
-            <div>
-              <Text size={300} style={{ color: tokens.colorNeutralForeground3 }}>
-                {/* 描述为空时不显示多余的分隔符;老数据描述里带"N首",避免与右侧计数重复 */}
-                {[current?.description?.replace(/ · \d+\s*首$/, ''), `${songs.length} 首`]
-                  .filter(Boolean)
-                  .join(' · ')}
-              </Text>
-            </div>
-          </div>
-          <Button
-            appearance="primary"
-            icon={<PlayRegular />}
-            disabled={songs.length === 0}
-            onClick={() => playQueue(songs, 0)}
-          >
-            播放全部
-          </Button>
-          {current && isSyncable(current) && (
-            <Button
-              icon={
-                syncingId === current.id ? <Spinner size="tiny" /> : <ArrowClockwiseRegular />
-              }
-              disabled={syncingId !== null}
-              onClick={() => void syncOne(current)}
-            >
-              {syncingId === current.id ? '同步中…' : '同步'}
-            </Button>
-          )}
-          <Tooltip content="重命名" relationship="label">
-            <Button
-              appearance="subtle"
-              icon={<EditRegular />}
-              disabled={!current}
-              onClick={() => {
-                if (!current) return
-                setRenameValue(current.name)
-                setRenameTarget(current)
-              }}
-            />
-          </Tooltip>
-          <Tooltip content="删除歌单" relationship="label">
-            <Button
-              appearance="subtle"
-              icon={<DeleteRegular />}
-              disabled={!current}
-              onClick={() => setDeleteTarget(current ?? null)}
-            />
-          </Tooltip>
-        </div>
-        <div className={styles.scroll}>
-          {songs.length > 0 ? (
-            <SongList
-              songs={songs}
-              onRemove={async (song) => {
-                await api.libraryRemoveFromPlaylist(current!.id, song.id)
-                await refresh()
-              }}
-            />
-          ) : (
-            <div className={styles.empty}>
-              <MusicNote2Regular fontSize={40} />
-              <Text size={400}>歌单还是空的</Text>
-              <Text size={300}>去搜索页添加歌曲,或导入B站收藏夹/网易云歌单</Text>
-            </div>
-          )}
-        </div>
-        {/* 删除确认:歌单删除不可撤销 */}
+      <PlaylistDetailBody
+        playlist={current ?? null}
+        songs={songs}
+        onBack={() => setSelected(null)}
+        syncingId={syncingId}
+        onSync={(p) => void syncOne(p)}
+        onRename={(p) => {
+          setRenameValue(p.name)
+          setRenameTarget(p)
+        }}
+        onDelete={(p) => setDeleteTarget(p)}
+        onRemoveSong={async (song) => {
+          await api.libraryRemoveFromPlaylist(current!.id, song.id)
+          await refresh()
+        }}
+      />
+      <div style={{ display: 'none' }}>
         <Dialog open={!!deleteTarget} onOpenChange={(_, d) => !d.open && setDeleteTarget(null)}>
           <DialogSurface>
             <DialogBody>
@@ -510,9 +651,9 @@ export function PlaylistsPage() {
             </DialogBody>
           </DialogSurface>
         </Dialog>
-        <BiliLoginDialog open={biliLoginOpen} onClose={() => setBiliLoginOpen(false)} />
-        <NeteaseLoginDialog open={neLoginOpen} onClose={() => setNeLoginOpen(false)} />
       </div>
+      <BiliLoginDialog open={biliLoginOpen} onClose={() => setBiliLoginOpen(false)} />
+      <NeteaseLoginDialog open={neLoginOpen} onClose={() => setNeLoginOpen(false)} />
       </div>
     )
   }

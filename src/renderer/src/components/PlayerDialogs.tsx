@@ -110,13 +110,14 @@ export function CommentsBody({
   const [error, setError] = useState('')
   // 默认排序:网易云原曲默认"时间"(公开接口的热门池太浅),B站默认"热度"
   const [order, setOrder] = useState<CommentOrder>(() => (song?.neteaseId ? 'time' : 'hot'))
-  // 兜底场景(网易云垫底B站/QQ酷狗B站取流)双平台可切:B站兜底视频评论 或 网易云原曲评论
+  // 兜底场景双/多平台可切:B站兜底视频评论 / 网易云原曲评论 / QQ音乐原生评论
   const [platform, setPlatform] = useState<CommentPlatform>(() =>
-    song?.neteaseId ? 'netease' : song?.bvid ? 'bilibili' : 'netease'
+    song?.source === 'QQMUSIC' ? 'qq' : song?.neteaseId ? 'netease' : song?.bvid ? 'bilibili' : 'netease'
   )
   const canBili = !!song?.bvid
   const canNe = !!song?.neteaseId || song?.source === 'QQMUSIC' || song?.source === 'KUGOU'
-  const dual = !!(song && canBili && canNe)
+  const canQq = song?.source === 'QQMUSIC' || !!song?.qqMid
+  const dual = [canBili, canNe, canQq].filter(Boolean).length > 1
   /** 滑到底自动加载的防重入(滚动事件密集,不能只靠 loading state) */
   const loadingRef = useRef(false)
   // 首次拿到歌曲/换歌时校准默认排序:挂载时 song 常为 null,一次性初始化算不准;
@@ -126,9 +127,10 @@ export function CommentsBody({
     if (!song) return
     if (lastSongIdRef.current === song.id) return
     lastSongIdRef.current = song.id
-    const def: CommentOrder = song.neteaseId ? 'time' : 'hot'
+    const def: CommentOrder = song.neteaseId && song.source !== 'QQMUSIC' ? 'time' : 'hot'
     setOrder((o) => (o === def ? o : def))
-    const defPlat: CommentPlatform = song.neteaseId ? 'netease' : song.bvid ? 'bilibili' : 'netease'
+    const defPlat: CommentPlatform =
+      song.source === 'QQMUSIC' ? 'qq' : song.neteaseId ? 'netease' : song.bvid ? 'bilibili' : 'netease'
     setPlatform((p) => (p === defPlat ? p : defPlat))
   }, [song])
 
@@ -175,8 +177,9 @@ export function CommentsBody({
             value={platform}
             onChange={(_, d) => setPlatform(d.value as CommentPlatform)}
           >
-            <Radio value="bilibili" label="哔哩哔哩" />
-            <Radio value="netease" label="网易云" />
+            {canBili && <Radio value="bilibili" label="哔哩哔哩" />}
+            {canNe && <Radio value="netease" label="网易云" />}
+            {canQq && <Radio value="qq" label="QQ音乐" />}
           </RadioGroup>
           <div style={{ flex: 1 }} />
           <span className={styles.muted}>评论来源</span>

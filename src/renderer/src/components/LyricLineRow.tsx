@@ -183,6 +183,9 @@ export const LyricLineRow = memo(function LyricLineRow({
 }: LyricLineRowProps) {
   const styles = useStyles()
   const text = cleanEdge(line.text)
+  // 歌词不透明度(对齐手机端):当前句 / 非当前句 各自独立;拖动中即时生效
+  const alphaCurrent = useStore((s) => s.library?.settings.lyricAlphaCurrent ?? 1)
+  const alphaInactive = useStore((s) => s.library?.settings.lyricAlphaInactive ?? 0.15)
 
   // 逐字时间轴:wordTimes 等长直接用;否则由 words 展开并对齐 trim 偏移
   const charTimes = useMemo(
@@ -197,6 +200,7 @@ export const LyricLineRow = memo(function LyricLineRow({
       className={`song-lyric-line ${styles.line} ${isActive ? styles.active : ''}`}
       style={{
         filter: blur > 0.05 ? `blur(${blur}px)` : undefined,
+        opacity: isActive ? alphaCurrent : alphaInactive,
         transformOrigin: leftAlign ? 'left center' : 'center'
       }}
       onClick={() => onSeek(line.timeMs)}
