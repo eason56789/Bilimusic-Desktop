@@ -1,15 +1,13 @@
 /** 悬浮歌词窗(#float 路由):独立置顶小窗,显示当前/下一句歌词与精简控制 */
 import { useEffect, useMemo, useState } from 'react'
-import { FluentProvider, Button, makeStyles } from '@fluentui/react-components'
-import {
-  PauseRegular,
-  PlayRegular,
-  PreviousRegular,
-  NextRegular,
-  ChevronDownRegular
-} from '@fluentui/react-icons'
+import { FluentProvider, Button, makeStyles } from '../ui/controls'
+import { PauseRegular, PlayRegular, PreviousRegular, NextRegular, ChevronDownRegular } from '../ui/icons'
 import { api } from '../lib/api'
 import { buildTheme } from '../lib/theme'
+import { buildM3Theme, DEFAULT_M3_VARIANT } from '../ui/md3/theme'
+import { m3ComponentCss } from '../ui/md3/components'
+import { m3RootCss, type M3Variant } from '../ui/md3/tokens'
+import { UiStyleBoundary } from '../ui/styleContext'
 import type { FloatLyricState } from '@shared/types'
 
 const useStyles = makeStyles({
@@ -96,13 +94,30 @@ function FloatContent() {
 
   const dark = st?.dark ?? true
   const accent = st?.accent ?? '#0f6cbd'
-  const theme = useMemo(() => buildTheme(dark, accent), [dark, accent])
+  const uiStyle = st?.uiStyle ?? 'fluent'
+  const m3Variant = (st?.m3Variant ?? DEFAULT_M3_VARIANT) as M3Variant
+  const m3Contrast = st?.m3Contrast ?? 0
+  const theme = useMemo(
+    () => buildTheme(dark, accent, uiStyle, m3Variant, m3Contrast),
+    [dark, accent, uiStyle, m3Variant, m3Contrast]
+  )
+  // 悬浮窗是独立渲染进程窗口,主窗口注入的样式表不共享,故此处自行注入 M3 规范变量与组件造型层
+  const m3Css = useMemo(
+    () => (uiStyle === 'md3' ? m3RootCss(buildM3Theme(dark, accent, m3Variant, m3Contrast).roles, dark) + m3ComponentCss() : ''),
+    [uiStyle, dark, accent, m3Variant, m3Contrast]
+  )
 
   const lyric = st?.lineText || (st?.hasCurrent ? '…' : '尚未播放')
   const noDragCls = styles.noDrag
 
   return (
-    <FluentProvider theme={theme} style={{ height: '100%', background: 'transparent' }}>
+    <FluentProvider
+      theme={theme}
+      className={uiStyle === 'md3' ? 'md3-ui' : undefined}
+      style={{ height: '100%', background: 'transparent' }}
+    >
+      <style>{m3Css}</style>
+      <UiStyleBoundary value={uiStyle}>
       <div
         className={`${styles.root} ${dark ? '' : styles.rootLight}`}
         onDoubleClick={() => api.floatOpenMain?.().catch(() => {})}
@@ -160,6 +175,7 @@ function FloatContent() {
           </div>
         </div>
       </div>
+      </UiStyleBoundary>
     </FluentProvider>
   )
 }

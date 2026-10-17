@@ -12,8 +12,8 @@ import {
   Text,
   makeStyles,
   tokens
-} from '@fluentui/react-components'
-import { ArrowMinimizeRegular, PowerRegular } from '@fluentui/react-icons'
+} from '../ui/controls'
+import { ArrowMinimizeRegular, PowerRegular } from '../ui/icons'
 import { useStore } from '../store'
 
 const useStyles = makeStyles({

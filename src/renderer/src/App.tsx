@@ -16,9 +16,13 @@ import {
   ArrowDownloadRegular,
   HeartRegular,
   SettingsRegular
-} from '@fluentui/react-icons'
+} from './ui/icons'
 import { useStore } from './store'
-import { buildTheme, buildMd3PresetCss } from './lib/theme'
+import { buildTheme } from './lib/theme'
+import { buildM3Theme, DEFAULT_M3_VARIANT } from './ui/md3/theme'
+import { m3ComponentCss } from './ui/md3/components'
+import { m3RootCss } from './ui/md3/tokens'
+import { UiStyleBoundary } from './ui/styleContext'
 import { setToastController } from './lib/toast'
 import brandIconUrl from './assets/brand.png'
 import type { Settings } from '@shared/types'
@@ -124,6 +128,31 @@ function useGlassVars(dark: boolean, effect: string, alpha: number): void {
       root.style.setProperty('--app-player-bg', glass(243, 243, 243))
     }
   }, [dark, effect, alpha])
+}
+
+/**
+ * 把 md3-ui 类镜像到 Fluent 的 portal 挂载节点。
+ *
+ * Fluent 的 Dialog / Menu / Tooltip / Toast 走 Portal 渲染到 document.body 下的
+ * 独立节点(<div data-portal-node>),它带有 provider 的主题类但**不在**
+ * provider 子树内,因此 .md3-ui 的后代选择器匹配不到它们 —— 主题色能生效,
+ * 但按钮形状、菜单圆角、对话框海拔等造型规则会失效。这里把这些挂载点
+ * 也打上 md3-ui,使造型层覆盖到 portal 内容。
+ */
+function useSyncPortalClass(uiStyle: string): void {
+  useEffect(() => {
+    const sync = (): void => {
+      const on = uiStyle === 'md3'
+      document.querySelectorAll('[data-portal-node]').forEach((n) => {
+        n.classList.toggle('md3-ui', on)
+      })
+    }
+    sync()
+    // portal 节点随弹窗开合动态增删,故持续观察
+    const mo = new MutationObserver(sync)
+    mo.observe(document.body, { childList: true, subtree: true })
+    return () => mo.disconnect()
+  }, [uiStyle])
 }
 
 /** 全局播放快捷键 */
@@ -319,9 +348,17 @@ function MainApp() {
 
   const dark = library ? (library.settings.theme === 'system' ? systemDark : library.settings.theme === 'dark') : true
   const uiStyle = library?.settings.uiStyle ?? 'fluent'
+  const accent = library?.settings.accent ?? '#0f6cbd'
+  const m3Variant = library?.settings.md3Variant ?? DEFAULT_M3_VARIANT
+  const m3Contrast = library?.settings.md3Contrast ?? 0
   const theme = useMemo(
-    () => buildTheme(dark, library?.settings.accent ?? '#0f6cbd', uiStyle),
-    [dark, library?.settings.accent, uiStyle]
+    () => buildTheme(dark, accent, uiStyle, m3Variant, m3Contrast),
+    [dark, accent, uiStyle, m3Variant, m3Contrast]
+  )
+  // M3 规范变量(色彩角色/字阶/形状/海拔/动效):仅有 --md-sys-*,供组件造型层引用
+  const m3Vars = useMemo(
+    () => (uiStyle === 'md3' ? m3RootCss(buildM3Theme(dark, accent, m3Variant, m3Contrast).roles, dark) : ''),
+    [uiStyle, dark, accent, m3Variant, m3Contrast]
   )
 
   const effect = library?.settings.windowEffect ?? 'acrylic'
@@ -330,8 +367,9 @@ function MainApp() {
   const presetCss = useMemo(() => buildPresetCss(library?.settings), [library?.settings])
   useGlassVars(dark, effect, glassAlpha)
   useGlobalShortcuts()
+  useSyncPortalClass(uiStyle)
 
-  // 界面样式注入:预设(大小/歌词字号/密度) + MD3 Expressive 造型层 + 用户自定义 CSS
+  // 界面样式注入:预设(大小/歌词字号/密度) + M3 规范变量与组件造型层 + 用户自定义 CSS
   useEffect(() => {
     let el = document.getElementById('user-custom-css') as HTMLStyleElement | null
     if (!el) {
@@ -339,9 +377,9 @@ function MainApp() {
       el.id = 'user-custom-css'
       document.head.appendChild(el)
     }
-    const md3Css = uiStyle === 'md3' ? buildMd3PresetCss() : ''
+    const md3Css = uiStyle === 'md3' ? m3Vars + m3ComponentCss() : ''
     el.textContent = presetCss + (md3Css ? '\n' + md3Css : '') + (customCss ? '\n' + customCss : '')
-  }, [presetCss, customCss, uiStyle])
+  }, [presetCss, customCss, uiStyle, m3Vars])
 
   // 仅当材质设置本身变化时通知主进程
   // (此前依赖 library,而 library 会随下载进度/播放记录整对象刷新,导致 IPC 风暴)
@@ -361,13 +399,15 @@ function MainApp() {
       }}
     >
       <Toaster toasterId={toasterId} position="bottom-end" />
-      {/* obDone:刚完成引导时主界面播放入场动画(放大淡入) */}
-      <Shell className={obDone ? 'shell-enter' : undefined} />
-      <GlobalDialogs />
-      <CloseAskDialog />
-      <UpdateDialog />
-      <FloatBridge />
-      {showOnboarding && <Onboarding onDone={() => setObDone(true)} />}
+      <UiStyleBoundary value={uiStyle}>
+        {/* obDone:刚完成引导时主界面播放入场动画(放大淡入) */}
+        <Shell className={obDone ? 'shell-enter' : undefined} />
+        <GlobalDialogs />
+        <CloseAskDialog />
+        <UpdateDialog />
+        <FloatBridge />
+        {showOnboarding && <Onboarding onDone={() => setObDone(true)} />}
+      </UiStyleBoundary>
     </FluentProvider>
   )
 }

@@ -4,6 +4,7 @@
 import { useEffect, useRef } from 'react'
 import { useStore, getAudioElement } from '../store'
 import { api } from '../lib/api'
+import { DEFAULT_M3_VARIANT } from '../ui/md3/theme'
 import type { FloatControlCmd, FloatLyricState } from '@shared/types'
 
 /** 与 NowPlaying 相同的当前行判定:位置+200ms 提前量-歌词偏移 */
@@ -50,9 +51,12 @@ export function FloatBridge() {
         lineIndex: idx,
         lineCount: lines.length,
         dark: !!dark,
-        accent: settings?.accent ?? '#0f6cbd'
+        accent: settings?.accent ?? '#0f6cbd',
+        uiStyle: settings?.uiStyle ?? 'fluent',
+        m3Variant: settings?.md3Variant ?? DEFAULT_M3_VARIANT,
+        m3Contrast: settings?.md3Contrast ?? 0
       }
-      const key = `${state.hasCurrent}|${state.title}|${state.playing}|${state.lineIndex}|${state.dark}|${state.accent}`
+      const key = `${state.hasCurrent}|${state.title}|${state.playing}|${state.lineIndex}|${state.dark}|${state.accent}|${state.uiStyle}|${state.m3Variant}|${state.m3Contrast}`
       if (key !== lastKeyRef.current) {
         lastKeyRef.current = key
         api.floatPostState?.(state)

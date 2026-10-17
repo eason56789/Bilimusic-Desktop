@@ -84,3 +84,48 @@ export async function getKugouSongUrl(
     ext === 'flac' ? '酷狗 FLAC' : br >= 320 ? '酷狗 320k' : br >= 192 ? '酷狗 192k' : '酷狗 128k'
   return { url: direct, quality }
 }
+
+/**
+ * 歌曲统计:酷狗搜索条目自带 OwnerCount(收藏/使用人数,与"收藏量"同口径)
+ * 与 HeatLevel(热度等级 0-10)。没有公开播放量接口。
+ * 按 hash 在搜索结果里精确匹配拿字段(搜索接口才有,取流接口没有)。
+ */
+export async function getKugouSongStats(
+  hash: string,
+  title: string,
+  artist: string
+): Promise<{ favCount?: number; heatLevel?: number }> {
+  const upper = hash.toUpperCase()
+  const tryKeyword = async (kw: string) => {
+    const url =
+      'https://songsearch.kugou.com/song_search_v2?keyword=' +
+      encodeURIComponent(kw) +
+      '&page=1&pagesize=30&platform=WebFilter&format=json'
+    const resp = await fetch(url, {
+      headers: { 'User-Agent': UA, Referer: 'https://www.kugou.com/' },
+      signal: AbortSignal.timeout(15_000)
+    })
+    if (!resp.ok) return null
+    const json = (await resp.json()) as any
+    const list: any[] = json?.data?.lists ?? []
+    return (
+      list.find(
+        (it) =>
+          [it.FileHash, it.HQFileHash, it.SQFileHash].some(
+            (h) => String(h ?? '').toUpperCase() === upper
+          )
+      ) ?? null
+    )
+  }
+  try {
+    let hit = await tryKeyword(`${title} ${artist}`.trim())
+    if (!hit) hit = await tryKeyword(title)
+    if (!hit) return {}
+    return {
+      favCount: typeof hit.OwnerCount === 'number' ? hit.OwnerCount : undefined,
+      heatLevel: typeof hit.HeatLevel === 'number' ? hit.HeatLevel : undefined
+    }
+  } catch {
+    return {}
+  }
+}

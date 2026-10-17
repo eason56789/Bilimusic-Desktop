@@ -19,7 +19,7 @@ import {
   Textarea,
   makeStyles,
   tokens
-} from '@fluentui/react-components'
+} from '../ui/controls'
 import {
   ArrowClockwiseRegular,
   ChatMultipleRegular,
@@ -28,8 +28,15 @@ import {
   InfoRegular,
   PlayRegular,
   SearchRegular
-} from '@fluentui/react-icons'
-import type { BiliPage, CommentOrder, CommentPlatform, CommentsResult, Song } from '@shared/types'
+} from '../ui/icons'
+import type {
+  BiliPage,
+  CommentOrder,
+  CommentPlatform,
+  CommentRepliesResult,
+  CommentsResult,
+  Song
+} from '@shared/types'
 import { api } from '../lib/api'
 import { pagesToSongs } from '../lib/pages'
 import { useStore, EQ_FREQS, applyEqSettings } from '../store'
@@ -60,6 +67,25 @@ const useStyles = makeStyles({
   },
   meta: { flex: 1, minWidth: 0 },
   muted: { color: tokens.colorNeutralForeground3, fontSize: tokens.fontSizeBase200 },
+  /** 楼中楼:左侧缩进 + 细竖线,和一级评论区分开 */
+  replyBox: {
+    marginLeft: '46px',
+    marginTop: '2px',
+    paddingLeft: '10px',
+    borderLeft: `2px solid ${tokens.colorNeutralStroke2}`,
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '2px'
+  },
+  replyRow: { display: 'flex', gap: '8px', padding: '4px 0', alignItems: 'flex-start' },
+  replyToggle: {
+    alignSelf: 'flex-start',
+    padding: 0,
+    minWidth: 0,
+    height: 'auto',
+    fontSize: tokens.fontSizeBase200,
+    color: tokens.colorBrandForeground1
+  },
   center: {
     display: 'flex',
     flexDirection: 'column',
@@ -120,6 +146,9 @@ export function CommentsBody({
   const dual = [canBili, canNe, canQq].filter(Boolean).length > 1
   /** 滑到底自动加载的防重入(滚动事件密集,不能只靠 loading state) */
   const loadingRef = useRef(false)
+  /** 已展开楼中楼的一级评论 id → 回复数据 */
+  const [replies, setReplies] = useState<Record<string, CommentRepliesResult>>({})
+  const [replyLoading, setReplyLoading] = useState<Record<string, boolean>>({})
   // 首次拿到歌曲/换歌时校准默认排序:挂载时 song 常为 null,一次性初始化算不准;
   // 同一首歌内保留用户手动选择,换下一首时重置为该来源的默认
   const lastSongIdRef = useRef<string | null>(null)
@@ -139,6 +168,8 @@ export function CommentsBody({
     setData(null)
     setOffset(0)
     setError('')
+    setReplies({})
+    setReplyLoading({})
     setLoading(true)
     api
       .commentsGet(song, 0, order, dual ? platform : undefined)
@@ -149,6 +180,52 @@ export function CommentsBody({
       .catch((e) => setError(String(e)))
       .finally(() => setLoading(false))
   }, [active, song, order, dual, platform])
+
+  /** 展开/收起楼中楼;首次展开时拉第一页(游标 -1) */
+  const toggleReplies = async (commentId: string) => {
+    if (!song) return
+    if (replies[commentId]) {
+      setReplies((prev) => {
+        const next = { ...prev }
+        delete next[commentId]
+        return next
+      })
+      return
+    }
+    setReplyLoading((p) => ({ ...p, [commentId]: true }))
+    try {
+      const r = await api.commentRepliesGet(song, commentId, -1, dual ? platform : undefined)
+      if (r.ok && r.data) setReplies((p) => ({ ...p, [commentId]: r.data! }))
+    } finally {
+      setReplyLoading((p) => ({ ...p, [commentId]: false }))
+    }
+  }
+
+  /** 楼中楼加载更多(用上一页最后一条的 time 作游标) */
+  const loadMoreReplies = async (commentId: string) => {
+    if (!song) return
+    const cur = replies[commentId]
+    if (!cur || !cur.hasMore) return
+    setReplyLoading((p) => ({ ...p, [commentId]: true }))
+    try {
+      const r = await api.commentRepliesGet(song, commentId, cur.cursor, dual ? platform : undefined)
+      if (r.ok && r.data) {
+        setReplies((p) => {
+          const old = p[commentId]
+          if (!old) return p
+          return {
+            ...p,
+            [commentId]: {
+              ...r.data!,
+              comments: [...old.comments, ...r.data!.comments]
+            }
+          }
+        })
+      }
+    } finally {
+      setReplyLoading((p) => ({ ...p, [commentId]: false }))
+    }
+  }
 
   const loadMore = async () => {
     if (!song || !data || loadingRef.current) return
@@ -230,18 +307,62 @@ export function CommentsBody({
           }}
         >
           {data.comments.map((c) => (
-            <div key={c.id} className={styles.row}>
-              <Cover url={c.avatar} size={36} radius={18} iconSize={14} />
-              <div className={styles.meta}>
-                <div style={{ display: 'flex', gap: 8, alignItems: 'baseline' }}>
-                  <Text weight="semibold" size={300}>{c.user}</Text>
-                  <span className={styles.muted}>{timeAgo(c.time)}</span>
+            <div key={c.id} className={styles.row} style={{ flexDirection: 'column', gap: 2 }}>
+              <div style={{ display: 'flex', gap: 10, alignItems: 'flex-start', width: '100%' }}>
+                <Cover url={c.avatar} size={36} radius={18} iconSize={14} />
+                <div className={styles.meta}>
+                  <div style={{ display: 'flex', gap: 8, alignItems: 'baseline' }}>
+                    <Text weight="semibold" size={300}>{c.user}</Text>
+                    <span className={styles.muted}>{timeAgo(c.time)}</span>
+                  </div>
+                  <Text size={300} style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+                    {c.content}
+                  </Text>
+                  <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+                    <span className={styles.muted}>♡ {c.likes}</span>
+                    {!!c.replyCount && c.replyCount > 0 && (
+                      <Button
+                        appearance="transparent"
+                        size="small"
+                        className={styles.replyToggle}
+                        onClick={() => void toggleReplies(c.id)}
+                      >
+                        {replies[c.id] ? '收起回复' : `${c.replyCount} 条回复`}
+                      </Button>
+                    )}
+                  </div>
                 </div>
-                <Text size={300} style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
-                  {c.content}
-                </Text>
-                <span className={styles.muted}>♡ {c.likes}</span>
               </div>
+              {replies[c.id] && (
+                <div className={styles.replyBox}>
+                  {replies[c.id].comments.map((r) => (
+                    <div key={r.id} className={styles.replyRow}>
+                      <Cover url={r.avatar} size={24} radius={12} iconSize={12} />
+                      <div className={styles.meta}>
+                        <div style={{ display: 'flex', gap: 6, alignItems: 'baseline' }}>
+                          <Text weight="semibold" size={200}>{r.user}</Text>
+                          <span className={styles.muted}>{timeAgo(r.time)}</span>
+                        </div>
+                        <Text size={200} style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+                          {r.content}
+                        </Text>
+                        <span className={styles.muted}>♡ {r.likes}</span>
+                      </div>
+                    </div>
+                  ))}
+                  {replyLoading[c.id] && <Spinner size="extra-tiny" />}
+                  {replies[c.id].hasMore && !replyLoading[c.id] && (
+                    <Button
+                      appearance="transparent"
+                      size="small"
+                      className={styles.replyToggle}
+                      onClick={() => void loadMoreReplies(c.id)}
+                    >
+                      展开更多回复
+                    </Button>
+                  )}
+                </div>
+              )}
             </div>
           ))}
         </div>

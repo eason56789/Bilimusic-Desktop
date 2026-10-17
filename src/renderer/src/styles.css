@@ -178,6 +178,52 @@ button:active:not(:disabled) {
   -webkit-app-region: no-drag;
 }
 
+/**
+ * 全屏播放页右侧评论面板:面板本身是深色玻璃,但 Fluent 令牌随系统主题走,
+ * 浅色主题下会渲染成深灰字而看不清。这里把面板内的前景/描边/控件底色整体
+ * 重定到深色底上的白字,并压平 Fluent 的浅色描边与 hover 底。
+ */
+.np-comments {
+  color: rgba(255, 255, 255, 0.92);
+  --colorNeutralForeground1: rgba(255, 255, 255, 0.95);
+  --colorNeutralForeground2: rgba(255, 255, 255, 0.85);
+  --colorNeutralForeground3: rgba(255, 255, 255, 0.72);
+  --colorNeutralForeground4: rgba(255, 255, 255, 0.6);
+  --colorNeutralForegroundDisabled: rgba(255, 255, 255, 0.38);
+  --colorNeutralStroke1: rgba(255, 255, 255, 0.16);
+  --colorNeutralStroke2: rgba(255, 255, 255, 0.12);
+  --colorNeutralStroke3: rgba(255, 255, 255, 0.1);
+  --colorNeutralStrokeAccessible: rgba(255, 255, 255, 0.5);
+  --colorNeutralBackground1: rgba(255, 255, 255, 0.06);
+  --colorNeutralBackground2: rgba(255, 255, 255, 0.08);
+  --colorNeutralBackground3: rgba(255, 255, 255, 0.1);
+  --colorNeutralBackground3Hover: rgba(255, 255, 255, 0.16);
+  --colorSubtleBackgroundHover: rgba(255, 255, 255, 0.1);
+  --colorSubtleBackgroundPressed: rgba(255, 255, 255, 0.16);
+  --colorBrandForeground1: #9dc9ff;
+  --colorCompoundBrandBackground: #9dc9ff;
+  --colorCompoundBrandForeground1: #9dc9ff;
+  --colorCompoundBrandStroke: #9dc9ff;
+  --colorStrokeFocus2: #ffffff;
+  /* M3 模式下组件造型层直接吃 --md-sys-color-*,若只改上面的 Fluent token,
+   * 单选标签、次级文本等仍会取自 :root 的 M3 角色 —— 浅色主题下就是深灰字压在
+   * 深色玻璃上。这里把面板内用到的前景角色一并重定向为浅色。 */
+  --md-sys-color-on-surface: rgba(255, 255, 255, 0.95);
+  --md-sys-color-on-surface-variant: rgba(255, 255, 255, 0.75);
+  --md-sys-color-outline: rgba(255, 255, 255, 0.5);
+  --md-sys-color-outline-variant: rgba(255, 255, 255, 0.16);
+  --md-sys-color-surface-variant: rgba(255, 255, 255, 0.1);
+}
+/* 面板滚动条:深底上用半透明白,避免灰白条突兀 */
+.np-comments ::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.28);
+  background-clip: content-box;
+}
+.np-comments ::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.45);
+  background-clip: content-box;
+}
+
 /** 歌词滚动容器 */
 .lyrics-scroll {
   scrollbar-width: none;

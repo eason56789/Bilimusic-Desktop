@@ -12,7 +12,7 @@ import {
   makeStyles,
   tokens,
   Tooltip
-} from '@fluentui/react-components'
+} from '../ui/controls'
 import {
   MoreHorizontalRegular,
   PlayRegular,
@@ -23,7 +23,7 @@ import {
   SelectAllOnRegular,
   FolderAddRegular,
   ListRegular
-} from '@fluentui/react-icons'
+} from '../ui/icons'
 import type { Song } from '@shared/types'
 import { useStore } from '../store'
 import { Cover } from './Cover'
@@ -50,7 +50,7 @@ const useStyles = makeStyles({
     gap: '12px',
     padding: '6px 10px',
     borderRadius: tokens.borderRadiusMedium,
-    cursor: 'default',
+    cursor: 'pointer',
     transition: 'background 0.15s ease',
     ':hover': { background: tokens.colorNeutralBackground3 }
   },
@@ -298,8 +298,7 @@ export function SongList({
               key={`${song.id}-${i}`}
               className={`song-row ${styles.row} ${active ? styles.rowActive : ''}`}
               style={selMode && checked ? { background: tokens.colorBrandBackground2 } : undefined}
-              onClick={selMode ? () => toggleSel(song.id) : undefined}
-              onDoubleClick={selMode ? undefined : () => playNow(i)}
+              onClick={selMode ? () => toggleSel(song.id) : () => playNow(i)}
               onContextMenu={selMode ? undefined : (e) => onRowContextMenu(e, song, i)}
             >
               {selMode && (
@@ -310,7 +309,7 @@ export function SongList({
                 />
               )}
               <Cover url={song.coverUrl} size={40} iconSize={16} />
-              <div className={styles.meta} onDoubleClick={selMode ? undefined : () => playNow(i)}>
+              <div className={styles.meta}>
                 <span className={styles.title}>
                   {active ? <EqBars /> : null} {song.title}
                 </span>
@@ -331,13 +330,17 @@ export function SongList({
               </span>
               <span className={styles.duration}>{formatTime(song.duration)}</span>
               {!selMode && (
+                // 行点击即播放,故操作按钮需阻断冒泡,避免误触播放
                 <>
                   <Tooltip content="立即播放" relationship="label">
                     <Button
                       appearance="subtle"
                       size="small"
                       icon={<PlayRegular />}
-                      onClick={() => playNow(i)}
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        playNow(i)
+                      }}
                     />
                   </Tooltip>
                   <Tooltip content="下一首播放" relationship="label">
@@ -345,12 +348,20 @@ export function SongList({
                       appearance="subtle"
                       size="small"
                       icon={<ArrowRightRegular />}
-                      onClick={() => playNext(song)}
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        playNext(song)
+                      }}
                     />
                   </Tooltip>
                   <Menu>
                     <MenuTrigger disableButtonEnhancement>
-                      <Button appearance="subtle" size="small" icon={<MoreHorizontalRegular />} />
+                      <Button
+                        appearance="subtle"
+                        size="small"
+                        icon={<MoreHorizontalRegular />}
+                        onClick={(e) => e.stopPropagation()}
+                      />
                     </MenuTrigger>
                     <MenuPopover>{menuItems(song, i)}</MenuPopover>
                   </Menu>

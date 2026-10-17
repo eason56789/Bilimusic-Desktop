@@ -1,5 +1,5 @@
 import { makeStyles, tokens } from '@fluentui/react-components'
-import { MusicNote2Regular } from '@fluentui/react-icons'
+import { MusicNote2Regular } from '../ui/icons'
 import { useState } from 'react'
 
 const useStyles = makeStyles({
@@ -47,10 +47,20 @@ export function resizeCoverUrl(url: string, size: number): string {
     return url.replace(/R\d+x\d+M000/, `R${q}x${q}M000`)
   }
   if (url.includes('kugou.com')) {
+    // 酷狗 CDN 尺寸段只认 stdmusic/{size}/ 与 softhead/{size}/(后面紧跟日期目录)。
+    // 旧正则会把日期目录也当尺寸替换成 /480/240/xxx.jpg —— CDN 不 404,而是返回一张
+    // 灰色占位图,于是列表里"看不到封面"。
     const q = snap([240, 480, 900])
-    return url.replace(/\/(\d+)\/([^/]+jpg|jpeg|png)/i, `/${q}/$2`).replace('{size}', String(q))
+    return url
+      .replace(/\/(stdmusic|softhead)\/\d+\//, `/$1/${q}/`)
+      .replace('{size}', String(q))
   }
   return url
+}
+
+/** http 图片统一升到 https:自定义协议代理在 https 页面里更稳定,也避免证书/混合内容告警 */
+function toHttps(url: string): string {
+  return url.startsWith('http://') ? `https://${url.slice(7)}` : url
 }
 
 export function coverSrc(cover: string | null | undefined, thumbSize?: number): string | null {
@@ -58,7 +68,7 @@ export function coverSrc(cover: string | null | undefined, thumbSize?: number): 
   if (cover.startsWith('data:')) return cover
   if (cover.startsWith('bmedia://')) return cover
   const target = thumbSize ? resizeCoverUrl(cover, thumbSize) : cover
-  return `bmedia://img/?url=${encodeURIComponent(target)}`
+  return `bmedia://img/?url=${encodeURIComponent(toHttps(target))}`
 }
 
 export function Cover({

@@ -22,11 +22,13 @@ import {
   Text,
   makeStyles,
   tokens
-} from '@fluentui/react-components'
-import { DeleteRegular, ColorRegular, InfoRegular, SettingsRegular, ArrowClockwiseRegular, SaveRegular } from '@fluentui/react-icons'
+} from '../ui/controls'
+import { DeleteRegular, ColorRegular, InfoRegular, SettingsRegular, ArrowClockwiseRegular, SaveRegular } from '../ui/icons'
 import { api } from '../lib/api'
 import { useStore, applyEqSettings, getAudioElement, EQ_FREQS } from '../store'
 import { ACCENTS } from '../lib/theme'
+import { M3_VARIANTS, type M3Variant } from '../ui/md3/tokens'
+import { DEFAULT_M3_VARIANT } from '../ui/md3/theme'
 import { BiliLoginDialog, NeteaseLoginDialog } from '../components/LoginDialogs'
 import { PageLayout } from '../components/PageHeader'
 import { GithubLogo, BiliLogo } from '../components/BrandLogos'
@@ -220,6 +222,34 @@ export function SettingsPage() {
             <Radio value="md3" label="Material 3 Expressive" />
           </RadioGroup>
         </div>
+        {/* MD3 专属:配色变体 + 对比度(对应 Material You 的 scheme variant / contrast) */}
+        {s.uiStyle === 'md3' && (
+          <div className={styles.row}>
+            <Text size={300}>配色变体:</Text>
+            <Dropdown
+              style={{ minWidth: '150px' }}
+              value={M3_VARIANTS.find((v) => v.value === (s.md3Variant ?? DEFAULT_M3_VARIANT))?.label}
+              selectedOptions={[s.md3Variant ?? DEFAULT_M3_VARIANT]}
+              onOptionSelect={(_, d) => update('md3Variant', d.optionValue as M3Variant)}
+            >
+              {M3_VARIANTS.map((v) => (
+                <Option key={v.value} value={v.value}>
+                  {v.label}
+                </Option>
+              ))}
+            </Dropdown>
+            <Text size={300}>对比度:</Text>
+            <Slider
+              style={{ minWidth: '180px' }}
+              min={-1}
+              max={1}
+              step={0.1}
+              value={s.md3Contrast ?? 0}
+              onChange={(_, d) => update('md3Contrast', d.value)}
+            />
+            <Text size={300}>{(s.md3Contrast ?? 0) > 0 ? `高 ${(s.md3Contrast ?? 0).toFixed(1)}` : (s.md3Contrast ?? 0) < 0 ? `低 ${(s.md3Contrast ?? 0).toFixed(1)}` : '标准'}</Text>
+          </div>
+        )}
         <RadioGroup
           layout="horizontal"
           value={s.theme}

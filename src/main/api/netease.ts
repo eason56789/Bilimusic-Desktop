@@ -60,6 +60,11 @@ interface RequestOptions {
   method?: string
   useCookies?: boolean
   mobile?: boolean
+  /**
+   * 在已存 cookie 基础上补移动端身份(os=android 等)。
+   * 网易云评论接口只有移动端身份才返回 showFloorComment(楼中楼条数)。
+   */
+  mobileCookies?: boolean
 }
 
 async function request(
@@ -79,20 +84,35 @@ async function request(
     'Accept-Language': 'zh-CN,zh-Hans;q=0.9'
   }
 
+  /** 移动端身份 cookie:保留登录态(MUSIC_U 等),只覆盖客户端标识 */
+  const mobileCookieHeader = (): string => {
+    const merged: Record<string, string> = {
+      ...cookies,
+      os: 'android',
+      appver: '8.10.35',
+      channel: 'netease',
+      mobilename: 'Pixel7',
+      osver: '13'
+    }
+    return Object.entries(merged)
+      .map(([k, v]) => `${k}=${v}`)
+      .join('; ')
+  }
+
   if (mode === 'WEAPI') {
     bodyParams = weApiEncrypt(params)
-    if (useCookies) headers.Cookie = cookieHeader()
+    if (useCookies) headers.Cookie = opts.mobileCookies ? mobileCookieHeader() : cookieHeader()
     const csrf = useCookies ? (cookies['__csrf'] ?? '') : ''
     reqUrl.searchParams.set('csrf_token', csrf)
   } else if (mode === 'EAPI') {
     bodyParams = eApiEncrypt(reqUrl.pathname, params)
-    if (useCookies) headers.Cookie = cookieHeader()
+    if (useCookies) headers.Cookie = opts.mobileCookies ? mobileCookieHeader() : cookieHeader()
   } else if (mode === 'LINUX') {
     bodyParams = linuxApiEncrypt(params)
-    if (useCookies) headers.Cookie = cookieHeader()
+    if (useCookies) headers.Cookie = opts.mobileCookies ? mobileCookieHeader() : cookieHeader()
   } else {
     bodyParams = Object.fromEntries(Object.entries(params).map(([k, v]) => [k, String(v)]))
-    if (useCookies) headers.Cookie = cookieHeader()
+    if (useCookies) headers.Cookie = opts.mobileCookies ? mobileCookieHeader() : cookieHeader()
   }
 
   let resp: Response
@@ -343,10 +363,17 @@ export async function getSongDetail(ids: number[]): Promise<Song[]> {
 /** 单曲原始明细(歌曲详情弹窗展示:发行时间/人气/VIP 标记/歌手 id 等) */
 export async function getSongDetailRaw(id: number): Promise<{
   albumName?: string
+  albumId?: number
   publishTime?: number
   pop?: number
   fee?: number
   artistId?: number
+  /** 专辑收藏量(album/detail/dynamic 的 subCount) */
+  albumSubCount?: number
+  /** 专辑评论数 */
+  albumCommentCount?: number
+  /** 歌曲评论总数(评论接口 total) */
+  commentCount?: number
 } | null> {
   const json = await callWeApi('/v3/song/detail', {
     c: `[{"id":${id}}]`,
@@ -354,12 +381,46 @@ export async function getSongDetailRaw(id: number): Promise<{
   })
   const s = json?.songs?.[0]
   if (!s) return null
+  const albumId = s.al?.id ?? s.album?.id
+  // 专辑动态接口(收藏/评论/分享)与评论总数:失败不影响主流程
+  let albumSubCount: number | undefined
+  let albumCommentCount: number | undefined
+  if (albumId) {
+    try {
+      const dyn = await request(
+        `https://music.163.com/api/album/detail/dynamic?id=${albumId}`,
+        {},
+        'API',
+        { method: 'GET' }
+      ).then((t) => JSON.parse(t))
+      if (typeof dyn?.subCount === 'number') albumSubCount = dyn.subCount
+      if (typeof dyn?.commentCount === 'number') albumCommentCount = dyn.commentCount
+    } catch {
+      /* ignore */
+    }
+  }
+  let commentCount: number | undefined
+  try {
+    const c = await request(
+      `https://music.163.com/api/v1/resource/comments/R_SO_4_${id}?limit=1&offset=0`,
+      {},
+      'API',
+      { method: 'GET' }
+    ).then((t) => JSON.parse(t))
+    if (typeof c?.total === 'number') commentCount = c.total
+  } catch {
+    /* ignore */
+  }
   return {
     albumName: s.al?.name ?? s.album?.name,
+    albumId,
     publishTime: s.publishTime ?? s.album?.publishTime,
     pop: typeof s.pop === 'number' ? Math.round(s.pop) : undefined,
     fee: typeof s.fee === 'number' ? s.fee : undefined,
-    artistId: s.ar?.[0]?.id ?? s.artists?.[0]?.id
+    artistId: s.ar?.[0]?.id ?? s.artists?.[0]?.id,
+    albumSubCount,
+    albumCommentCount,
+    commentCount
   }
 }
 
@@ -554,6 +615,46 @@ export interface NeteaseComment {
   content: string
   time: number
   likedCount: number
+  /** 楼中楼条数(showFloorComment.replyCount);缺省 0 */
+  replyCount?: number
+}
+
+/**
+ * 楼中楼(二级回复)。
+ * 真实接口是 POST /api/resource/comment/floor/get(明文参数即可,无需 weapi):
+ * 传 parentCommentId(一级评论 id) + threadId=R_SO_4_{songId} + time 游标(-1 起始)。
+ * 旧的 /api/comment/floor/get、/api/v2/comment/reply 全部 404,别再改回去。
+ */
+export async function getCommentFloor(
+  songId: number,
+  parentCommentId: number,
+  time = -1,
+  limit = 20
+): Promise<{ comments: NeteaseComment[]; hasMore: boolean; total: number }> {
+  const json = await request(
+    'https://music.163.com/api/resource/comment/floor/get',
+    {
+      parentCommentId: String(parentCommentId),
+      threadId: `R_SO_4_${songId}`,
+      time: String(time),
+      limit: String(limit)
+    },
+    'API'
+  ).then((t) => JSON.parse(t))
+  const d = json?.data ?? {}
+  const map = (c: any): NeteaseComment => ({
+    id: c.commentId,
+    user: c.user?.nickname ?? '未知',
+    avatar: c.user?.avatarUrl ?? '',
+    content: c.content ?? '',
+    time: c.time ?? 0,
+    likedCount: c.likedCount ?? 0
+  })
+  return {
+    comments: (d.comments ?? []).map(map),
+    hasMore: !!d.hasMore,
+    total: d.totalCount ?? (d.comments ?? []).length
+  }
 }
 
 export async function getMusicComments(
@@ -562,16 +663,24 @@ export async function getMusicComments(
   limit = 20,
   order: 'hot' | 'time' = 'hot'
 ): Promise<{ total: number; comments: NeteaseComment[]; hasMore: boolean }> {
-  const json = await getApi(
-    `https://music.163.com/api/v1/resource/comments/R_SO_4_${songId}?limit=${limit}&offset=${offset}`
-  )
+  // 关键:桌面 UA 下接口不返回 showFloorComment(楼中楼条数),移动端 UA+cookie 才有,
+  // 所以评论列表固定用移动端身份请求(与安卓端一致)。
+  const json = await request(
+    `https://music.163.com/api/v1/resource/comments/R_SO_4_${songId}?limit=${limit}&offset=${offset}`,
+    {},
+    'API',
+    { method: 'GET', mobile: true, mobileCookies: true }
+  ).then((t) => JSON.parse(t))
   const map = (c: any): NeteaseComment => ({
     id: c.commentId,
     user: c.user?.nickname ?? '未知',
     avatar: c.user?.avatarUrl ?? '',
     content: c.content ?? '',
     time: c.time ?? 0,
-    likedCount: c.likedCount ?? 0
+    likedCount: c.likedCount ?? 0,
+    // 只用 showFloorComment.replyCount;beReplied 是"被引用的评论"(引用块),不是楼中楼,
+    // 当成回复数会造出点开是空的假按钮。
+    replyCount: c.showFloorComment?.replyCount ?? 0
   })
   // 该公开接口的 comments 恒为时间倒序(实测 sortType/sort 参数被忽略),
   // 热度排序取响应内置的 hotComments(仅首页返回,无分页)。

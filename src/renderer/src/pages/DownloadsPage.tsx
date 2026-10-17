@@ -12,7 +12,7 @@ import {
   Tooltip,
   makeStyles,
   tokens
-} from '@fluentui/react-components'
+} from '../ui/controls'
 import {
   ArrowDownloadRegular,
   ArrowClockwiseRegular,
@@ -25,7 +25,7 @@ import {
   FolderOpenRegular,
   MoreHorizontalRegular,
   PlayRegular
-} from '@fluentui/react-icons'
+} from '../ui/icons'
 import type { DownloadRecord, Song } from '@shared/types'
 import { api } from '../lib/api'
 import { useStore } from '../store'
@@ -218,8 +218,9 @@ export function DownloadsPage() {
           <div
             key={r.id}
             className={`dl-row ${styles.row}`}
+            style={r.status === 'completed' ? { cursor: 'pointer' } : undefined}
             onContextMenu={(e) => onRowContextMenu(e, r)}
-            onDoubleClick={() => r.status === 'completed' && playLocal(r)}
+            onClick={() => r.status === 'completed' && playLocal(r)}
           >
             <Cover url={r.song.coverUrl} size={44} iconSize={18} />
             <div className={styles.meta}>
@@ -303,7 +304,9 @@ export function DownloadsPage() {
                     <ArrowClockwiseRegular />
                   )
                 }
-                onClick={() => {
+                onClick={(e) => {
+                  // 行点击即播放已完成的曲目,故操作按钮阻断冒泡
+                  e.stopPropagation()
                   if (r.status === 'downloading' || r.status === 'pending') api.downloadCancel(r.id)
                   else if (r.status === 'completed') api.downloadOpenFile(r.id)
                   else retry(r)
@@ -317,6 +320,7 @@ export function DownloadsPage() {
                 icon={<MoreHorizontalRegular />}
                 onClick={(e) => {
                   // 把锚点移到按钮处,菜单从按钮弹出
+                  e.stopPropagation()
                   const anchor = ctxAnchorRef.current
                   const rect = (e.currentTarget as HTMLElement).getBoundingClientRect()
                   if (anchor) {

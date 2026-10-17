@@ -10,7 +10,7 @@ import {
   Title2,
   makeStyles,
   tokens
-} from '@fluentui/react-components'
+} from '../ui/controls'
 import {
   PersonVoiceRegular,
   CheckmarkCircleRegular,
@@ -22,7 +22,7 @@ import {
   WeatherSunnyRegular,
   WeatherMoonRegular,
   DarkThemeRegular
-} from '@fluentui/react-icons'
+} from '../ui/icons'
 import { useStore } from '../store'
 import { ACCENTS } from '../lib/theme'
 import brandIconUrl from '../assets/brand.png'

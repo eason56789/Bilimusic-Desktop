@@ -15,7 +15,7 @@ import {
   tokens,
   Spinner,
   Tooltip
-} from '@fluentui/react-components'
+} from '../ui/controls'
 import {
   AddRegular,
   ArrowClockwiseRegular,
@@ -31,7 +31,7 @@ import {
   QrCodeRegular,
   SaveRegular,
   SearchRegular
-} from '@fluentui/react-icons'
+} from '../ui/icons'
 import type { NeteasePlaylistMeta, Playlist, Song } from '@shared/types'
 import { api } from '../lib/api'
 import { useStore } from '../store'

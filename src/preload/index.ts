@@ -42,6 +42,8 @@ const api: DesktopApi = {
   lyricsGet: (song: Song) => invoke('lyrics:get', song),
   pagesGet: (bvid: string) => invoke('pages:get', bvid),
   commentsGet: (song, offset, order, platform) => invoke('api:comments', song, offset, order, platform),
+  commentRepliesGet: (song, parentCommentId, cursor, platform) =>
+    invoke('api:commentReplies', song, parentCommentId, cursor, platform),
   songDetail: (song) => invoke('api:songDetail', song),
   appCopy: (text) => invoke('app:copy', text),
   appOpenExternal: (url) => invoke('app:openExternal', url),

@@ -11,7 +11,7 @@ import {
   Tooltip,
   makeStyles,
   tokens
-} from '@fluentui/react-components'
+} from '../ui/controls'
 import {
   PauseRegular,
   PlayRegular,
@@ -37,7 +37,7 @@ import {
   GaugeRegular,
   CheckmarkRegular,
   SettingsRegular
-} from '@fluentui/react-icons'
+} from '../ui/icons'
 import { useStore, fmtDur } from '../store'
 import { Cover } from './Cover'
 import { NiceSlider } from './NiceSlider'

@@ -120,6 +120,14 @@ function formatDuration(sec: number): string {
   return `${m}:${String(s).padStart(2, '0')}`
 }
 
+/** 大数字人性化:12345 → 1.2万,123456789 → 1.2亿 */
+function formatCount(n: number): string {
+  if (!isFinite(n) || n < 0) return '-'
+  if (n >= 100_000_000) return `${(n / 100_000_000).toFixed(1).replace(/\.0$/, '')}亿`
+  if (n >= 10_000) return `${(n / 10_000).toFixed(1).replace(/\.0$/, '')}万`
+  return String(n)
+}
+
 /** 解析粘贴的 B站 Cookie:支持裸值(SESSDATA=xxx; bili_jct=xxx)、多行、JSON 片段 */
 function parseBiliCookieString(raw: string): string | null {
   const text = String(raw ?? '').trim()
@@ -268,7 +276,8 @@ export function registerIpc(): void {
             avatar: c.avatar,
             content: c.content,
             time: c.time,
-            likes: c.likedCount
+            likes: c.likedCount,
+            replyCount: c.replyCount
           }))
         })
         const fetchBili = async () => {
@@ -325,6 +334,71 @@ export function registerIpc(): void {
       }
     }
   )
+  // 楼中楼:网易云原生 floor 接口;B站/QQ 走各自回复列表
+  ipcMain.handle(
+    'api:commentReplies',
+    async (
+      _e,
+      song: Song,
+      parentCommentId: string,
+      cursor = -1,
+      platform?: 'bilibili' | 'netease' | 'qq'
+    ) => {
+      try {
+        if (platform === 'bilibili' || (!platform && song.source === 'BILIBILI' && song.bvid)) {
+          if (!song.bvid) return { ok: false as const, error: '没有可查看的B站评论' }
+          // B站楼中楼:走 web 的 reply/reply 接口(需要 rpid,已有一级评论 id)
+          const detail = await bilibili.getVideoDetail(bvidOf(song)).catch(() => null)
+          const aid = Number((detail as any)?.aid ?? 0)
+          if (!aid) return { ok: false as const, error: '无法解析视频ID' }
+          const page = Math.max(1, cursor > 0 ? cursor : 1)
+          const list = await bilibili.getCommentReplies(aid, Number(parentCommentId), page, 20)
+          return ok({
+            total: list.length,
+            hasMore: list.length >= 20,
+            cursor: page + 1,
+            comments: list.map((r: any) => ({
+              id: String(r.rpid),
+              user: r.member?.uname ?? '未知',
+              avatar: r.member?.avatar ?? '',
+              content: r.content?.message ?? '',
+              time: (r.ctime ?? 0) * 1000,
+              likes: r.like ?? 0,
+              replyCount: r.rcount ?? 0
+            }))
+          })
+        }
+        // 网易云:原曲 / QQ / 酷狗兜底都统一按网易云曲目取
+        let id = song.neteaseId
+        if (!id) {
+          const kw = `${song.title} ${song.artist}`.trim()
+          const res = await netease.searchSongs(kw, 5, 0)
+          const pool = (res.songs ?? []).filter((s: Song) => (s.neteaseId ?? 0) > 0)
+          if (pool.length === 0) return { ok: false as const, error: '网易云未找到对应歌曲' }
+          id = pool.reduce((best, s) =>
+            Math.abs(s.duration - song.duration) < Math.abs(best.duration - song.duration) ? s : best
+          ).neteaseId!
+        }
+        const r = await netease.getCommentFloor(id, Number(parentCommentId), cursor, 20)
+        const nextCursor = r.hasMore && r.comments.length > 0 ? r.comments[r.comments.length - 1].time : -1
+        return ok({
+          total: r.total,
+          hasMore: r.hasMore,
+          cursor: nextCursor,
+          comments: r.comments.map((c) => ({
+            id: String(c.id),
+            user: c.user,
+            avatar: c.avatar,
+            content: c.content,
+            time: c.time,
+            likes: c.likedCount
+          }))
+        })
+      } catch (e) {
+        return err(e)
+      }
+    }
+  )
   ipcMain.handle('api:songDetail', async (_e, song: Song) => {
     try {
       const rows: Record<string, string> = {
@@ -373,23 +447,41 @@ export function registerIpc(): void {
           if (raw.fee === 1) rows['付费'] = 'VIP 专享'
           else if (raw.fee === 4) rows['付费'] = '购买专辑'
           else if (raw.fee === 8) rows['付费'] = '低音质免费'
+          if (raw.commentCount != null) rows['评论数'] = formatCount(raw.commentCount)
+          if (raw.albumSubCount != null) rows['专辑收藏'] = formatCount(raw.albumSubCount)
+          if (raw.albumCommentCount != null) rows['专辑评论'] = formatCount(raw.albumCommentCount)
           if (raw.artistId) {
             const fans = await netease
               .getArtistDetail(raw.artistId)
               .then((d) => d.fansCount)
               .catch(() => undefined)
-            if (fans != null) rows['歌手粉丝数'] = String(fans)
+            if (fans != null) rows['歌手粉丝数'] = formatCount(fans)
           }
         }
       } else if (song.source === 'QQMUSIC') {
         rows['来源'] = 'QQ音乐'
         rows['链接'] = song.qqMid ? `https://y.qq.com/n/ryqq/songDetail/${song.qqMid}` : ''
         rows['状态'] = getStore().downloadedIds.includes(song.id) ? '已下载' : '在线播放'
-        if (song.qqId) rows['歌曲ID'] = String(song.qqId)
+        if (song.qqId) {
+          rows['歌曲ID'] = String(song.qqId)
+          const st = await qqmusic
+            .getQqSongStats(song.qqId)
+            .catch(() => ({}) as { favCount?: number; favText?: string; commentCount?: number })
+          if (st.favText) rows['收藏量'] = st.favText
+          else if (st.favCount != null) rows['收藏量'] = formatCount(st.favCount)
+          if (st.commentCount != null) rows['评论数'] = formatCount(st.commentCount)
+        }
       } else if (song.source === 'KUGOU') {
         rows['来源'] = '酷狗音乐'
         rows['状态'] = getStore().downloadedIds.includes(song.id) ? '已下载' : '在线播放'
-        if (song.kugouHash) rows['文件Hash'] = song.kugouHash
+        if (song.kugouHash) {
+          rows['文件Hash'] = song.kugouHash
+          const st = await kugou
+            .getKugouSongStats(song.kugouHash, song.title, song.artist)
+            .catch(() => ({}) as { favCount?: number; heatLevel?: number })
+          if (st.favCount != null) rows['收藏量'] = formatCount(st.favCount)
+          if (st.heatLevel != null) rows['热度等级'] = `${st.heatLevel} / 10`
+        }
         if (song.kugouAlbumId) rows['专辑ID'] = song.kugouAlbumId
       } else if (song.source === 'BILIBILI' && song.bvid) {
         const p = song.page > 1 ? `?p=${song.page}` : ''

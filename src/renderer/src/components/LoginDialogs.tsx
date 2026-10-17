@@ -16,8 +16,8 @@ import {
   Text,
   makeStyles,
   tokens
-} from '@fluentui/react-components'
-import { Eye24Regular, EyeOff24Regular } from '@fluentui/react-icons'
+} from '../ui/controls'
+import { Eye24Regular, EyeOff24Regular } from '../ui/icons'
 import { useStore } from '../store'
 import { api } from '../lib/api'
 import { toastSuccess, toastError } from '../lib/toast'

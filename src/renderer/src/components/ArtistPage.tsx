@@ -9,13 +9,13 @@ import {
   Tooltip,
   makeStyles,
   tokens
-} from '@fluentui/react-components'
+} from '../ui/controls'
 import {
   ArrowLeftRegular,
   PlayRegular,
   SearchRegular,
   DismissRegular
-} from '@fluentui/react-icons'
+} from '../ui/icons'
 import type { NeteaseArtistDetail, Song } from '@shared/types'
 import { api } from '../lib/api'
 import { useStore } from '../store'

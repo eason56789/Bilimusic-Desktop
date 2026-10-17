@@ -13,7 +13,7 @@ import {
   Tooltip,
   makeStyles,
   tokens
-} from '@fluentui/react-components'
+} from '../ui/controls'
 import {
   SearchRegular,
   DismissRegular,
@@ -24,7 +24,7 @@ import {
   ArrowLeftRegular,
   CloudArrowDownRegular,
   HistoryRegular
-} from '@fluentui/react-icons'
+} from '../ui/icons'
 import type {
   NeteaseArtistBrief,
   NeteasePlaylistBrief,

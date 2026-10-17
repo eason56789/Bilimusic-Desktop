@@ -9,8 +9,8 @@ import {
   DialogTitle,
   Text,
   tokens
-} from '@fluentui/react-components'
-import { ArrowDownloadRegular } from '@fluentui/react-icons'
+} from '../ui/controls'
+import { ArrowDownloadRegular } from '../ui/icons'
 import { useStore } from '../store'
 import { api } from '../lib/api'
 import { toastSuccess } from '../lib/toast'

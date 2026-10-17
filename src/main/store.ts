@@ -40,6 +40,8 @@ const defaultSettings: Settings = {
   floatLyric: false,
   closeBehavior: 'ask',
   uiStyle: 'fluent',
+  md3Variant: 'tonalSpot',
+  md3Contrast: 0,
   lyricAlphaCurrent: 1,
   lyricAlphaInactive: 0.15,
   defaultSearchSource: 'netease',

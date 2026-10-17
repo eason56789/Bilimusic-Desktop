@@ -13,7 +13,7 @@ import {
   Tooltip,
   makeStyles,
   tokens
-} from '@fluentui/react-components'
+} from '../ui/controls'
 import {
   PauseRegular,
   PlayRegular,
@@ -39,7 +39,7 @@ import {
   ArrowSyncRegular,
   OpenRegular,
   CheckmarkRegular
-} from '@fluentui/react-icons'
+} from '../ui/icons'
 import type { Song } from '@shared/types'
 import { useStore, getAudioElement } from '../store'
 import { api } from '../lib/api'
@@ -758,7 +758,9 @@ export function NowPlaying() {
         </div>
 
         {/* 右侧评论停靠面板:打开时上层内容(marginRight)整体左移让位 */}
-        <div className={`${styles.commentsPanel} ${commentsOpen ? styles.commentsPanelOpen : ''}`}>
+        <div
+          className={`${styles.commentsPanel} np-comments ${commentsOpen ? styles.commentsPanelOpen : ''}`}
+        >
           <CommentsBody
             song={current}
             active={open && commentsOpen}

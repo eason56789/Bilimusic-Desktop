@@ -187,3 +187,70 @@ export async function getQqComments(
   if (order === 'time') comments = [...comments].sort((a, b) => b.time - a.time)
   return { total, comments, hasMore: false }
 }
+
+/**
+ * 歌曲统计:收藏量(GetSongFansNumberById,匿名可用)+ 评论总数。
+ * 播放量没有公开匿名接口(music.musicAsset.SongPlayInfoRead 系列全部 500003),
+ * 页面 SSR 里也没有,所以只展示能拿到的两项。
+ */
+export async function getQqSongStats(songId: number): Promise<{
+  favCount?: number
+  favText?: string
+  commentCount?: number
+}> {
+  const out: { favCount?: number; favText?: string; commentCount?: number } = {}
+  try {
+    const json = await postMusicu(
+      {
+        module: 'music.musicasset.SongFavRead',
+        method: 'GetSongFansNumberById',
+        param: { v_songId: [songId] }
+      },
+      { ct: '24', cv: '0', uin: '0', format: 'json' }
+    )
+    const d = json?.req?.data ?? {}
+    const n = d?.m_numbers?.[String(songId)]
+    const show = d?.m_show?.[String(songId)]
+    if (typeof n === 'number' && n > 0) out.favCount = n
+    if (typeof show === 'string' && show) out.favText = show
+  } catch {
+    /* ignore */
+  }
+  try {
+    const params = new URLSearchParams({
+      g_tk: '5381',
+      format: 'json',
+      inCharset: 'utf8',
+      outCharset: 'utf-8',
+      cmd: '8',
+      biztype: '1',
+      topid: String(songId),
+      reqtype: '2',
+      pagenum: '0',
+      pagesize: '1',
+      needmusiccrit: '0',
+      lasthotcommentid: '',
+      domain: 'qq.com',
+      platform: 'yqq',
+      needNewCode: '0',
+      loginUin: '0',
+      hostUin: '0',
+      notice: '0'
+    })
+    const resp = await fetch(
+      `https://c.y.qq.com/base/fcgi-bin/fcg_global_comment_h5.fcg?${params}`,
+      {
+        headers: { 'User-Agent': UA, Referer: 'https://y.qq.com/' },
+        signal: AbortSignal.timeout(15_000)
+      }
+    )
+    if (resp.ok) {
+      const j = (await resp.json()) as any
+      const total = Number(j?.hot_comment?.commenttotal ?? j?.comment?.commenttotal ?? 0)
+      if (total > 0) out.commentCount = total
+    }
+  } catch {
+    /* ignore */
+  }
+  return out
+}

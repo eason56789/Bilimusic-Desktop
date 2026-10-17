@@ -913,3 +913,22 @@ async function getVideoCommentsByTime(
     return { total: 0, hasMore: false, comments: [] }
   }
 }
+
+/** 楼中楼:web /x/v2/reply/reply(匿名可用,root=一级评论 rpid,分页 pn/ps) */
+export async function getCommentReplies(
+  aid: number,
+  rootRpid: number,
+  page = 1,
+  pageSize = 20
+): Promise<any[]> {
+  try {
+    const json = await getJson(
+      `https://api.bilibili.com/x/v2/reply/reply?type=1&oid=${aid}&root=${rootRpid}&pn=${page}&ps=${pageSize}`
+    )
+    if (json.code !== 0) return []
+    return json.data?.replies ?? []
+  } catch (e) {
+    console.error('[Bilibili] comment replies error', e)
+    return []
+  }
+}

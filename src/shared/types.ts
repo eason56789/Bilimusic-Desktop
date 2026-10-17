@@ -148,6 +148,10 @@ export interface Settings {
   closeBehavior: 'ask' | 'tray' | 'quit'
   /** 界面样式:经典 Fluent / Material 3 Expressive */
   uiStyle: 'fluent' | 'md3'
+  /** M3 配色变体(源色经 HCT 派生出全套色彩角色时采用的 scheme) */
+  md3Variant?: 'expressive' | 'tonalSpot' | 'vibrant' | 'neutral' | 'monochrome' | 'rainbow' | 'fruitSalad' | 'content' | 'fidelity'
+  /** M3 对比度调级 -1 ~ 1(0 为标准,正值提高明暗对比) */
+  md3Contrast?: number
   /** 当前歌词不透明度 0.3~1(对齐手机端) */
   lyricAlphaCurrent: number
   /** 非当前歌词不透明度 0.05~1(对齐手机端) */
@@ -223,6 +227,12 @@ export interface FloatLyricState {
   lineCount: number
   dark: boolean
   accent: string
+  /** 界面样式:悬浮窗与主窗口保持一致 */
+  uiStyle?: 'fluent' | 'md3'
+  /** MD3 配色变体 */
+  m3Variant?: string
+  /** MD3 对比度 -1~1 */
+  m3Contrast?: number
 }
 
 /** 悬浮歌词窗 → 主窗口的控制指令 */
@@ -302,12 +312,22 @@ export interface CommentItem {
   content: string
   time: number
   likes: number
+  /** 楼中楼条数(网易云 showFloorComment.replyCount / B站 rcount);0 表示无回复 */
+  replyCount?: number
 }
 
 export interface CommentsResult {
   total: number
   hasMore: boolean
   comments: CommentItem[]
+}
+
+/** 楼中楼(二级回复)结果;cursor 为网易云 time 游标(-1 表示第一页) */
+export interface CommentRepliesResult {
+  comments: CommentItem[]
+  hasMore: boolean
+  total: number
+  cursor: number
 }
 
 /** 评论排序:热度(B站综合/点赞,网易云热门评论) / 时间(最新在前) */
@@ -367,6 +387,13 @@ export interface DesktopApi {
     order?: CommentOrder,
     platform?: CommentPlatform
   ): Promise<ApiResponse<CommentsResult>>
+  /** 楼中楼(网易云二级回复);cursor 传上一页返回的 cursor,首屏传 -1 */
+  commentRepliesGet(
+    song: Song,
+    parentCommentId: string,
+    cursor?: number,
+    platform?: CommentPlatform
+  ): Promise<ApiResponse<CommentRepliesResult>>
   songDetail(song: Song): Promise<ApiResponse<Record<string, string>>>
   // 应用操作
   appCopy(text: string): Promise<void>
