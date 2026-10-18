@@ -13,7 +13,7 @@ import {
   Tooltip,
   makeStyles,
   tokens
-} from '../ui/controls'
+} from '@fluentui/react-components'
 import {
   PauseRegular,
   PlayRegular,
@@ -38,12 +38,14 @@ import {
   MusicNote2Regular,
   ArrowSyncRegular,
   OpenRegular,
-  CheckmarkRegular
-} from '../ui/icons'
+  CheckmarkRegular,
+  LockClosedRegular,
+  LockOpenRegular
+} from '@fluentui/react-icons'
 import type { Song } from '@shared/types'
 import { useStore, getAudioElement } from '../store'
 import { api } from '../lib/api'
-import { toastSuccess } from '../lib/toast'
+import { toastSuccess, toastError } from '../lib/toast'
 import { Cover } from './Cover'
 import { NiceSlider } from './NiceSlider'
 import { SpectrumBars } from './SpectrumBars'
@@ -212,6 +214,8 @@ export function NowPlaying() {
   const queue = useStore((s) => s.queue)
   const sleepEnd = useStore((s) => s.sleepTimerEnd)
   const quality = useStore((s) => s.quality)
+  /** 进度条高潮点标记(设置可关) */
+  const highlights = useStore((s) => s.highlights)
   const rate = useStore((s) => s.library?.settings.playbackRate ?? 1)
   const st = useStore((s) => s.library?.settings)
   // 歌词偏移需响应式:此前经 getState() 读取,暂停时调整偏移不会立即重算当前行
@@ -223,6 +227,7 @@ export function NowPlaying() {
   const setDlg = useStore((s) => s.setActiveDialog)
   const commentsOpen = dlg === 'comments'
   const floatLyric = useStore((s) => s.library?.settings.floatLyric ?? false)
+  const floatLocked = useStore((s) => s.library?.settings.floatLyricLocked ?? false)
   const { setNowPlayingOpen, togglePlay, next, prev, seek, setVolume, cycleMode } =
     useStore.getState()
 
@@ -439,7 +444,42 @@ export function NowPlaying() {
                   {current?.title ?? '尚未播放'}
                 </Text>
                 <Text size={400} style={{ color: 'rgba(255,255,255,0.75)' }}>
-                  {current?.artist ?? ''}
+                  {/* 多歌手各自可点(如"周杰伦 / 李硕 / 张鑫"),分隔符不带链接;点击搜索网易云歌手并打开主页 */}
+                  {(current?.artist ?? '')
+                    .split(' / ')
+                    .map((a) => a.trim())
+                    .filter(Boolean)
+                    .map((name, i, arr) => (
+                      <span key={`${name}-${i}`}>
+                        <span
+                          role="button"
+                          tabIndex={0}
+                          title={`打开${name}的主页`}
+                          style={{
+                            cursor: 'pointer',
+                            textDecoration: 'underline',
+                            textDecorationColor: 'rgba(255,255,255,0.35)',
+                            textUnderlineOffset: '3px'
+                          }}
+                          onClick={async (e) => {
+                            e.stopPropagation()
+                            // 先收起全屏播放(立刻响应),再后台查歌手 id;查到后跳转主页
+                            useStore.getState().setNowPlayingOpen(false)
+                            const r = await api.neteaseFindArtist(name)
+                            if (r.ok && r.data) useStore.getState().openArtistPage(r.data)
+                            else toastError('未找到该歌手')
+                          }}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter' || e.key === ' ') {
+                              ;(e.currentTarget as HTMLElement).click()
+                            }
+                          }}
+                        >
+                          {name}
+                        </span>
+                        {i < arr.length - 1 ? ' / ' : ''}
+                      </span>
+                    ))}
                   {current?.album ? ` · ${current.album}` : ''}
                 </Text>
                 <div style={{ display: 'flex', gap: 8, justifyContent: 'center', marginTop: 4, flexWrap: 'wrap' }}>
@@ -590,6 +630,7 @@ export function NowPlaying() {
                 max={Math.max(duration, 1)}
                 onChange={(v) => seek(v)}
                 disabled={!current}
+                highlights={st?.showChorusMarks !== false ? highlights : undefined}
                 ariaLabel="播放进度"
               />
               <span className={styles.timeText} style={{ textAlign: 'right' }}>
@@ -704,12 +745,36 @@ export function NowPlaying() {
                     <MenuItem icon={<ArrowSwapRegular />} disabled={!current} onClick={() => setDlg('source')}>
                       更换音源
                     </MenuItem>
-                    <MenuItem
-                      icon={floatLyric ? <CheckmarkRegular /> : <OpenRegular />}
-                      onClick={() => void useStore.getState().updateSetting('floatLyric', !floatLyric)}
-                    >
-                      悬浮歌词窗
-                    </MenuItem>
+                    <Menu>
+                      <MenuTrigger disableButtonEnhancement>
+                        <MenuItem icon={<OpenRegular />}>
+                          悬浮歌词窗{floatLyric ? (floatLocked ? '(已锁定)' : '(已开启)') : ''}
+                        </MenuItem>
+                      </MenuTrigger>
+                      <MenuPopover>
+                        <MenuList>
+                          <MenuItem
+                            icon={floatLyric ? <CheckmarkRegular /> : undefined}
+                            onClick={() =>
+                              void useStore.getState().updateSetting('floatLyric', !floatLyric)
+                            }
+                          >
+                            {floatLyric ? '关闭悬浮歌词窗' : '开启悬浮歌词窗'}
+                          </MenuItem>
+                          <MenuItem
+                            icon={floatLocked ? <LockClosedRegular /> : <LockOpenRegular />}
+                            disabled={!floatLyric}
+                            onClick={() =>
+                              void useStore
+                                .getState()
+                                .updateSetting('floatLyricLocked', !floatLocked)
+                            }
+                          >
+                            {floatLocked ? '解除锁定(恢复可交互)' : '锁定(鼠标穿透,不挡操作)'}
+                          </MenuItem>
+                        </MenuList>
+                      </MenuPopover>
+                    </Menu>
                     <Menu>
                       <MenuTrigger disableButtonEnhancement>
                         <MenuItem icon={<ClockRegular />}>定时关闭{sleepText ? ` (${sleepText})` : ''}</MenuItem>
@@ -758,9 +823,7 @@ export function NowPlaying() {
         </div>
 
         {/* 右侧评论停靠面板:打开时上层内容(marginRight)整体左移让位 */}
-        <div
-          className={`${styles.commentsPanel} np-comments ${commentsOpen ? styles.commentsPanelOpen : ''}`}
-        >
+        <div className={`${styles.commentsPanel} ${commentsOpen ? styles.commentsPanelOpen : ''}`}>
           <CommentsBody
             song={current}
             active={open && commentsOpen}

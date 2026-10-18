@@ -19,7 +19,7 @@ import {
   Textarea,
   makeStyles,
   tokens
-} from '../ui/controls'
+} from '@fluentui/react-components'
 import {
   ArrowClockwiseRegular,
   ChatMultipleRegular,
@@ -28,21 +28,22 @@ import {
   InfoRegular,
   PlayRegular,
   SearchRegular
-} from '../ui/icons'
-import type {
-  BiliPage,
-  CommentOrder,
-  CommentPlatform,
-  CommentRepliesResult,
-  CommentsResult,
-  Song
-} from '@shared/types'
+} from '@fluentui/react-icons'
+import type { BiliPage, CommentOrder, CommentPlatform, CommentsResult, Song } from '@shared/types'
 import { api } from '../lib/api'
 import { pagesToSongs } from '../lib/pages'
 import { useStore, EQ_FREQS, applyEqSettings } from '../store'
 import { toastError, toastSuccess } from '../lib/toast'
 import { Cover } from './Cover'
 import { formatTime } from './SongList'
+
+/** ===== 评论区专用配色 =====
+ * 评论固定用深色玻璃底 + 白字:不随浅色/深色主题变化(与全屏播放页观感一致),
+ * 因此这里不用 Fluent token,直接写死颜色。 */
+const C_TEXT = '#ffffff'
+const C_TEXT_DIM = 'rgba(255,255,255,0.62)'
+const C_TEXT_FAINT = 'rgba(255,255,255,0.42)'
+const C_ROW_HOVER = 'rgba(255,255,255,0.08)'
 
 const useStyles = makeStyles({
   list: { display: 'flex', flexDirection: 'column', gap: '2px', maxHeight: '420px', overflowY: 'auto' },
@@ -63,29 +64,10 @@ const useStyles = makeStyles({
     borderRadius: tokens.borderRadiusMedium,
     alignItems: 'flex-start',
     transition: 'background 0.15s ease',
-    ':hover': { background: tokens.colorNeutralBackground3 }
+    ':hover': { background: C_ROW_HOVER }
   },
   meta: { flex: 1, minWidth: 0 },
-  muted: { color: tokens.colorNeutralForeground3, fontSize: tokens.fontSizeBase200 },
-  /** 楼中楼:左侧缩进 + 细竖线,和一级评论区分开 */
-  replyBox: {
-    marginLeft: '46px',
-    marginTop: '2px',
-    paddingLeft: '10px',
-    borderLeft: `2px solid ${tokens.colorNeutralStroke2}`,
-    display: 'flex',
-    flexDirection: 'column',
-    gap: '2px'
-  },
-  replyRow: { display: 'flex', gap: '8px', padding: '4px 0', alignItems: 'flex-start' },
-  replyToggle: {
-    alignSelf: 'flex-start',
-    padding: 0,
-    minWidth: 0,
-    height: 'auto',
-    fontSize: tokens.fontSizeBase200,
-    color: tokens.colorBrandForeground1
-  },
+  muted: { color: C_TEXT_DIM, fontSize: tokens.fontSizeBase200 },
   center: {
     display: 'flex',
     flexDirection: 'column',
@@ -98,7 +80,20 @@ const useStyles = makeStyles({
   v: { flex: 1, minWidth: 0, wordBreak: 'break-all' },
   eqGrid: { display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: '12px 16px', padding: '8px 0' },
   eqBand: { display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '4px' },
-  offsetRow: { display: 'flex', gap: '8px', flexWrap: 'wrap', justifyContent: 'center' }
+  offsetRow: { display: 'flex', gap: '8px', flexWrap: 'wrap', justifyContent: 'center' },
+  /** 评论内容容器:固定白字(深浅主题一致);弹窗版自带深色底,面板版由全屏页玻璃底承担 */
+  commentShell: {
+    color: C_TEXT,
+    display: 'flex',
+    flexDirection: 'column',
+    minHeight: 0
+  },
+  /** 弹窗版的深色玻璃底 */
+  commentShellBoxed: {
+    background: 'rgba(24,24,26,0.94)',
+    borderRadius: '12px',
+    padding: '12px 14px'
+  }
 })
 
 function timeAgo(t: number): string {
@@ -114,11 +109,13 @@ function timeAgo(t: number): string {
   return new Date(t).toLocaleDateString()
 }
 
-/** 评论内容(状态自持):排序切换 + 列表 + 加载更多。弹窗与右侧停靠面板共用。 */
+/** 评论内容(状态自持):排序切换 + 列表 + 加载更多。弹窗与右侧停靠面板共用。
+ *  字体固定白色:不跟随深色/浅色主题(弹窗版带深色底,面板版依托全屏页玻璃底)。 */
 export function CommentsBody({
   song,
   active,
   fill = false,
+  boxed = false,
   onClose
 }: {
   song: Song | null
@@ -126,6 +123,8 @@ export function CommentsBody({
   active: boolean
   /** 面板模式:列表撑满容器高度 */
   fill?: boolean
+  /** 弹窗模式:自带深色玻璃底(全屏页面板不传,由页面玻璃底承担) */
+  boxed?: boolean
   /** 面板右上角关闭按钮(弹窗版不传) */
   onClose?: () => void
 }) {
@@ -142,13 +141,11 @@ export function CommentsBody({
   )
   const canBili = !!song?.bvid
   const canNe = !!song?.neteaseId || song?.source === 'QQMUSIC' || song?.source === 'KUGOU'
-  const canQq = song?.source === 'QQMUSIC' || !!song?.qqMid
+  // 酷狗无公开评论接口:评论按同名曲从网易云/QQ音乐取,因此也允许切换到 QQ 评论
+  const canQq = song?.source === 'QQMUSIC' || song?.source === 'KUGOU' || !!song?.qqMid
   const dual = [canBili, canNe, canQq].filter(Boolean).length > 1
   /** 滑到底自动加载的防重入(滚动事件密集,不能只靠 loading state) */
   const loadingRef = useRef(false)
-  /** 已展开楼中楼的一级评论 id → 回复数据 */
-  const [replies, setReplies] = useState<Record<string, CommentRepliesResult>>({})
-  const [replyLoading, setReplyLoading] = useState<Record<string, boolean>>({})
   // 首次拿到歌曲/换歌时校准默认排序:挂载时 song 常为 null,一次性初始化算不准;
   // 同一首歌内保留用户手动选择,换下一首时重置为该来源的默认
   const lastSongIdRef = useRef<string | null>(null)
@@ -168,8 +165,6 @@ export function CommentsBody({
     setData(null)
     setOffset(0)
     setError('')
-    setReplies({})
-    setReplyLoading({})
     setLoading(true)
     api
       .commentsGet(song, 0, order, dual ? platform : undefined)
@@ -180,52 +175,6 @@ export function CommentsBody({
       .catch((e) => setError(String(e)))
       .finally(() => setLoading(false))
   }, [active, song, order, dual, platform])
-
-  /** 展开/收起楼中楼;首次展开时拉第一页(游标 -1) */
-  const toggleReplies = async (commentId: string) => {
-    if (!song) return
-    if (replies[commentId]) {
-      setReplies((prev) => {
-        const next = { ...prev }
-        delete next[commentId]
-        return next
-      })
-      return
-    }
-    setReplyLoading((p) => ({ ...p, [commentId]: true }))
-    try {
-      const r = await api.commentRepliesGet(song, commentId, -1, dual ? platform : undefined)
-      if (r.ok && r.data) setReplies((p) => ({ ...p, [commentId]: r.data! }))
-    } finally {
-      setReplyLoading((p) => ({ ...p, [commentId]: false }))
-    }
-  }
-
-  /** 楼中楼加载更多(用上一页最后一条的 time 作游标) */
-  const loadMoreReplies = async (commentId: string) => {
-    if (!song) return
-    const cur = replies[commentId]
-    if (!cur || !cur.hasMore) return
-    setReplyLoading((p) => ({ ...p, [commentId]: true }))
-    try {
-      const r = await api.commentRepliesGet(song, commentId, cur.cursor, dual ? platform : undefined)
-      if (r.ok && r.data) {
-        setReplies((p) => {
-          const old = p[commentId]
-          if (!old) return p
-          return {
-            ...p,
-            [commentId]: {
-              ...r.data!,
-              comments: [...old.comments, ...r.data!.comments]
-            }
-          }
-        })
-      }
-    } finally {
-      setReplyLoading((p) => ({ ...p, [commentId]: false }))
-    }
-  }
 
   const loadMore = async () => {
     if (!song || !data || loadingRef.current) return
@@ -245,8 +194,10 @@ export function CommentsBody({
 
   if (!song) return null
   const emptyText = order === 'hot' ? '还没有热门评论,可切换到「时间」查看最新' : '还没有评论'
+  /** 单选标签(平台/排序):固定白字,不随主题 */
+  const wLabel = (t: string): JSX.Element => <span style={{ color: C_TEXT }}>{t}</span>
   return (
-    <>
+    <div className={`${styles.commentShell} ${boxed ? styles.commentShellBoxed : ''}`}>
       {dual && (
         <div className={styles.sortRow} style={{ marginBottom: '4px' }}>
           <RadioGroup
@@ -254,9 +205,9 @@ export function CommentsBody({
             value={platform}
             onChange={(_, d) => setPlatform(d.value as CommentPlatform)}
           >
-            {canBili && <Radio value="bilibili" label="哔哩哔哩" />}
-            {canNe && <Radio value="netease" label="网易云" />}
-            {canQq && <Radio value="qq" label="QQ音乐" />}
+            {canBili && <Radio value="bilibili" label={wLabel('哔哩哔哩')} />}
+            {canNe && <Radio value="netease" label={wLabel('网易云')} />}
+            {canQq && <Radio value="qq" label={wLabel('QQ音乐')} />}
           </RadioGroup>
           <div style={{ flex: 1 }} />
           <span className={styles.muted}>评论来源</span>
@@ -268,8 +219,8 @@ export function CommentsBody({
           value={order}
           onChange={(_, d) => setOrder(d.value as CommentOrder)}
         >
-          <Radio value="hot" label="热度" />
-          <Radio value="time" label="时间" />
+          <Radio value="hot" label={wLabel('热度')} />
+          <Radio value="time" label={wLabel('时间')} />
         </RadioGroup>
         <div style={{ flex: 1 }} />
         {data && data.comments.length > 0 && (
@@ -279,7 +230,7 @@ export function CommentsBody({
           </span>
         )}
         {onClose && (
-          <Button appearance="subtle" size="small" icon={<DismissRegular />} onClick={onClose} title="关闭评论" />
+          <Button appearance="subtle" size="small" icon={<DismissRegular />} onClick={onClose} title="关闭评论" style={{ color: C_TEXT }} />
         )}
       </div>
       {loading && !data && (
@@ -287,9 +238,9 @@ export function CommentsBody({
           <Spinner />
         </div>
       )}
-      {error && <div className={styles.center}><Text>{error}</Text></div>}
+      {error && <div className={styles.center}><Text style={{ color: C_TEXT }}>{error}</Text></div>}
       {data && data.comments.length === 0 && !loading && (
-        <div className={styles.center}><Text>{emptyText}</Text></div>
+        <div className={styles.center}><Text style={{ color: C_TEXT }}>{emptyText}</Text></div>
       )}
       {data && data.comments.length > 0 && (
         <div
@@ -307,62 +258,21 @@ export function CommentsBody({
           }}
         >
           {data.comments.map((c) => (
-            <div key={c.id} className={styles.row} style={{ flexDirection: 'column', gap: 2 }}>
-              <div style={{ display: 'flex', gap: 10, alignItems: 'flex-start', width: '100%' }}>
-                <Cover url={c.avatar} size={36} radius={18} iconSize={14} />
-                <div className={styles.meta}>
-                  <div style={{ display: 'flex', gap: 8, alignItems: 'baseline' }}>
-                    <Text weight="semibold" size={300}>{c.user}</Text>
-                    <span className={styles.muted}>{timeAgo(c.time)}</span>
-                  </div>
-                  <Text size={300} style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
-                    {c.content}
-                  </Text>
-                  <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
-                    <span className={styles.muted}>♡ {c.likes}</span>
-                    {!!c.replyCount && c.replyCount > 0 && (
-                      <Button
-                        appearance="transparent"
-                        size="small"
-                        className={styles.replyToggle}
-                        onClick={() => void toggleReplies(c.id)}
-                      >
-                        {replies[c.id] ? '收起回复' : `${c.replyCount} 条回复`}
-                      </Button>
-                    )}
-                  </div>
+            <div key={c.id} className={styles.row}>
+              <Cover url={c.avatar} size={36} radius={18} iconSize={14} />
+              <div className={styles.meta}>
+                <div style={{ display: 'flex', gap: 8, alignItems: 'baseline' }}>
+                  <Text weight="semibold" size={300} style={{ color: C_TEXT }}>{c.user}</Text>
+                  <span className={styles.muted}>{timeAgo(c.time)}</span>
                 </div>
+                <Text
+                  size={300}
+                  style={{ color: C_TEXT, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}
+                >
+                  {c.content}
+                </Text>
+                <span className={styles.muted}>♡ {c.likes}</span>
               </div>
-              {replies[c.id] && (
-                <div className={styles.replyBox}>
-                  {replies[c.id].comments.map((r) => (
-                    <div key={r.id} className={styles.replyRow}>
-                      <Cover url={r.avatar} size={24} radius={12} iconSize={12} />
-                      <div className={styles.meta}>
-                        <div style={{ display: 'flex', gap: 6, alignItems: 'baseline' }}>
-                          <Text weight="semibold" size={200}>{r.user}</Text>
-                          <span className={styles.muted}>{timeAgo(r.time)}</span>
-                        </div>
-                        <Text size={200} style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
-                          {r.content}
-                        </Text>
-                        <span className={styles.muted}>♡ {r.likes}</span>
-                      </div>
-                    </div>
-                  ))}
-                  {replyLoading[c.id] && <Spinner size="extra-tiny" />}
-                  {replies[c.id].hasMore && !replyLoading[c.id] && (
-                    <Button
-                      appearance="transparent"
-                      size="small"
-                      className={styles.replyToggle}
-                      onClick={() => void loadMoreReplies(c.id)}
-                    >
-                      展开更多回复
-                    </Button>
-                  )}
-                </div>
-              )}
             </div>
           ))}
         </div>
@@ -401,7 +311,7 @@ export function CommentsBody({
           <Spinner size="tiny" />
         </div>
       )}
-    </>
+    </div>
   )
 }
 
@@ -415,7 +325,8 @@ export function CommentsDialog({ song, open, onClose }: { song: Song | null; ope
         <DialogBody>
           <DialogTitle>评论</DialogTitle>
           <DialogContent className={styles.dialogColumn}>
-            <CommentsBody song={song} active={open} />
+            {/* boxed:弹窗自带深色底,保证白字在任何主题下都可读 */}
+            <CommentsBody song={song} active={open} boxed />
           </DialogContent>
           <DialogActions>
             <Button appearance="primary" onClick={onClose}>关闭</Button>

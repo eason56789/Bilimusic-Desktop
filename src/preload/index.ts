@@ -12,7 +12,8 @@ import type {
   Playlist,
   DesktopApi,
   FloatLyricState,
-  FloatControlCmd
+  FloatControlCmd,
+  FloatMenuState
 } from '@shared/types'
 
 const invoke = async <T>(channel: string, ...args: unknown[]): Promise<T> =>
@@ -24,11 +25,22 @@ const api: DesktopApi = {
   neteaseSearch: (keyword, offset) => invoke('api:neteaseSearch', keyword, offset),
   neteaseSearchPlaylists: (keyword) => invoke('api:neteaseSearchPlaylists', keyword),
   neteaseSearchArtists: (keyword) => invoke('api:neteaseSearchArtists', keyword),
+  neteaseFindArtist: (name) => invoke('api:neteaseFindArtist', name),
   neteaseArtistSongs: (artistId) => invoke('api:neteaseArtistSongs', artistId),
   neteasePlaylistSongs: (id) => invoke('api:neteasePlaylistSongs', id),
   neteasePersonalized: () => invoke('api:neteasePersonalized'),
   qqSearch: (keyword, page) => invoke('api:qqSearch', keyword, page),
+  qqSearchPlaylists: (keyword, page) => invoke('api:qqSearchPlaylists', keyword, page),
+  qqSearchArtists: (keyword, page) => invoke('api:qqSearchArtists', keyword, page),
+  qqArtistSongs: (artistId) => invoke('api:qqArtistSongs', artistId),
   kugouSearch: (keyword, page) => invoke('api:kugouSearch', keyword, page),
+  kugouSearchPlaylists: (keyword, page) => invoke('api:kugouSearchPlaylists', keyword, page),
+  kugouSearchArtists: (keyword, page) => invoke('api:kugouSearchArtists', keyword, page),
+  kugouArtistSongs: (artistId) => invoke('api:kugouArtistSongs', artistId),
+  sourcePlaylistSongs: (platform, id) => invoke('api:sourcePlaylistSongs', platform, id),
+  libraryImportSourcePlaylist: (platform, id, name) =>
+    invoke('library:importSourcePlaylist', platform, id, name),
+  songClimax: (song) => invoke('api:songClimax', song),
   neteasePlaylistMeta: (id) => invoke('api:neteasePlaylistMeta', id),
   neteaseArtistDetail: (id) => invoke('api:neteaseArtistDetail', id),
 
@@ -42,8 +54,6 @@ const api: DesktopApi = {
   lyricsGet: (song: Song) => invoke('lyrics:get', song),
   pagesGet: (bvid: string) => invoke('pages:get', bvid),
   commentsGet: (song, offset, order, platform) => invoke('api:comments', song, offset, order, platform),
-  commentRepliesGet: (song, parentCommentId, cursor, platform) =>
-    invoke('api:commentReplies', song, parentCommentId, cursor, platform),
   songDetail: (song) => invoke('api:songDetail', song),
   appCopy: (text) => invoke('app:copy', text),
   appOpenExternal: (url) => invoke('app:openExternal', url),
@@ -129,6 +139,11 @@ const api: DesktopApi = {
     ipcRenderer.on('update:available', listener)
     return () => ipcRenderer.removeListener('update:available', listener)
   },
+  onUpdateLatest: (cb) => {
+    const listener = (_e: unknown, version: string) => cb(version)
+    ipcRenderer.on('update:latest', listener)
+    return () => ipcRenderer.removeListener('update:latest', listener)
+  },
   appBackupCreate: () => invoke('app:backupCreate'),
   appRestoreBackup: () => invoke('app:restoreBackup'),
   appFactoryReset: () => invoke<boolean>('app:factoryReset'),
@@ -152,6 +167,12 @@ const api: DesktopApi = {
 
   // 悬浮歌词窗
   floatShow: (show) => invoke<boolean>('float:show', show),
+  /** 悬浮窗接收"鼠标是否在窗口内"(主进程轮询;拖动区收不到 mousemove) */
+  onFloatHover: (cb) => {
+    const listener = (_e: unknown, inside: boolean) => cb(inside)
+    ipcRenderer.on('float:hover', listener)
+    return () => ipcRenderer.removeListener('float:hover', listener)
+  },
   floatPostState: (state) => ipcRenderer.send('float:state', state),
   onFloatState: (cb) => {
     const listener = (_e: unknown, state: FloatLyricState) => cb(state)
@@ -164,7 +185,37 @@ const api: DesktopApi = {
     ipcRenderer.on('float:control', listener)
     return () => ipcRenderer.removeListener('float:control', listener)
   },
-  floatOpenMain: () => invoke('float:openMain')
+  floatOpenMain: () => invoke('float:openMain'),
+  /** 缩放手柄拖动结果:主进程夹到工作区并落盘 */
+  floatSetBounds: (b) => ipcRenderer.send('float:setBounds', b),
+  /** 歌词过长时请求加宽(null=恢复基准宽度) */
+  floatFitWidth: (needed) => ipcRenderer.send('float:fitWidth', needed),
+  /** 恢复默认位置/尺寸(QQ音乐式底部居中) */
+  floatResetBounds: () => invoke('float:resetBounds'),
+  /** 打开悬浮窗设置菜单 */
+  floatMenuOpen: () => ipcRenderer.send('float:menuOpen'),
+  floatMenuClose: () => ipcRenderer.send('float:menuClose'),
+  floatMenuGet: () => invoke('float:menuGet'),
+  /** 菜单窗接收主进程回推的最新设置(改完后菜单立即刷新,不用重开) */
+  onFloatMenuState: (cb) => {
+    const listener = (_e: unknown, s: FloatMenuState) => cb(s)
+    ipcRenderer.on('float:menuState', listener)
+    return () => ipcRenderer.removeListener('float:menuState', listener)
+  },
+  /** 菜单内改设置(主窗口统一落盘) */
+  floatMenuSet: (key, value) => ipcRenderer.send('float:menuSet', key, value),
+  /** 主窗口接收菜单设置变更 */
+  onFloatMenuSet: (cb) => {
+    const listener = (_e: unknown, p: { key: string; value: unknown }) => cb(p)
+    ipcRenderer.on('float:menuSet', listener)
+    return () => ipcRenderer.removeListener('float:menuSet', listener)
+  },
+
+  // 听歌识别
+  desktopSources: () => invoke<{ id: string; name: string }[]>('api:desktopSources'),
+  recognizeAudio: (wav) => invoke('api:recognizeAudio', wav),
+  getRecognizeToken: () => invoke<string>('api:getRecognizeToken'),
+  setRecognizeToken: (token) => invoke('api:setRecognizeToken', token)
 } as DesktopApi
 
 contextBridge.exposeInMainWorld('api', api)

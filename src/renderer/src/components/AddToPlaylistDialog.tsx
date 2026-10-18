@@ -10,8 +10,8 @@ import {
   Input,
   makeStyles,
   tokens
-} from '../ui/controls'
-import { AddRegular } from '../ui/icons'
+} from '@fluentui/react-components'
+import { AddRegular } from '@fluentui/react-icons'
 import type { Song } from '@shared/types'
 import { api } from '../lib/api'
 import { useStore } from '../store'

@@ -10,7 +10,7 @@ import { initFloat, showFloat, destroyFloatWindow } from './float'
 import { setBiliCookie } from './api/bilibili'
 import { setNeteaseCookies, onNeteaseCookieChange } from './api/netease'
 import { setNeteaseCookieStore } from './store'
-import { checkUpdateAvailable } from './update'
+import { checkUpdateDetailed } from './update'
 
 // 防御:从 ZCode 等 Electron 宿主内启动时会继承宿主的 CHROME_CRASHPAD_PIPE_NAME,
 // 渲染进程会去连宿主的崩溃服务管道并卡死(表现为导航永不完成/窗口永不显示)。
@@ -193,15 +193,26 @@ app.whenReady().then(() => {
   // 记住上次的悬浮歌词窗状态
   if (getStore().settings.floatLyric) showFloat(true)
 
-  // 启动自动检查更新:窗口就绪后延迟检查,发现新版本推给渲染层弹窗
-  // (延迟 4s 避开启动高峰;失败静默不影响使用)
+  // 启动自动检查更新:窗口就绪后延迟检查
+  // 有更高版本 → 推 update:available(渲染层弹更新窗口)
+  // 已是最新 / 检查失败 → 推 update:latest 由渲染层右下角提示
+  // (延迟 4s 避开启动高峰)
   setTimeout(() => {
-    checkUpdateAvailable()
-      .then((info) => {
-        if (!info) return
-        if (getStore().settings.skippedUpdateVersion === info.version) return
+    void checkUpdateDetailed()
+      .then((r) => {
         const win = mainWindow
-        if (win && !win.isDestroyed()) win.webContents.send('update:available', info)
+        if (!win || win.isDestroyed()) return
+        if (r.status === 'update') {
+          // 用户已忽略该版本则只提示"已是最新",不再弹窗
+          if (getStore().settings.skippedUpdateVersion === r.info.version) return
+          win.webContents.send('update:available', r.info)
+          return
+        }
+        if (r.status === 'latest') {
+          win.webContents.send('update:latest', r.version)
+          return
+        }
+        win.webContents.send('update:latest', '')
       })
       .catch(() => {})
   }, 4000)
@@ -225,8 +236,14 @@ app.on('before-quit', () => {
 
 nativeTheme.on('updated', () => {
   for (const win of BrowserWindow.getAllWindows()) {
-    win.setTitleBarOverlay({
-      symbolColor: nativeTheme.shouldUseDarkColors ? '#ffffff' : '#1b1b1b'
-    })
+    // 悬浮歌词窗/设置菜单是无边框透明窗,没有标题栏 overlay,调用会抛异常
+    if (win.isDestroyed()) continue
+    try {
+      win.setTitleBarOverlay({
+        symbolColor: nativeTheme.shouldUseDarkColors ? '#ffffff' : '#1b1b1b'
+      })
+    } catch {
+      /* 无标题栏窗口忽略 */
+    }
   }
 })

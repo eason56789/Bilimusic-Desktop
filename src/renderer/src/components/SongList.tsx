@@ -1,4 +1,4 @@
-/** 通用歌曲列表(搜索结果/歌单/最近播放共用):双击播放 + 右键/更多菜单 + 多选模式 */
+/** 通用歌曲列表(搜索结果/歌单/最近播放共用):单击播放 + 右键/更多菜单 + 多选模式 */
 import { useEffect, useRef, useState } from 'react'
 import type { MouseEvent } from 'react'
 import {
@@ -12,7 +12,7 @@ import {
   makeStyles,
   tokens,
   Tooltip
-} from '../ui/controls'
+} from '@fluentui/react-components'
 import {
   MoreHorizontalRegular,
   PlayRegular,
@@ -23,7 +23,7 @@ import {
   SelectAllOnRegular,
   FolderAddRegular,
   ListRegular
-} from '../ui/icons'
+} from '@fluentui/react-icons'
 import type { Song } from '@shared/types'
 import { useStore } from '../store'
 import { Cover } from './Cover'
@@ -31,6 +31,7 @@ import { AddToPlaylistDialog } from './AddToPlaylistDialog'
 import { api } from '../lib/api'
 import { pagesToSongs } from '../lib/pages'
 import { badgeOf } from '../lib/sourceBadge'
+import { formatCount } from '../lib/format'
 import { toast, toastSuccess, toastError } from '../lib/toast'
 
 export function formatTime(sec: number): string {
@@ -50,7 +51,7 @@ const useStyles = makeStyles({
     gap: '12px',
     padding: '6px 10px',
     borderRadius: tokens.borderRadiusMedium,
-    cursor: 'pointer',
+    cursor: 'default',
     transition: 'background 0.15s ease',
     ':hover': { background: tokens.colorNeutralBackground3 }
   },
@@ -83,6 +84,12 @@ const useStyles = makeStyles({
     color: tokens.colorNeutralForeground3,
     fontSize: tokens.fontSizeBase200,
     flexShrink: 0
+  },
+  favCount: {
+    color: tokens.colorNeutralForeground3,
+    fontSize: tokens.fontSizeBase200,
+    flexShrink: 0,
+    whiteSpace: 'nowrap'
   },
   sourceBadge: {
     fontSize: tokens.fontSizeBase100,
@@ -140,6 +147,8 @@ export function SongList({
   const playQueue = useStore((s) => s.playQueue)
   const playSongNext = useStore((s) => s.playSongNext)
   const current = useStore((s) => s.current)
+  /** 音源加载中:屏蔽本列表的播放操作(此时 el 里还没有可播内容) */
+  const loading = useStore((s) => s.loading)
   const [addTarget, setAddTarget] = useState<Song[] | null>(null)
   const [ctxMenu, setCtxMenu] = useState<CtxMenuState | null>(null)
   const ctxAnchorRef = useRef<HTMLSpanElement>(null)
@@ -177,8 +186,14 @@ export function SongList({
   const selSongs = songs.filter((s) => selected.has(s.id))
   const allSelected = songs.length > 0 && selSongs.length === songs.length
 
-  /** 立即播放 */
-  const playNow = (index: number) => playQueue(songs, index)
+  /** 立即播放(音源加载中忽略点击,避免与新音源解析互相打断) */
+  const playNow = (index: number) => {
+    if (loading) {
+      toast('音源加载中', '请等当前歌曲加载完成')
+      return
+    }
+    playQueue(songs, index)
+  }
   /** 下一首播放 */
   const playNext = (song: Song) => playSongNext(song)
   /** 播放全部分P:拉取分P列表铺满队列,从当前P开始 */
@@ -328,15 +343,22 @@ export function SongList({
               >
                 {badgeOf(song.source).label}
               </span>
+              {/* 收藏数(酷狗搜索结果等平台提供的歌曲收藏量) */}
+              {song.favCount ? (
+                <Tooltip content={`收藏数 ${song.favCount.toLocaleString()}`} relationship="label">
+                  <span className={styles.favCount}>♡ {formatCount(song.favCount)}</span>
+                </Tooltip>
+              ) : null}
               <span className={styles.duration}>{formatTime(song.duration)}</span>
               {!selMode && (
-                // 行点击即播放,故操作按钮需阻断冒泡,避免误触播放
+                // 行内操作按钮/菜单:阻止冒泡,避免连带触发整行的"单击播放"
                 <>
-                  <Tooltip content="立即播放" relationship="label">
+                  <Tooltip content={loading ? '音源加载中…' : '立即播放'} relationship="label">
                     <Button
                       appearance="subtle"
                       size="small"
                       icon={<PlayRegular />}
+                      disabled={loading}
                       onClick={(e) => {
                         e.stopPropagation()
                         playNow(i)

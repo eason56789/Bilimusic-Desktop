@@ -31,6 +31,8 @@ export interface Song {
   kugouMixId?: string
   /** 酷狗 albumid(取流所需) */
   kugouAlbumId?: string
+  /** 收藏数(平台搜索接口返回:酷狗 OwnerCount;其余平台无公开字段时为 undefined) */
+  favCount?: number
 }
 
 export interface Playlist {
@@ -142,16 +144,22 @@ export interface Settings {
   }
   /** 悬浮歌词小窗(独立置顶小窗,主窗口推送播放状态) */
   floatLyric: boolean
+  /** 悬浮歌词窗已锁定(锁定后窗口鼠标穿透,不挡下层操作) */
+  floatLyricLocked: boolean
   /** 悬浮歌词窗位置与尺寸(拖动/缩放后记忆) */
   floatLyricBounds?: { x: number; y: number; width: number; height: number }
+  /** 悬浮窗位置/尺寸布局版本(2=QQ音乐式底部居中默认布局;旧存档一次性重置) */
+  floatLyricBoundsVersion?: number
+  /** 悬浮窗字号缩放 0.7~1.6(1=默认) */
+  floatFontScale: number
+  /** 悬浮窗显示翻译歌词 */
+  floatShowTrans: boolean
+  /** 悬浮窗双行显示:翻译缺失时用下一句占位 */
+  floatShowNextLine: boolean
   /** 关闭主窗口行为:每次询问 / 后台运行(隐藏到托盘,音乐继续) / 直接退出 */
   closeBehavior: 'ask' | 'tray' | 'quit'
-  /** 界面样式:经典 Fluent / Material 3 Expressive */
-  uiStyle: 'fluent' | 'md3'
-  /** M3 配色变体(源色经 HCT 派生出全套色彩角色时采用的 scheme) */
-  md3Variant?: 'expressive' | 'tonalSpot' | 'vibrant' | 'neutral' | 'monochrome' | 'rainbow' | 'fruitSalad' | 'content' | 'fidelity'
-  /** M3 对比度调级 -1 ~ 1(0 为标准,正值提高明暗对比) */
-  md3Contrast?: number
+  /** 进度条上显示高潮点(副歌段)标记 */
+  showChorusMarks: boolean
   /** 当前歌词不透明度 0.3~1(对齐手机端) */
   lyricAlphaCurrent: number
   /** 非当前歌词不透明度 0.05~1(对齐手机端) */
@@ -162,6 +170,8 @@ export interface Settings {
   neteaseFallback: boolean
   /** 已忽略更新的版本号(启动检查到该版本不再提示) */
   skippedUpdateVersion?: string
+  /** 听歌识别 AudD API Token(audd.io 免费注册;空=未启用识别) */
+  songRecognizeToken?: string
 }
 
 /** 网易云歌单元信息(详情页展示) */
@@ -213,30 +223,73 @@ export interface UpdateInfo {
   publishedAt?: string
 }
 
+/**
+ * 更新检查结果(三态):
+ * - update:发现更高版本,info 为版本详情(渲染层弹更新窗口)
+ * - latest:已是最新(渲染层右下角提示)
+ * - error:检查失败(网络/接口异常,渲染层如实提示失败原因)
+ */
+export type UpdateCheckResult =
+  | { status: 'update'; info: UpdateInfo }
+  | { status: 'latest'; version: string }
+  | { status: 'error'; message: string }
+
 /** 悬浮歌词窗状态载荷(主窗口渲染层 → 悬浮窗) */
 export interface FloatLyricState {
   hasCurrent: boolean
   title: string
   artist: string
   playing: boolean
+  /** 音源加载中(小窗播放键禁用) */
+  loading: boolean
   /** 当前歌词行文本(前奏时为空) */
   lineText: string
-  /** 下一句歌词(预告) */
+  /** 当前行逐字时间(ms,与 lineText 等长):小窗逐字上色(已唱=金/未唱=蓝) */
+  charTimes?: number[] | null
+  /** 当前行起止(ms):逐字推进窗口 */
+  lineStartMs?: number
+  lineEndMs?: number
+  /** 当前行翻译(双语显示;无翻译时为空) */
+  transText?: string
+  /** 下一句歌词(无翻译时作为预告行) */
   nextText: string
   lineIndex: number
   lineCount: number
+  /** 推送时的播放位置(ms,已含提前量;悬浮窗按 pushedAt 自行插值) */
+  posMs?: number
+  /** 推送时刻(Date.now()):悬浮窗据此平滑插值,避免 400ms 一跳 */
+  pushedAt?: number
+  /** 播放倍速(插值用) */
+  rate?: number
+  /** 静音态(小窗静音按钮图标) */
+  muted?: boolean
+  /** 悬浮窗已锁定(锁定后鼠标穿透/不可拖动) */
+  locked?: boolean
+  /** 字号缩放(设置项 floatFontScale) */
+  fontScale?: number
+  /** 显示翻译行 */
+  showTrans?: boolean
+  /** 翻译缺失时用下一句占位 */
+  showNextLine?: boolean
   dark: boolean
   accent: string
-  /** 界面样式:悬浮窗与主窗口保持一致 */
-  uiStyle?: 'fluent' | 'md3'
-  /** MD3 配色变体 */
-  m3Variant?: string
-  /** MD3 对比度 -1~1 */
-  m3Contrast?: number
 }
 
 /** 悬浮歌词窗 → 主窗口的控制指令 */
-export type FloatControlCmd = 'toggle' | 'prev' | 'next' | 'hide'
+export type FloatControlCmd =
+  | 'toggle'
+  | 'prev'
+  | 'next'
+  | 'hide'
+  /** 静音开关 */
+  | 'mute'
+  /** 上一句 / 下一句歌词(定位到该句起始) */
+  | 'prevLine'
+  | 'nextLine'
+  /** 锁定/解锁悬浮窗(锁定后鼠标穿透,避免挡操作) */
+  | 'lock'
+  /** 从悬浮窗唤起主窗口 */
+  | 'openMain'
 
 export interface UserProfile {
   uid: number
@@ -283,6 +336,8 @@ export interface LyricLine {
   wordTimes?: number[]
   /** KTV 逐字分段(网易 YRC),有则全屏页按字高亮 */
   words?: { text: string; timeMs: number }[]
+  /** 翻译行(网易云 tlyric,按时间对齐;悬浮歌词窗双语显示) */
+  trans?: string
 }
 
 export interface LyricsResult {
@@ -312,22 +367,12 @@ export interface CommentItem {
   content: string
   time: number
   likes: number
-  /** 楼中楼条数(网易云 showFloorComment.replyCount / B站 rcount);0 表示无回复 */
-  replyCount?: number
 }
 
 export interface CommentsResult {
   total: number
   hasMore: boolean
   comments: CommentItem[]
-}
-
-/** 楼中楼(二级回复)结果;cursor 为网易云 time 游标(-1 表示第一页) */
-export interface CommentRepliesResult {
-  comments: CommentItem[]
-  hasMore: boolean
-  total: number
-  cursor: number
 }
 
 /** 评论排序:热度(B站综合/点赞,网易云热门评论) / 时间(最新在前) */
@@ -342,6 +387,10 @@ export interface NeteasePlaylistBrief {
   coverUrl?: string
   count: number
   creator: string
+  /** 播放量(搜索接口返回) */
+  playCount?: number
+  /** 收藏数(搜索接口 bookCount:收藏该歌单的人数) */
+  favCount?: number
 }
 
 export interface NeteaseArtistBrief {
@@ -349,6 +398,49 @@ export interface NeteaseArtistBrief {
   name: string
   avatar?: string
   musicCount?: number
+}
+
+/** 平台歌单简要信息(QQ音乐 / 酷狗 搜索结果) */
+export interface SourcePlaylistBrief {
+  /** 远端歌单 id(QQ=disstid,酷狗=specialid) */
+  id: string
+  name: string
+  coverUrl?: string
+  /** 歌曲数 */
+  count: number
+  creator?: string
+  /** 播放量(平台提供时) */
+  playCount?: number
+  /** 收藏数(平台提供时) */
+  favCount?: number
+}
+
+/** 平台歌手简要信息(QQ音乐 / 酷狗 搜索结果) */
+export interface SourceArtistBrief {
+  /** QQ=歌手 mid,酷狗=singerid */
+  id: string
+  name: string
+  avatar?: string
+  musicCount?: number
+}
+
+/** 平台歌单详情(预览/导入用) */
+export interface SourcePlaylistDetail {
+  name: string
+  coverUrl?: string
+  description?: string
+  creator?: string
+  playCount?: number
+  favCount?: number
+  songs: Song[]
+}
+
+/** 进度条高潮点(点标记;进度条上以圆点呈现) */
+export interface HighlightPoint {
+  /** 高潮起始毫秒(进度条上圆点位置) */
+  timeMs: number
+  /** 数据来源 */
+  kind?: 'climax' | 'chorus'
 }
 
 export interface ApiResponse<T> {
@@ -364,13 +456,40 @@ export interface DesktopApi {
   neteaseSearch(keyword: string, offset: number): Promise<ApiResponse<NeteaseSearchResult>>
   neteaseSearchPlaylists(keyword: string): Promise<ApiResponse<NeteasePlaylistBrief[]>>
   neteaseSearchArtists(keyword: string): Promise<ApiResponse<NeteaseArtistBrief[]>>
+  /** 按歌手名解析网易云歌手 id(全屏播放页点歌手名打开主页) */
+  neteaseFindArtist(name: string): Promise<ApiResponse<number | null>>
   neteaseArtistSongs(artistId: number): Promise<ApiResponse<Song[]>>
   neteasePlaylistSongs(id: number): Promise<ApiResponse<Song[]>>
   neteasePersonalized(): Promise<ApiResponse<NeteasePlaylistBrief[]>>
   /** QQ音乐搜索 */
   qqSearch(keyword: string, page: number): Promise<ApiResponse<Song[]>>
+  /** QQ音乐歌单搜索 */
+  qqSearchPlaylists(keyword: string, page: number): Promise<ApiResponse<SourcePlaylistBrief[]>>
+  /** QQ音乐歌手搜索 */
+  qqSearchArtists(keyword: string, page: number): Promise<ApiResponse<SourceArtistBrief[]>>
+  /** QQ音乐歌手热门歌曲(artistId = 歌手 mid) */
+  qqArtistSongs(artistId: string): Promise<ApiResponse<Song[]>>
   /** 酷狗搜索 */
   kugouSearch(keyword: string, page: number): Promise<ApiResponse<Song[]>>
+  /** 酷狗歌单搜索 */
+  kugouSearchPlaylists(keyword: string, page: number): Promise<ApiResponse<SourcePlaylistBrief[]>>
+  /** 酷狗歌手搜索 */
+  kugouSearchArtists(keyword: string, page: number): Promise<ApiResponse<SourceArtistBrief[]>>
+  /** 酷狗歌手热门歌曲(artistId = singerid) */
+  kugouArtistSongs(artistId: string): Promise<ApiResponse<Song[]>>
+  /** 平台歌单详情(QQ音乐 dissid / 酷狗 specialid) */
+  sourcePlaylistSongs(
+    platform: 'qq' | 'kugou',
+    id: string
+  ): Promise<ApiResponse<SourcePlaylistDetail>>
+  /** 把平台歌单导入为本地歌单 */
+  libraryImportSourcePlaylist(
+    platform: 'qq' | 'kugou',
+    id: string,
+    name?: string
+  ): Promise<ApiResponse<{ id: string; name: string; count: number }>>
+  /** 进度条高潮点:酷狗原生 climax_info(无则为 null,渲染层回退歌词副歌检测) */
+  songClimax(song: Song): Promise<HighlightPoint[] | null>
   /** 网易云歌单元信息(描述/播放量/创建时间等) */
   neteasePlaylistMeta(id: number): Promise<ApiResponse<NeteasePlaylistMeta>>
   /** 网易云歌手详情(简介/粉丝数等) */
@@ -387,13 +506,6 @@ export interface DesktopApi {
     order?: CommentOrder,
     platform?: CommentPlatform
   ): Promise<ApiResponse<CommentsResult>>
-  /** 楼中楼(网易云二级回复);cursor 传上一页返回的 cursor,首屏传 -1 */
-  commentRepliesGet(
-    song: Song,
-    parentCommentId: string,
-    cursor?: number,
-    platform?: CommentPlatform
-  ): Promise<ApiResponse<CommentRepliesResult>>
   songDetail(song: Song): Promise<ApiResponse<Record<string, string>>>
   // 应用操作
   appCopy(text: string): Promise<void>
@@ -476,10 +588,12 @@ export interface DesktopApi {
   appClearCache(): Promise<number>
   appVersion(): Promise<{ version: string; electron: string; platform: string }>
   appPickLocalAudio(): Promise<string[]>
-  /** 检查 GitHub release 是否有新版本(启动时自动调用;返回 null = 已是最新/检查失败) */
-  checkUpdate(): Promise<UpdateInfo | null>
+  /** 检查 GitHub release 版本(返回三态:有更新 / 已最新 / 检查失败) */
+  checkUpdate(): Promise<UpdateCheckResult>
   /** 主进程推送"发现新版本"(启动自动检查命中时) */
   onUpdateAvailable(cb: (info: UpdateInfo) => void): () => void
+  /** 主进程推送"已是最新版本"(每次启动检查后右下角提示) */
+  onUpdateLatest(cb: (version: string) => void): () => void
   windowMinimize(): void
   windowMaximizeToggle(): void
   windowClose(): void
@@ -492,6 +606,8 @@ export interface DesktopApi {
   // 悬浮歌词窗
   /** 创建/销毁悬浮歌词窗 */
   floatShow(show: boolean): Promise<boolean>
+  /** 悬浮窗接收"鼠标是否在窗口内"(主进程轮询;拖动区收不到 mousemove) */
+  onFloatHover(cb: (inside: boolean) => void): () => void
   /** 主窗口推送播放状态到悬浮窗 */
   floatPostState(state: FloatLyricState): void
   /** 悬浮窗接收状态(悬浮窗内注册) */
@@ -502,4 +618,47 @@ export interface DesktopApi {
   onFloatControl(cb: (cmd: FloatControlCmd) => void): () => void
   /** 从悬浮窗唤起主窗口 */
   floatOpenMain(): Promise<void>
+  /** 缩放手柄拖动结果(主进程夹到工作区并落盘) */
+  floatSetBounds(b: { x: number; y: number; width: number; height: number }): void
+  /** 歌词过长时请求加宽窗口(null=恢复基准宽度) */
+  floatFitWidth(needed: number | null): void
+  /** 恢复悬浮窗默认位置/尺寸 */
+  floatResetBounds(): Promise<void>
+  /** 打开/关闭悬浮窗设置菜单 */
+  floatMenuOpen(): void
+  floatMenuClose(): void
+  /** 菜单窗口读取当前悬浮窗设置 */
+  floatMenuGet(): Promise<FloatMenuState>
+  /** 菜单窗接收主进程回推的最新设置(改完后菜单立即刷新) */
+  onFloatMenuState(cb: (s: FloatMenuState) => void): () => void
+  /** 菜单内修改设置(主窗口统一落盘) */
+  floatMenuSet(key: string, value: unknown): void
+  /** 主窗口接收菜单设置变更 */
+  onFloatMenuSet(cb: (p: { key: string; value: unknown }) => void): () => void
+  // ===== 听歌识别 =====
+  /** 枚举可捕获系统音频的桌面源(Windows loopback) */
+  desktopSources(): Promise<{ id: string; name: string }[]>
+  /** 发起识别:WAV 字节 → 歌名/歌手(未配置 token 时抛可读错误) */
+  recognizeAudio(wav: ArrayBuffer): Promise<RecognizedSong>
+  /** AudD API token 读写(设置页) */
+  getRecognizeToken(): Promise<string>
+  setRecognizeToken(token: string): Promise<void>
+}
+
+/** 听歌识别结果 */
+export interface RecognizedSong {
+  title: string
+  artist: string
+  album?: string
+  provider: 'audd'
+}
+
+/** 悬浮窗设置菜单读取的状态 */
+export interface FloatMenuState {
+  fontScale: number
+  showTrans: boolean
+  showNextLine: boolean
+  locked: boolean
+  /** 当前曲目名(菜单顶部展示,可为空) */
+  title: string
 }

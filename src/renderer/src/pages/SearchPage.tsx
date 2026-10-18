@@ -1,4 +1,4 @@
-/** 搜索页:B站视频 / 网易云歌曲·歌单·歌手 / QQ音乐 / 酷狗 多源搜索 */
+/** 搜索页:B站视频 / 网易云/QQ/酷狗 歌曲·歌单·歌手 多源搜索 */
 import { useEffect, useRef, useState } from 'react'
 import {
   Button,
@@ -13,7 +13,7 @@ import {
   Tooltip,
   makeStyles,
   tokens
-} from '../ui/controls'
+} from '@fluentui/react-components'
 import {
   SearchRegular,
   DismissRegular,
@@ -23,20 +23,26 @@ import {
   PlayRegular,
   ArrowLeftRegular,
   CloudArrowDownRegular,
-  HistoryRegular
-} from '../ui/icons'
+  HistoryRegular,
+  MicRegular
+} from '@fluentui/react-icons'
 import type {
   NeteaseArtistBrief,
   NeteasePlaylistBrief,
   NeteasePlaylistMeta,
   Playlist,
-  Song
+  Song,
+  SourceArtistBrief,
+  SourcePlaylistBrief,
+  SourcePlaylistDetail
 } from '@shared/types'
 import { api } from '../lib/api'
 import { useStore } from '../store'
 import { SongList } from '../components/SongList'
 import { Cover } from '../components/Cover'
+import { formatCount } from '../lib/format'
 import { toastError, toastSuccess } from '../lib/toast'
+import { captureSystemAudioWav } from '../lib/recognize'
 
 const useStyles = makeStyles({
   root: { display: 'flex', flexDirection: 'column', height: '100%', padding: '16px 24px 0', gap: '12px' },
@@ -94,12 +100,6 @@ const useStyles = makeStyles({
   }
 })
 
-function formatCount(n: number): string {
-  if (n >= 100000000) return `${(n / 100000000).toFixed(1)}亿`
-  if (n >= 10000) return `${(n / 10000).toFixed(1)}万`
-  return String(n ?? 0)
-}
-
 const BILI_ORDERS: { value: string; label: string }[] = [
   { value: 'totalrank', label: '综合排序' },
   { value: 'click', label: '最多播放' },
@@ -107,6 +107,13 @@ const BILI_ORDERS: { value: string; label: string }[] = [
   { value: 'dm', label: '最多弹幕' },
   { value: 'pubdate', label: '最新发布' }
 ]
+
+/** 搜索类型:歌曲 / 歌单 / 歌手(网易云、QQ音乐、酷狗 三类平台通用) */
+type SearchType = 'songs' | 'playlists' | 'artists'
+/** 平台歌单/歌手预览(QQ音乐、酷狗 搜索结果点开 → 整页预览) */
+type SourcePreview =
+  | { kind: 'playlist'; platform: 'qq' | 'kugou'; brief: SourcePlaylistBrief }
+  | { kind: 'artist'; platform: 'qq' | 'kugou'; brief: SourceArtistBrief }
 
 export function SearchPage() {
   const styles = useStyles()
@@ -117,8 +124,12 @@ export function SearchPage() {
   const [source, setSource] = useState<'bili' | 'netease' | 'qq' | 'kugou'>(
     () => useStore.getState().library?.settings.defaultSearchSource ?? 'netease'
   )
-  const [neType, setNeType] = useState<'songs' | 'playlists' | 'artists'>('songs')
+  /** 搜索类型(歌曲/歌单/歌手):网易云、QQ音乐、酷狗 共用同一选择 */
+  const [searchType, setSearchType] = useState<SearchType>('songs')
   const [query, setQuery] = useState('')
+  /** 听歌识别:空闲/录音中/识别中 */
+  const [recState, setRecState] = useState<'idle' | 'recording' | 'identifying'>('idle')
+  const [recTip, setRecTip] = useState('')
   const [biliResults, setBiliResults] = useState<Song[]>([])
   const [neResults, setNeResults] = useState<Song[]>([])
   const [neHasMore, setNeHasMore] = useState(false)
@@ -128,6 +139,10 @@ export function SearchPage() {
   const [kgPage, setKgPage] = useState(1)
   const [nePlaylists, setNePlaylists] = useState<NeteasePlaylistBrief[]>([])
   const [neArtists, setNeArtists] = useState<NeteaseArtistBrief[]>([])
+  const [qqPlaylists, setQqPlaylists] = useState<SourcePlaylistBrief[]>([])
+  const [qqArtists, setQqArtists] = useState<SourceArtistBrief[]>([])
+  const [kgPlaylists, setKgPlaylists] = useState<SourcePlaylistBrief[]>([])
+  const [kgArtists, setKgArtists] = useState<SourceArtistBrief[]>([])
   const [loading, setLoading] = useState(false)
   const [searched, setSearched] = useState(false)
   const [order, setOrder] = useState('totalrank')
@@ -138,6 +153,15 @@ export function SearchPage() {
   const [previewLoading, setPreviewLoading] = useState(false)
   const [previewMeta, setPreviewMeta] = useState<NeteasePlaylistMeta | null>(null)
   const [previewKw, setPreviewKw] = useState('')
+  /** QQ音乐/酷狗 歌单·歌手 预览(整页视图) */
+  const [srcPreview, setSrcPreview] = useState<SourcePreview | null>(null)
+  const [srcPreviewSongs, setSrcPreviewSongs] = useState<Song[] | null>(null)
+  /** 歌单详情(封面/播放量/收藏数/简介:搜索结果里常缺,详情接口更全) */
+  const [srcPreviewMeta, setSrcPreviewMeta] = useState<SourcePlaylistDetail | null>(null)
+  const [srcPreviewLoading, setSrcPreviewLoading] = useState(false)
+  const [srcPreviewImporting, setSrcPreviewImporting] = useState(false)
+  /** 音源加载中:预览页的播放键同样要屏蔽 */
+  const playerLoading = useStore((s) => s.loading)
   const searchTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const lastQuery = useRef('')
   const userPickedSource = useRef(false)
@@ -180,11 +204,11 @@ export function SearchPage() {
    * 执行搜索。srcOverride 用于"切换音源"场景:
    * setSource 是异步的,若直接读 state 会拿到旧值,导致切到网易云后仍搜 B 站。
    */
-  const doSearch = async (q: string, typeOverride?: typeof neType, srcOverride?: typeof source) => {
+  const doSearch = async (q: string, typeOverride?: SearchType, srcOverride?: typeof source) => {
     const keyword = q.trim()
     if (!keyword) return
     lastQuery.current = keyword
-    const neT = typeOverride ?? neType
+    const st = typeOverride ?? searchType
     const src = srcOverride ?? source
     setLoading(true)
     setSearched(true)
@@ -194,22 +218,42 @@ export function SearchPage() {
         const results = await api.biliSearch(keyword, 1, order)
         setBiliResults(filterLong(results))
       } else if (src === 'qq') {
-        const r = await api.qqSearch(keyword, 1)
-        if (r.ok && r.data) {
-          setQqResults(r.data)
-          setQqPage(1)
+        if (st === 'playlists') {
+          const r = await api.qqSearchPlaylists(keyword, 1)
+          if (r.ok && r.data) setQqPlaylists(r.data)
+          else toastError('QQ音乐歌单搜索失败', r.error)
+        } else if (st === 'artists') {
+          const r = await api.qqSearchArtists(keyword, 1)
+          if (r.ok && r.data) setQqArtists(r.data)
+          else toastError('QQ音乐歌手搜索失败', r.error)
         } else {
-          toastError('QQ音乐搜索失败', r.error)
+          const r = await api.qqSearch(keyword, 1)
+          if (r.ok && r.data) {
+            setQqResults(r.data)
+            setQqPage(1)
+          } else {
+            toastError('QQ音乐搜索失败', r.error)
+          }
         }
       } else if (src === 'kugou') {
-        const r = await api.kugouSearch(keyword, 1)
-        if (r.ok && r.data) {
-          setKgResults(r.data)
-          setKgPage(1)
+        if (st === 'playlists') {
+          const r = await api.kugouSearchPlaylists(keyword, 1)
+          if (r.ok && r.data) setKgPlaylists(r.data)
+          else toastError('酷狗歌单搜索失败', r.error)
+        } else if (st === 'artists') {
+          const r = await api.kugouSearchArtists(keyword, 1)
+          if (r.ok && r.data) setKgArtists(r.data)
+          else toastError('酷狗歌手搜索失败', r.error)
         } else {
-          toastError('酷狗搜索失败', r.error)
+          const r = await api.kugouSearch(keyword, 1)
+          if (r.ok && r.data) {
+            setKgResults(r.data)
+            setKgPage(1)
+          } else {
+            toastError('酷狗搜索失败', r.error)
+          }
         }
-      } else if (neT === 'songs') {
+      } else if (st === 'songs') {
         const r = await api.neteaseSearch(keyword, 0)
         if (r.ok && r.data) {
           setNeResults(r.data.songs)
@@ -217,7 +261,7 @@ export function SearchPage() {
         } else {
           toastError('网易云搜索失败', r.error)
         }
-      } else if (neT === 'playlists') {
+      } else if (st === 'playlists') {
         const r = await api.neteaseSearchPlaylists(keyword)
         if (r.ok && r.data) setNePlaylists(r.data)
         else toastError('搜索失败', r.error)
@@ -235,8 +279,31 @@ export function SearchPage() {
     }
   }
 
-  const doSearchWith = (q: string, type: typeof neType): void => {
+  const doSearchWith = (q: string, type: SearchType): void => {
     void doSearch(q, type)
+  }
+
+  /** 听歌识别:抓 8 秒系统声音 → AudD 识别 → 结果填入搜索框并搜索 */
+  const runRecognize = async (): Promise<void> => {
+    if (recState !== 'idle') return
+    setRecTip('')
+    setRecState('recording')
+    try {
+      const wav = await captureSystemAudioWav((s) => {
+        if (s === 'sending') setRecState('identifying')
+      })
+      setRecState('identifying')
+      const r = await api.recognizeAudio(await wav.arrayBuffer())
+      const q = [r.title, r.artist].filter(Boolean).join(' ')
+      setQuery(q)
+      toastSuccess('识别成功', `${r.title} - ${r.artist}`)
+      setRecState('idle')
+      void doSearch(q, 'songs', 'netease')
+    } catch (e) {
+      setRecState('idle')
+      setRecTip(e instanceof Error ? e.message : String(e))
+      toastError('听歌识别失败', e instanceof Error ? e.message : String(e))
+    }
   }
 
   // 打开歌单预览(附带网易云元信息:播放量/创建时间/标签)
@@ -277,6 +344,57 @@ export function SearchPage() {
   // 打开歌手主页(独立页面,替换旧的弹窗)
   const openArtistDetail = (a: NeteaseArtistBrief) => {
     useStore.getState().openArtistPage(a.id)
+  }
+
+  /** 打开 QQ音乐/酷狗 歌单·歌手预览(整页视图,同网易云歌单预览布局) */
+  const openSourcePreview = async (p: SourcePreview) => {
+    setSrcPreview(p)
+    setSrcPreviewSongs(null)
+    setSrcPreviewMeta(null)
+    setSrcPreviewLoading(true)
+    setPreviewKw('')
+    try {
+      if (p.kind === 'playlist') {
+        const r = await api.sourcePlaylistSongs(p.platform, p.brief.id)
+        if (r.ok && r.data) {
+          setSrcPreviewSongs(r.data.songs)
+          setSrcPreviewMeta(r.data)
+        } else {
+          toastError('获取歌单失败', r.error)
+        }
+      } else {
+        const r =
+          p.platform === 'qq'
+            ? await api.qqArtistSongs(p.brief.id)
+            : await api.kugouArtistSongs(p.brief.id)
+        if (r.ok && r.data) setSrcPreviewSongs(r.data)
+        else toastError('获取歌手歌曲失败', r.error)
+      }
+    } finally {
+      setSrcPreviewLoading(false)
+    }
+  }
+
+  /** 把 QQ/酷狗 歌单导入为本地歌单 */
+  const importSourcePlaylist = async () => {
+    if (!srcPreview || srcPreview.kind !== 'playlist') return
+    setSrcPreviewImporting(true)
+    try {
+      const r = await api.libraryImportSourcePlaylist(
+        srcPreview.platform,
+        srcPreview.brief.id,
+        srcPreview.brief.name
+      )
+      if (r.ok && r.data) {
+        await refresh()
+        toastSuccess('歌单已导入', `${r.data.name} · ${r.data.count} 首`)
+        setSrcPreview(null)
+      } else {
+        toastError('导入失败', r.error)
+      }
+    } finally {
+      setSrcPreviewImporting(false)
+    }
   }
 
   /** QQ/酷狗结果"加载更多" */
@@ -351,9 +469,10 @@ export function SearchPage() {
     if (lastQuery.current) void doSearch(lastQuery.current, undefined, src)
   }
 
-  // 主页:网易云推荐歌单
+  // 主页:网易云推荐歌单 + 推荐歌曲(与手机端首页一致,歌单与歌曲并存)
   const [focusHist, setFocusHist] = useState(false)
   const [recList, setRecList] = useState<NeteasePlaylistBrief[]>([])
+  const [recSongs, setRecSongs] = useState<Song[]>([])
   // 加载完成标记:失败时也要结束转圈,否则 Spinner 永远转下去
   const [recLoaded, setRecLoaded] = useState(false)
   useEffect(() => {
@@ -364,6 +483,13 @@ export function SearchPage() {
       })
       .catch(() => {})
       .finally(() => setRecLoaded(true))
+    // 推荐歌曲:按"热歌"关键词搜索(匿名可用,与手机端一致)
+    api
+      .neteaseSearch('热歌', 0)
+      .then((r) => {
+        if (r.ok && r.data) setRecSongs((r.data.songs ?? []).slice(0, 12))
+      })
+      .catch(() => {})
   }, [])
 
   const clearHistory = async () => {
@@ -374,6 +500,117 @@ export function SearchPage() {
   const removeHistory = async (q: string) => {
     await api.libraryRemoveSearchHistory(q)
     await refresh()
+  }
+
+  // ===== QQ音乐 / 酷狗 歌单·歌手 预览(整页) =====
+  if (srcPreview) {
+    const brief = srcPreview.brief
+    const isPlaylist = srcPreview.kind === 'playlist'
+    const pl = isPlaylist ? (brief as SourcePlaylistBrief) : null
+    const ar = !isPlaylist ? (brief as SourceArtistBrief) : null
+    const platformName = srcPreview.platform === 'qq' ? 'QQ音乐' : '酷狗'
+    const coverUrl = pl ? (pl.coverUrl ?? srcPreviewMeta?.coverUrl) : ar?.avatar
+    const count = pl ? pl.count || srcPreviewMeta?.songs.length || 0 : undefined
+    const creator = pl ? (pl.creator || srcPreviewMeta?.creator) : undefined
+    const playCount = pl ? (pl.playCount ?? srcPreviewMeta?.playCount) : undefined
+    const favCount = pl ? (pl.favCount ?? srcPreviewMeta?.favCount) : undefined
+    const metaText = pl
+      ? [
+          `${count} 首`,
+          creator,
+          playCount ? `播放 ${formatCount(playCount)}` : '',
+          favCount ? `收藏 ${formatCount(favCount)}` : ''
+        ]
+          .filter(Boolean)
+          .join(' · ')
+      : [`${platformName}歌手`, ar?.musicCount ? `${ar.musicCount} 首作品` : ''].filter(Boolean).join(' · ')
+    const filtered = srcPreviewSongs
+      ? previewKw.trim()
+        ? srcPreviewSongs.filter((s) => {
+            const q = previewKw.trim().toLowerCase()
+            return (
+              s.title.toLowerCase().includes(q) ||
+              s.artist.toLowerCase().includes(q) ||
+              (s.album ?? '').toLowerCase().includes(q)
+            )
+          })
+        : srcPreviewSongs
+      : null
+    return (
+      <div
+        key={`src-preview-${brief.id}`}
+        className={animCls}
+        style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}
+      >
+        <div className={styles.root}>
+          <div className={styles.headerRow} style={{ gap: 16 }}>
+            <Tooltip content="返回" relationship="label">
+              <Button
+                appearance="subtle"
+                icon={<ArrowLeftRegular />}
+                onClick={() => {
+                  setSrcPreview(null)
+                  setSrcPreviewSongs(null)
+                }}
+              />
+            </Tooltip>
+            <Cover
+              url={coverUrl}
+              size={72}
+              radius={isPlaylist ? 10 : 36}
+              iconSize={28}
+            />
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <Text size={600} weight="semibold" style={{ display: 'block', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                {brief.name}
+              </Text>
+              <Text size={300} style={{ color: tokens.colorNeutralForeground3 }}>
+                {metaText}
+              </Text>
+            </div>
+            <Button
+              appearance="primary"
+              icon={<PlayRegular />}
+              disabled={!filtered || filtered.length === 0 || playerLoading}
+              onClick={() => filtered && playQueue(filtered, 0)}
+            >
+              播放全部
+            </Button>
+            {isPlaylist && (
+              <Button
+                icon={srcPreviewImporting ? <Spinner size="tiny" /> : <CloudArrowDownRegular />}
+                disabled={srcPreviewImporting}
+                onClick={importSourcePlaylist}
+              >
+                {srcPreviewImporting ? '导入中…' : '导入为歌单'}
+              </Button>
+            )}
+          </div>
+          {srcPreviewSongs && srcPreviewSongs.length > 0 && (
+            <Input
+              placeholder="在列表内搜索歌曲(标题 / 歌手 / 专辑)"
+              value={previewKw}
+              onChange={(_, d) => setPreviewKw(d.value)}
+              contentBefore={<SearchRegular />}
+              style={{ maxWidth: 420 }}
+            />
+          )}
+          <div className={styles.results}>
+            {srcPreviewLoading && (
+              <div className={styles.empty}>
+                <Spinner />
+              </div>
+            )}
+            {filtered && filtered.length > 0 && <SongList songs={filtered} showAlbum />}
+            {filtered && filtered.length === 0 && (
+              <div className={styles.empty}>
+                <Text size={400}>{srcPreviewSongs?.length ? '没有匹配的歌曲' : '列表内容为空'}</Text>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    )
   }
 
   // ===== 歌单预览(全屏,同"我的歌单"详情布局,进出带过渡动画) =====
@@ -397,6 +634,9 @@ export function SearchPage() {
             <Text size={300} style={{ color: tokens.colorNeutralForeground3 }}>
               {previewPl.count} 首{previewPl.creator ? ` · ${previewPl.creator}` : ''}
               {previewMeta?.playCount != null ? ` · 播放 ${formatCount(previewMeta.playCount)}` : ''}
+              {previewMeta?.subscribedCount != null
+                ? ` · 收藏 ${formatCount(previewMeta.subscribedCount)}`
+                : ''}
               {previewMeta?.createTime
                 ? ` · 创建于 ${new Date(previewMeta.createTime).getFullYear()}-${String(new Date(previewMeta.createTime).getMonth() + 1).padStart(2, '0')}-${String(new Date(previewMeta.createTime).getDate()).padStart(2, '0')}`
                 : ''}
@@ -410,7 +650,7 @@ export function SearchPage() {
           <Button
             appearance="primary"
             icon={<PlayRegular />}
-            disabled={!previewSongs || previewSongs.length === 0}
+            disabled={!previewSongs || previewSongs.length === 0 || playerLoading}
             onClick={() => previewSongs && playQueue(previewSongs, 0)}
           >
             播放全部
@@ -518,6 +758,18 @@ export function SearchPage() {
             setTimeout(() => setFocusHist(false), 200)
           }}
         />
+        <Tooltip content={recTip || '听歌识别:抓取 8 秒系统声音识别正在播放的歌'} relationship="description">
+          <Button
+            size="large"
+            appearance="outline"
+            icon={recState === 'idle' ? <MicRegular /> : <Spinner size="tiny" />}
+            disabled={recState !== 'idle' || loading}
+            title={recState === 'recording' ? '正在聆听系统声音…' : recState === 'identifying' ? '识别中…' : '听歌识别'}
+            onClick={() => void runRecognize()}
+          >
+            {recState === 'recording' ? '聆听中' : recState === 'identifying' ? '识别中' : '识曲'}
+          </Button>
+        </Tooltip>
         <Button
           size="large"
           appearance="primary"
@@ -555,12 +807,12 @@ export function SearchPage() {
         <Tab value="kugou">酷狗</Tab>
       </TabList>
 
-      {source === 'netease' && (
+      {source !== 'bili' && (
         <TabList
-          selectedValue={neType}
+          selectedValue={searchType}
           onTabSelect={(_, d) => {
-            const t = d.value as typeof neType
-            setNeType(t)
+            const t = d.value as SearchType
+            setSearchType(t)
             if (lastQuery.current) {
               setQuery(lastQuery.current)
               doSearchWith(lastQuery.current, t)
@@ -600,6 +852,38 @@ export function SearchPage() {
       <div className={styles.results}>
         {!searched && !focusHist && library?.settings.uiModules.searchRecommend !== false && (
           <>
+            {/* 主页:推荐歌曲(与手机端首页一致,歌单与歌曲并存) */}
+            {recSongs.length > 0 && (
+              <>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                  <Text weight="semibold">推荐歌曲</Text>
+                  <Text size={200} style={{ color: tokens.colorNeutralForeground3 }}>
+                    单击播放
+                  </Text>
+                </div>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: 8, marginBottom: 8 }}>
+                  {recSongs.map((s) => (
+                    <div
+                      key={s.id}
+                      className={styles.chip}
+                      style={{ display: 'flex', gap: 10, alignItems: 'center', padding: 8, borderRadius: 10, boxSizing: 'border-box', cursor: 'pointer' }}
+                      onClick={() => playQueue([...recSongs], recSongs.indexOf(s))}
+                    >
+                      <Cover url={s.coverUrl} size={44} radius={6} iconSize={18} />
+                      <div style={{ minWidth: 0 }}>
+                        <Text size={300} style={{ display: 'block', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                          {s.title}
+                        </Text>
+                        <Text size={200} style={{ color: tokens.colorNeutralForeground3, display: 'block', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                          {s.artist}
+                        </Text>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </>
+            )}
+
             {/* 主页:网易云推荐歌单 */}
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <Text weight="semibold">网易云推荐</Text>
@@ -709,7 +993,7 @@ export function SearchPage() {
           )
         )}
 
-        {searched && source === 'netease' && neType === 'songs' && (
+        {searched && source === 'netease' && searchType === 'songs' && (
           <>
             {neResults.length > 0 ? (
               <SongList songs={neResults} showAlbum />
@@ -730,7 +1014,7 @@ export function SearchPage() {
           </>
         )}
 
-        {searched && source === 'netease' && neType === 'playlists' && (
+        {searched && source === 'netease' && searchType === 'playlists' && (
           <>
             {loading && (
               <div className={styles.empty}>
@@ -753,6 +1037,7 @@ export function SearchPage() {
                       </Text>
                       <Text size={200} style={{ color: tokens.colorNeutralForeground3 }}>
                         {p.count} 首{p.creator ? ` · ${p.creator}` : ''}
+                        {p.favCount ? ` · 收藏 ${formatCount(p.favCount)}` : ''}
                       </Text>
                     </div>
                   </div>
@@ -768,7 +1053,7 @@ export function SearchPage() {
           </>
         )}
 
-        {searched && source === 'qq' && (
+        {searched && source === 'qq' && searchType === 'songs' && (
           <>
             {qqResults.length > 0 ? (
               <SongList songs={qqResults} showAlbum />
@@ -789,7 +1074,83 @@ export function SearchPage() {
           </>
         )}
 
-        {searched && source === 'kugou' && (
+        {searched && source === 'qq' && searchType === 'playlists' && (
+          <>
+            {loading && (
+              <div className={styles.empty}>
+                <Spinner />
+              </div>
+            )}
+            {qqPlaylists.length > 0 ? (
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: 12 }}>
+                {qqPlaylists.map((p) => (
+                  <div
+                    key={p.id}
+                    className={styles.chip}
+                    style={{ display: 'flex', gap: 12, alignItems: 'center', padding: 12, borderRadius: 12, boxSizing: 'border-box' }}
+                    onClick={() => void openSourcePreview({ kind: 'playlist', platform: 'qq', brief: p })}
+                  >
+                    <Cover url={p.coverUrl} size={56} radius={8} iconSize={22} />
+                    <div style={{ minWidth: 0 }}>
+                      <Text weight="semibold" size={300} style={{ display: 'block', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                        {p.name}
+                      </Text>
+                      <Text size={200} style={{ color: tokens.colorNeutralForeground3 }}>
+                        {p.count} 首{p.creator ? ` · ${p.creator}` : ''}
+                        {p.playCount ? ` · 播放 ${formatCount(p.playCount)}` : ''}
+                        {p.favCount ? ` · 收藏 ${formatCount(p.favCount)}` : ''}
+                      </Text>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              !loading && (
+                <div className={styles.empty}>
+                  <Text size={400}>没有找到相关歌单</Text>
+                </div>
+              )
+            )}
+          </>
+        )}
+
+        {searched && source === 'qq' && searchType === 'artists' && (
+          <>
+            {loading && (
+              <div className={styles.empty}>
+                <Spinner />
+              </div>
+            )}
+            {qqArtists.length > 0 ? (
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: 12 }}>
+                {qqArtists.map((a) => (
+                  <div
+                    key={a.id}
+                    className={styles.chip}
+                    style={{ display: 'flex', flexDirection: 'column', gap: 8, alignItems: 'center', padding: 16, borderRadius: 12, boxSizing: 'border-box' }}
+                    onClick={() => void openSourcePreview({ kind: 'artist', platform: 'qq', brief: a })}
+                  >
+                    <Cover url={a.avatar} size={80} radius={40} iconSize={28} />
+                    <Text weight="semibold" size={300} style={{ textAlign: 'center' }}>
+                      {a.name}
+                    </Text>
+                    <Text size={100} style={{ color: tokens.colorNeutralForeground3 }}>
+                      QQ音乐歌手{a.musicCount ? ` · ${a.musicCount} 首` : ''}
+                    </Text>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              !loading && (
+                <div className={styles.empty}>
+                  <Text size={400}>没有找到相关歌手</Text>
+                </div>
+              )
+            )}
+          </>
+        )}
+
+        {searched && source === 'kugou' && searchType === 'songs' && (
           <>
             {kgResults.length > 0 ? (
               <SongList songs={kgResults} showAlbum />
@@ -810,7 +1171,83 @@ export function SearchPage() {
           </>
         )}
 
-        {searched && source === 'netease' && neType === 'artists' && (
+        {searched && source === 'kugou' && searchType === 'playlists' && (
+          <>
+            {loading && (
+              <div className={styles.empty}>
+                <Spinner />
+              </div>
+            )}
+            {kgPlaylists.length > 0 ? (
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: 12 }}>
+                {kgPlaylists.map((p) => (
+                  <div
+                    key={p.id}
+                    className={styles.chip}
+                    style={{ display: 'flex', gap: 12, alignItems: 'center', padding: 12, borderRadius: 12, boxSizing: 'border-box' }}
+                    onClick={() => void openSourcePreview({ kind: 'playlist', platform: 'kugou', brief: p })}
+                  >
+                    <Cover url={p.coverUrl} size={56} radius={8} iconSize={22} />
+                    <div style={{ minWidth: 0 }}>
+                      <Text weight="semibold" size={300} style={{ display: 'block', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                        {p.name}
+                      </Text>
+                      <Text size={200} style={{ color: tokens.colorNeutralForeground3 }}>
+                        {p.count} 首{p.creator ? ` · ${p.creator}` : ''}
+                        {p.playCount ? ` · 播放 ${formatCount(p.playCount)}` : ''}
+                        {p.favCount ? ` · 收藏 ${formatCount(p.favCount)}` : ''}
+                      </Text>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              !loading && (
+                <div className={styles.empty}>
+                  <Text size={400}>没有找到相关歌单</Text>
+                </div>
+              )
+            )}
+          </>
+        )}
+
+        {searched && source === 'kugou' && searchType === 'artists' && (
+          <>
+            {loading && (
+              <div className={styles.empty}>
+                <Spinner />
+              </div>
+            )}
+            {kgArtists.length > 0 ? (
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: 12 }}>
+                {kgArtists.map((a) => (
+                  <div
+                    key={a.id}
+                    className={styles.chip}
+                    style={{ display: 'flex', flexDirection: 'column', gap: 8, alignItems: 'center', padding: 16, borderRadius: 12, boxSizing: 'border-box' }}
+                    onClick={() => void openSourcePreview({ kind: 'artist', platform: 'kugou', brief: a })}
+                  >
+                    <Cover url={a.avatar} size={80} radius={40} iconSize={28} />
+                    <Text weight="semibold" size={300} style={{ textAlign: 'center' }}>
+                      {a.name}
+                    </Text>
+                    <Text size={100} style={{ color: tokens.colorNeutralForeground3 }}>
+                      酷狗歌手{a.musicCount ? ` · ${a.musicCount} 首` : ''}
+                    </Text>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              !loading && (
+                <div className={styles.empty}>
+                  <Text size={400}>没有找到相关歌手</Text>
+                </div>
+              )
+            )}
+          </>
+        )}
+
+        {searched && source === 'netease' && searchType === 'artists' && (
           <>
             {loading && (
               <div className={styles.empty}>

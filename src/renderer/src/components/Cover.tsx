@@ -1,5 +1,5 @@
 import { makeStyles, tokens } from '@fluentui/react-components'
-import { MusicNote2Regular } from '../ui/icons'
+import { MusicNote2Regular } from '@fluentui/react-icons'
 import { useState } from 'react'
 
 const useStyles = makeStyles({
@@ -47,28 +47,31 @@ export function resizeCoverUrl(url: string, size: number): string {
     return url.replace(/R\d+x\d+M000/, `R${q}x${q}M000`)
   }
   if (url.includes('kugou.com')) {
-    // 酷狗 CDN 尺寸段只认 stdmusic/{size}/ 与 softhead/{size}/(后面紧跟日期目录)。
-    // 旧正则会把日期目录也当尺寸替换成 /480/240/xxx.jpg —— CDN 不 404,而是返回一张
-    // 灰色占位图,于是列表里"看不到封面"。
     const q = snap([240, 480, 900])
+    // 酷狗封面路径形如 /{类别}/{尺寸?}/{日期目录}/{文件}(尺寸段在日期段之前)。
+    // 之前把"日期段"当成尺寸段替换,得到 stdmusic/480/240/xxx.jpg 这类非法路径,
+    // CDN 会回退成默认占位封面 → 列表里看着"没有封面"
+    if (/\{size\}/i.test(url)) return url.replace(/\{size\}/gi, String(q))
+    // 已有尺寸段:替换它(尺寸段紧跟类别名,后面一定是 8 位日期目录)
+    if (/\/\d{2,4}\/\d{8}\//.test(url)) return url.replace(/\/(\d{2,4})\/(\d{8})\//, `/${q}/$2/`)
+    // 无尺寸段:在日期目录前插入
+    if (/\/\d{8}\//.test(url)) return url.replace(/\/(\d{8})\//, `/${q}/$1/`)
+    // 结构无法识别:保持原图,宁可用大图也不要被 CDN 换成占位图
     return url
-      .replace(/\/(stdmusic|softhead)\/\d+\//, `/$1/${q}/`)
-      .replace('{size}', String(q))
   }
   return url
-}
-
-/** http 图片统一升到 https:自定义协议代理在 https 页面里更稳定,也避免证书/混合内容告警 */
-function toHttps(url: string): string {
-  return url.startsWith('http://') ? `https://${url.slice(7)}` : url
 }
 
 export function coverSrc(cover: string | null | undefined, thumbSize?: number): string | null {
   if (!cover) return null
   if (cover.startsWith('data:')) return cover
   if (cover.startsWith('bmedia://')) return cover
-  const target = thumbSize ? resizeCoverUrl(cover, thumbSize) : cover
-  return `bmedia://img/?url=${encodeURIComponent(toHttps(target))}`
+  let target = thumbSize ? resizeCoverUrl(cover, thumbSize) : cover
+  // 历史数据里可能残留 {size} 占位符(酷狗):原样请求会被 CDN 换成默认占位封面
+  if (/\{size\}/i.test(target)) {
+    target = target.replace(/\{size\}/gi, thumbSize ? '480' : '900')
+  }
+  return `bmedia://img/?url=${encodeURIComponent(target)}`
 }
 
 export function Cover({

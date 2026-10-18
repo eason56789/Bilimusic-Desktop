@@ -10,7 +10,7 @@ import {
   Title2,
   makeStyles,
   tokens
-} from '../ui/controls'
+} from '@fluentui/react-components'
 import {
   PersonVoiceRegular,
   CheckmarkCircleRegular,
@@ -22,7 +22,7 @@ import {
   WeatherSunnyRegular,
   WeatherMoonRegular,
   DarkThemeRegular
-} from '../ui/icons'
+} from '@fluentui/react-icons'
 import { useStore } from '../store'
 import { ACCENTS } from '../lib/theme'
 import brandIconUrl from '../assets/brand.png'
@@ -404,7 +404,7 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
               <CheckmarkCircleRegular style={{ fontSize: 72, color: '#34d399' }} />
               <Title1 style={{ color: '#fff' }}>准备就绪!</Title1>
               <Text style={{ color: 'rgba(255,255,255,0.75)', lineHeight: 1.7, maxWidth: 480 }}>
-                双击搜索结果即可开始播放。空格暂停、方向键快进/调音量、M 静音、L 打开全屏歌词。
+                单击搜索结果即可开始播放。空格暂停、方向键快进/调音量、M 静音、L 打开全屏歌词。
                 祝你听歌愉快!
               </Text>
             </div>

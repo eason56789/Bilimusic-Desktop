@@ -22,13 +22,11 @@ import {
   Text,
   makeStyles,
   tokens
-} from '../ui/controls'
-import { DeleteRegular, ColorRegular, InfoRegular, SettingsRegular, ArrowClockwiseRegular, SaveRegular } from '../ui/icons'
+} from '@fluentui/react-components'
+import { DeleteRegular, ColorRegular, InfoRegular, SettingsRegular, ArrowClockwiseRegular, SaveRegular } from '@fluentui/react-icons'
 import { api } from '../lib/api'
 import { useStore, applyEqSettings, getAudioElement, EQ_FREQS } from '../store'
 import { ACCENTS } from '../lib/theme'
-import { M3_VARIANTS, type M3Variant } from '../ui/md3/tokens'
-import { DEFAULT_M3_VARIANT } from '../ui/md3/theme'
 import { BiliLoginDialog, NeteaseLoginDialog } from '../components/LoginDialogs'
 import { PageLayout } from '../components/PageHeader'
 import { GithubLogo, BiliLogo } from '../components/BrandLogos'
@@ -75,10 +73,18 @@ export function SettingsPage() {
   const [version, setVersion] = useState('')
   const [cssDraft, setCssDraft] = useState('')
   const [checking, setChecking] = useState(false)
+  /** 听歌识别 token 草稿(点保存才落盘,避免每次按键都写文件) */
+  const [tokenInput, setTokenInput] = useState('')
 
   useEffect(() => {
     api.appVersion().then((v) => setVersion(`${v.version} (Electron ${v.electron})`))
+    void api.getRecognizeToken?.().then((t) => setTokenInput(t || ''))
   }, [])
+
+  const saveToken = async (): Promise<void> => {
+    await api.setRecognizeToken?.(tokenInput.trim())
+    toastSuccess('已保存', tokenInput.trim() ? '听歌识别已启用' : '已清空识别服务密钥')
+  }
 
   // 外部加载完成后同步草稿
   useEffect(() => {
@@ -211,45 +217,6 @@ export function SettingsPage() {
       {/* 外观 */}
       <div className={styles.section}>
         <SectionTitle>外观</SectionTitle>
-        <div className={styles.row}>
-          <Text size={300}>界面样式:</Text>
-          <RadioGroup
-            layout="horizontal"
-            value={s.uiStyle}
-            onChange={(_, d) => update('uiStyle', d.value as 'fluent' | 'md3')}
-          >
-            <Radio value="fluent" label="经典 Fluent" />
-            <Radio value="md3" label="Material 3 Expressive" />
-          </RadioGroup>
-        </div>
-        {/* MD3 专属:配色变体 + 对比度(对应 Material You 的 scheme variant / contrast) */}
-        {s.uiStyle === 'md3' && (
-          <div className={styles.row}>
-            <Text size={300}>配色变体:</Text>
-            <Dropdown
-              style={{ minWidth: '150px' }}
-              value={M3_VARIANTS.find((v) => v.value === (s.md3Variant ?? DEFAULT_M3_VARIANT))?.label}
-              selectedOptions={[s.md3Variant ?? DEFAULT_M3_VARIANT]}
-              onOptionSelect={(_, d) => update('md3Variant', d.optionValue as M3Variant)}
-            >
-              {M3_VARIANTS.map((v) => (
-                <Option key={v.value} value={v.value}>
-                  {v.label}
-                </Option>
-              ))}
-            </Dropdown>
-            <Text size={300}>对比度:</Text>
-            <Slider
-              style={{ minWidth: '180px' }}
-              min={-1}
-              max={1}
-              step={0.1}
-              value={s.md3Contrast ?? 0}
-              onChange={(_, d) => update('md3Contrast', d.value)}
-            />
-            <Text size={300}>{(s.md3Contrast ?? 0) > 0 ? `高 ${(s.md3Contrast ?? 0).toFixed(1)}` : (s.md3Contrast ?? 0) < 0 ? `低 ${(s.md3Contrast ?? 0).toFixed(1)}` : '标准'}</Text>
-          </div>
-        )}
         <RadioGroup
           layout="horizontal"
           value={s.theme}
@@ -259,6 +226,16 @@ export function SettingsPage() {
           <Radio value="light" label="浅色" />
           <Radio value="dark" label="深色" />
         </RadioGroup>
+
+        {/* 进度条高潮点 */}
+        <div className={styles.row}>
+          <Text size={300}>进度条高潮点标记:</Text>
+          <Switch
+            checked={s.showChorusMarks !== false}
+            label="显示副歌/高潮段"
+            onChange={(_, d) => update('showChorusMarks', d.checked)}
+          />
+        </div>
         <div className={styles.row}>
           <ColorRegular />
           <Text size={300}>主题色:</Text>
@@ -762,6 +739,34 @@ export function SettingsPage() {
 
       <Divider />
 
+      {/* 听歌识别 */}
+      <div className={styles.section}>
+        <SectionTitle>听歌识别</SectionTitle>
+        <div className={styles.row}>
+          <Text size={200} style={{ color: tokens.colorNeutralForeground3, maxWidth: 640 }}>
+            识别需要音频指纹服务。免费且无需账号的公开接口并不存在(在线识曲站都用服务端代理自己的密钥),
+            这里接官方 AudD:到 audd.io 免费注册拿 API Token 填进来即可,免费额度足够日常使用。
+          </Text>
+        </div>
+        <div className={styles.row}>
+          <Field label="AudD API Token" style={{ maxWidth: 460, width: '100%' }}>
+            <Input
+              type="password"
+              value={tokenInput}
+              placeholder="留空表示未启用听歌识别"
+              onChange={(_, d) => setTokenInput(d.value)}
+              contentAfter={
+                <Button size="small" appearance="subtle" onClick={() => void saveToken()}>
+                  保存
+                </Button>
+              }
+            />
+          </Field>
+        </div>
+      </div>
+
+      <Divider />
+
       {/* 下载 */}
       <div className={styles.section}>
         <SectionTitle>下载</SectionTitle>
@@ -861,11 +866,13 @@ export function SettingsPage() {
             onClick={async () => {
               setChecking(true)
               try {
-                const info = await api.checkUpdate()
-                if (info) {
-                  useStore.setState({ updateInfo: info })
+                const r = await api.checkUpdate()
+                if (r.status === 'update') {
+                  useStore.setState({ updateInfo: r.info })
+                } else if (r.status === 'latest') {
+                  toastSuccess('已是最新版本', `当前 v${r.version},未发现更高版本`)
                 } else {
-                  toastSuccess('已是最新版本', '未发现比当前更高的版本')
+                  toastError('检查更新失败', r.message)
                 }
               } catch (e) {
                 toastError('检查更新失败', String(e))

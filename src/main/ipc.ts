@@ -20,18 +20,20 @@ import type {
   PreparedAudio,
   Song,
   Settings,
-  UserProfile
+  UserProfile,
+  HighlightPoint
 } from '@shared/types'
 import * as bilibili from './api/bilibili'
 import * as netease from './api/netease'
 import * as qqmusic from './api/qqmusic'
 import * as kugou from './api/kugou'
 import { fetchPlaylistByLink } from './api/linkImport'
+import { fetchQqPlaylist, fetchKugouPlaylist } from './api/qqkugou'
 import { computeSyncPlan } from './syncDelta'
 import { getLyrics } from './api/lyrics'
 import { prepareAudio, coverProxyUrl, clearAudioCache, getCacheDir } from './audio'
 import { enqueueDownload, cancelDownload, removeDownload } from './downloads'
-import { checkUpdateAvailable } from './update'
+import { checkUpdateDetailed } from './update'
 import {
   getStore,
   saveStore,
@@ -59,8 +61,18 @@ import {
   getFloatWindow,
   forwardFloatState,
   forwardFloatControl,
-  openMainWindow
+  openMainWindow,
+  setFloatLocked,
+  applyUserBounds,
+  fitFloatWidth,
+  resetFloatBounds,
+  openFloatMenu,
+  closeFloatMenu,
+  forwardMenuSetting,
+  getFloatMenuState,
+  notifyFloatMenuState
 } from './float'
+import { recognizeAudio, getAuddToken, setAuddToken } from './api/recognize'
 import type { FloatLyricState, FloatControlCmd } from '@shared/types'
 import QRCode from 'qrcode'
 
@@ -120,16 +132,7 @@ function formatDuration(sec: number): string {
   return `${m}:${String(s).padStart(2, '0')}`
 }
 
-/** 大数字人性化:12345 → 1.2万,123456789 → 1.2亿 */
-function formatCount(n: number): string {
-  if (!isFinite(n) || n < 0) return '-'
-  if (n >= 100_000_000) return `${(n / 100_000_000).toFixed(1).replace(/\.0$/, '')}亿`
-  if (n >= 10_000) return `${(n / 10_000).toFixed(1).replace(/\.0$/, '')}万`
-  return String(n)
-}
-
-/** 解析粘贴的 B站 Cookie:支持裸值(SESSDATA=xxx; bili_jct=xxx)、多行、JSON 片段 */
-function parseBiliCookieString(raw: string): string | null {
+/** 解析粘贴的 B站 Cookie:支持裸值(SESSDATA=xxx; bili_jct=xxx)、多行、JSON 片段 */function parseBiliCookieString(raw: string): string | null {
   const text = String(raw ?? '').trim()
   if (!text) return null
   let src = text
@@ -171,6 +174,118 @@ function parseBiliCookieString(raw: string): string | null {
   return pairs.join('; ')
 }
 
+// ===== 跨平台同名曲匹配(评论/歌词兜底) =====
+
+/** 标题归一化:去掉括号后缀、标点与空白,便于比较同名曲 */
+function normalizeTitle(s: string): string {
+  return String(s ?? '')
+    .toLowerCase()
+    .replace(/[（(【\[][^）)】\]]*[）)】\]]/g, '')
+    .replace(/[\s\-_·,，.。!！?？'"“”‘’:;:、|/\\]/g, '')
+}
+
+/** 取第一顺位歌手名(多歌手用 / 、& 分隔) */
+function firstArtist(s: string): string {
+  return String(s ?? '')
+    .split(/[/、&,，]|\sfeat\.?/i)[0]
+    .trim()
+    .toLowerCase()
+}
+
+/** 翻唱/伴奏/片段等非原版标记:同名但带这些词的候选应降权 */
+const COVER_HINTS = [
+  'cover', '翻唱', '原唱', '伴奏', 'remix', 'dj', '片段', '女声', '男声', '吉他',
+  '钢琴', '纯音乐', '抖音', '加速', '慢速', '童声', '合唱', '清唱', 'demo', 'live版'
+]
+
+/** 候选匹配打分:标题相似 + 歌手一致 + 时长接近 - 非原版降权 */
+function scoreCandidate(src: Song, cand: Song): number {
+  const t1 = normalizeTitle(src.title)
+  const t2 = normalizeTitle(cand.title)
+  if (!t1 || !t2) return -1
+  let score = 0
+  if (t1 === t2) score += 60
+  else if (t2.includes(t1) || t1.includes(t2)) score += 35
+  const a1 = firstArtist(src.artist)
+  const a2 = firstArtist(cand.artist)
+  if (a1 && a2 && (a2.includes(a1) || a1.includes(a2))) score += 25
+  if (src.duration > 0 && cand.duration > 0) {
+    const d = Math.abs(cand.duration - src.duration)
+    if (d <= 3) score += 20
+    else if (d <= 10) score += 12
+    else if (d <= 30) score += 4
+    else if (d > 90) score -= 12
+  }
+  const raw = cand.title.toLowerCase()
+  const extra = t2.replace(t1, '')
+  if (COVER_HINTS.some((h) => extra.includes(h.toLowerCase()) || raw.includes(h))) score -= 28
+  return score
+}
+
+/** 从候选里挑最像原曲的一首(阈值内),失败返回 null */
+function pickBestMatch(src: Song, pool: Song[]): Song | null {
+  const usable = pool.filter((s) => s && s.title)
+  if (usable.length === 0) return null
+  let best = usable[0]
+  let bestScore = scoreCandidate(src, best)
+  for (const cand of usable.slice(1)) {
+    const sc = scoreCandidate(src, cand)
+    if (sc > bestScore) {
+      best = cand
+      bestScore = sc
+    }
+  }
+  return bestScore >= 25 ? best : null
+}
+
+/**
+ * 用「标题 歌手」在网易云找原曲(QQ/酷狗仅元数据歌曲的评论与歌词兜底)。
+ * 先用去掉括号后缀的干净标题搜索,再退回完整标题;最后按打分挑最像的。
+ */
+async function findNeteaseMatch(song: Song): Promise<Song | null> {
+  const clean = song.title.replace(/[（(【\[][^）)】\]]*[）)】\]]/g, ' ').replace(/\s+/g, ' ').trim()
+  const queries = [`${clean} ${song.artist}`.trim(), `${song.title} ${song.artist}`.trim(), clean || song.title]
+  const seen = new Set<string>()
+  const pool: Song[] = []
+  for (const q of queries) {
+    if (!q || seen.has(q)) continue
+    seen.add(q)
+    try {
+      const res = await netease.searchSongs(q, 20, 0)
+      for (const s of res.songs ?? []) {
+        if ((s.neteaseId ?? 0) > 0) pool.push(s)
+      }
+    } catch {
+      /* 换下一个查询 */
+    }
+    // 首个查询就能挑出高置信候选时直接返回,省一次搜索
+    const hit = pickBestMatch(song, pool)
+    if (hit && scoreCandidate(song, hit) >= 45) return hit
+  }
+  return pickBestMatch(song, pool)
+}
+
+/** 用「标题 歌手」在 QQ音乐找原曲(酷狗等歌曲的 QQ 评论兜底) */
+async function findQqMatch(song: Song): Promise<Song | null> {
+  const clean = song.title.replace(/[（(【\[][^）)】\]]*[）)】\]]/g, ' ').replace(/\s+/g, ' ').trim()
+  const queries = [`${clean} ${song.artist}`.trim(), `${song.title} ${song.artist}`.trim()]
+  const seen = new Set<string>()
+  const pool: Song[] = []
+  for (const q of queries) {
+    if (!q || seen.has(q)) continue
+    seen.add(q)
+    try {
+      const hits = await qqmusic.searchQqSongs(q, 1, 20)
+      pool.push(...hits)
+    } catch {
+      /* 换下一个查询 */
+    }
+    const hit = pickBestMatch(song, pool)
+    if (hit && scoreCandidate(song, hit) >= 45) return hit
+  }
+  return pickBestMatch(song, pool)
+}
+
 export function registerIpc(): void {
   // B站设备 cookie 合并后持久化(收藏夹/播放记录等接口需要 buvid3)
   onBiliCookieChange(setBiliCookieStore)
@@ -204,6 +319,13 @@ export function registerIpc(): void {
           musicCount: a.musicSize
         }))
       )
+    } catch (e) {
+      return err(e)
+    }
+  })
+  ipcMain.handle('api:neteaseFindArtist', async (_e, name: string) => {
+    try {
+      return ok(await netease.findArtistIdByName(name))
     } catch (e) {
       return err(e)
     }
@@ -243,11 +365,104 @@ export function registerIpc(): void {
       return err(e)
     }
   })
+  ipcMain.handle('api:qqSearchPlaylists', async (_e, keyword: string, page: number) => {
+    try {
+      return ok(await qqmusic.searchQqPlaylists(keyword, page, 20))
+    } catch (e) {
+      return err(e)
+    }
+  })
+  ipcMain.handle('api:qqSearchArtists', async (_e, keyword: string, page: number) => {
+    try {
+      return ok(await qqmusic.searchQqArtists(keyword, page, 20))
+    } catch (e) {
+      return err(e)
+    }
+  })
+  ipcMain.handle('api:qqArtistSongs', async (_e, artistId: string) => {
+    try {
+      return ok(await qqmusic.getQqArtistSongs(artistId, 1, 50))
+    } catch (e) {
+      return err(e)
+    }
+  })
   ipcMain.handle('api:kugouSearch', async (_e, keyword: string, page: number) => {
     try {
       return ok(await kugou.searchKugouSongs(keyword, page, 30))
     } catch (e) {
       return err(e)
+    }
+  })
+  ipcMain.handle('api:kugouSearchPlaylists', async (_e, keyword: string, page: number) => {
+    try {
+      return ok(await kugou.searchKugouPlaylists(keyword, page, 20))
+    } catch (e) {
+      return err(e)
+    }
+  })
+  ipcMain.handle('api:kugouSearchArtists', async (_e, keyword: string, page: number) => {
+    try {
+      return ok(await kugou.searchKugouArtists(keyword, page, 20))
+    } catch (e) {
+      return err(e)
+    }
+  })
+  ipcMain.handle('api:kugouArtistSongs', async (_e, artistId: string) => {
+    try {
+      return ok(await kugou.getKugouArtistSongs(artistId, 1, 50))
+    } catch (e) {
+      return err(e)
+    }
+  })
+  // 平台歌单详情(搜索结果预览:曲目 + 名称/封面/播放量/收藏数)
+  ipcMain.handle(
+    'api:sourcePlaylistSongs',
+    async (_e, platform: 'qq' | 'kugou', id: string) => {
+      try {
+        const pl = platform === 'qq' ? await fetchQqPlaylist(id) : await fetchKugouPlaylist(id)
+        return ok({
+          name: pl.name,
+          coverUrl: pl.coverUrl || undefined,
+          description: pl.description,
+          creator: pl.creator,
+          playCount: pl.playCount,
+          favCount: pl.favCount,
+          songs: pl.songs
+        })
+      } catch (e) {
+        return err(e)
+      }
+    }
+  )
+  // 平台歌单 → 本地歌单(QQ/酷狗搜索结果「导入为歌单」)
+  ipcMain.handle(
+    'library:importSourcePlaylist',
+    async (_e, platform: 'qq' | 'kugou', id: string, name?: string) => {
+      try {
+        const pl = platform === 'qq' ? await fetchQqPlaylist(id) : await fetchKugouPlaylist(id)
+        if (pl.songs.length === 0) return { ok: false as const, error: '歌单内容为空或不可访问' }
+        upsertSongs(pl.songs)
+        const platformText = platform === 'qq' ? 'QQ音乐' : '酷狗'
+        const created = createPlaylist(name?.trim() || pl.name, `${platformText}导入`)
+        if (pl.coverUrl) created.coverUrl = pl.coverUrl
+        created.songIds = pl.songs.map((s) => s.id)
+        created.syncedIds = [...created.songIds]
+        saveStore()
+        return ok({ id: created.id, name: created.name, count: created.songIds.length })
+      } catch (e) {
+        return err(e)
+      }
+    }
+  )
+  // 进度条高潮点:酷狗原生 climax_info(其余平台由渲染层按歌词副歌推导)
+  ipcMain.handle('api:songClimax', async (_e, song: Song): Promise<HighlightPoint[] | null> => {
+    const hash =
+      song.kugouHash || (String(song.id).startsWith('kg-') ? String(song.id).slice(3) : '')
+    if (!hash) return null
+    try {
+      return await kugou.getKugouClimax(hash)
+    } catch {
+      return null
     }
   })
   ipcMain.handle('api:neteasePersonalized', async () => {
@@ -276,8 +491,7 @@ export function registerIpc(): void {
             avatar: c.avatar,
             content: c.content,
             time: c.time,
-            likes: c.likedCount,
-            replyCount: c.replyCount
+            likes: c.likedCount
           }))
         })
         const fetchBili = async () => {
@@ -287,29 +501,30 @@ export function registerIpc(): void {
         const fetchNetease = async () => {
           let id = song.neteaseId
           if (!id) {
-            // QQ音乐/酷狗等仅元数据歌曲:按"标题+歌手"搜网易云,取时长最接近的一首的评论
-            const kw = `${song.title} ${song.artist}`.trim()
-            const res = await netease.searchSongs(kw, 5, 0)
-            const pool = (res.songs ?? []).filter(
-              (s: Song): s is Song & { neteaseId: number } => (s.neteaseId ?? 0) > 0
-            )
-            if (pool.length === 0) return { ok: false as const, error: '网易云未找到对应歌曲' }
-            id = pool.reduce((best, s) =>
-              Math.abs(s.duration - song.duration) < Math.abs(best.duration - song.duration) ? s : best
-            ).neteaseId
+            // QQ音乐/酷狗等仅元数据歌曲:按"标题+歌手"搜网易云,打分挑原曲(避开翻唱/伴奏)
+            const hit = await findNeteaseMatch(song)
+            if (!hit?.neteaseId) return { ok: false as const, error: '网易云未找到对应歌曲' }
+            id = hit.neteaseId
           }
           const r = await netease.getMusicComments(id, offset, 20, order)
           return ok(nePayload(r))
         }
-        // QQ 音乐原生评论(搜索/导入的 QQ 歌曲都带 qqId;取不到时用网易云兜底)
+        // QQ 音乐原生评论(搜索/导入的 QQ 歌曲都带 qqId;其它平台按同名曲搜 QQ 兜底)
         const fetchQq = async () => {
           let qid = song.qqId
-          if (!qid && song.qqMid) {
-            // 旧数据只有 mid:搜同款解析数字 id
+          let mid = song.qqMid
+          if (!qid || !mid) {
+            // 只有 mid(旧数据)或无平台 id(酷狗等):搜同款解析数字 id
             try {
-              const hits = await qqmusic.searchQqSongs(`${song.title} ${song.artist}`, 1, 5)
-              const hit = hits.find((h) => h.qqMid === song.qqMid) ?? hits[0]
-              qid = hit?.qqId
+              if (mid) {
+                const hits = await qqmusic.searchQqSongs(`${song.title} ${song.artist}`, 1, 5)
+                const hit = hits.find((h) => h.qqMid === mid) ?? hits[0]
+                qid = hit?.qqId
+              } else {
+                const hit = await findQqMatch(song)
+                qid = hit?.qqId
+                mid = hit?.qqMid
+              }
             } catch {
               /* ignore */
             }
@@ -324,76 +539,17 @@ export function registerIpc(): void {
         if (platform === 'qq') return fetchQq()
         // 默认:原曲平台优先
         if (song.source === 'QQMUSIC' || song.qqMid) return fetchQq()
-        // 酷狗无公开评论接口:默认按"标题+歌手"搜网易云评论兜底
-        if (song.source === 'KUGOU') return fetchNetease()
+        // 酷狗无公开匿名评论接口:按"标题+歌手"搜网易云评论,失败再试 QQ 音乐
+        if (song.source === 'KUGOU') {
+          const ne = await fetchNetease()
+          if (ne.ok) return ne
+          const qq = await fetchQq()
+          if (qq.ok) return qq
+          return ne
+        }
         if (song.neteaseId) return fetchNetease()
         if (song.bvid) return fetchBili()
         return { ok: false, error: '该来源暂不支持评论(可在播放后查看B站评论)' }
-      } catch (e) {
-        return err(e)
-      }
-    }
-  )
-  // 楼中楼:网易云原生 floor 接口;B站/QQ 走各自回复列表
-  ipcMain.handle(
-    'api:commentReplies',
-    async (
-      _e,
-      song: Song,
-      parentCommentId: string,
-      cursor = -1,
-      platform?: 'bilibili' | 'netease' | 'qq'
-    ) => {
-      try {
-        if (platform === 'bilibili' || (!platform && song.source === 'BILIBILI' && song.bvid)) {
-          if (!song.bvid) return { ok: false as const, error: '没有可查看的B站评论' }
-          // B站楼中楼:走 web 的 reply/reply 接口(需要 rpid,已有一级评论 id)
-          const detail = await bilibili.getVideoDetail(bvidOf(song)).catch(() => null)
-          const aid = Number((detail as any)?.aid ?? 0)
-          if (!aid) return { ok: false as const, error: '无法解析视频ID' }
-          const page = Math.max(1, cursor > 0 ? cursor : 1)
-          const list = await bilibili.getCommentReplies(aid, Number(parentCommentId), page, 20)
-          return ok({
-            total: list.length,
-            hasMore: list.length >= 20,
-            cursor: page + 1,
-            comments: list.map((r: any) => ({
-              id: String(r.rpid),
-              user: r.member?.uname ?? '未知',
-              avatar: r.member?.avatar ?? '',
-              content: r.content?.message ?? '',
-              time: (r.ctime ?? 0) * 1000,
-              likes: r.like ?? 0,
-              replyCount: r.rcount ?? 0
-            }))
-          })
-        }
-        // 网易云:原曲 / QQ / 酷狗兜底都统一按网易云曲目取
-        let id = song.neteaseId
-        if (!id) {
-          const kw = `${song.title} ${song.artist}`.trim()
-          const res = await netease.searchSongs(kw, 5, 0)
-          const pool = (res.songs ?? []).filter((s: Song) => (s.neteaseId ?? 0) > 0)
-          if (pool.length === 0) return { ok: false as const, error: '网易云未找到对应歌曲' }
-          id = pool.reduce((best, s) =>
-            Math.abs(s.duration - song.duration) < Math.abs(best.duration - song.duration) ? s : best
-          ).neteaseId!
-        }
-        const r = await netease.getCommentFloor(id, Number(parentCommentId), cursor, 20)
-        const nextCursor = r.hasMore && r.comments.length > 0 ? r.comments[r.comments.length - 1].time : -1
-        return ok({
-          total: r.total,
-          hasMore: r.hasMore,
-          cursor: nextCursor,
-          comments: r.comments.map((c) => ({
-            id: String(c.id),
-            user: c.user,
-            avatar: c.avatar,
-            content: c.content,
-            time: c.time,
-            likes: c.likedCount
-          }))
-        })
       } catch (e) {
         return err(e)
       }
@@ -447,42 +603,38 @@ export function registerIpc(): void {
           if (raw.fee === 1) rows['付费'] = 'VIP 专享'
           else if (raw.fee === 4) rows['付费'] = '购买专辑'
           else if (raw.fee === 8) rows['付费'] = '低音质免费'
-          if (raw.commentCount != null) rows['评论数'] = formatCount(raw.commentCount)
-          if (raw.albumSubCount != null) rows['专辑收藏'] = formatCount(raw.albumSubCount)
-          if (raw.albumCommentCount != null) rows['专辑评论'] = formatCount(raw.albumCommentCount)
           if (raw.artistId) {
             const fans = await netease
               .getArtistDetail(raw.artistId)
               .then((d) => d.fansCount)
               .catch(() => undefined)
-            if (fans != null) rows['歌手粉丝数'] = formatCount(fans)
+            if (fans != null) rows['歌手粉丝数'] = String(fans)
           }
         }
       } else if (song.source === 'QQMUSIC') {
         rows['来源'] = 'QQ音乐'
         rows['链接'] = song.qqMid ? `https://y.qq.com/n/ryqq/songDetail/${song.qqMid}` : ''
         rows['状态'] = getStore().downloadedIds.includes(song.id) ? '已下载' : '在线播放'
-        if (song.qqId) {
-          rows['歌曲ID'] = String(song.qqId)
-          const st = await qqmusic
-            .getQqSongStats(song.qqId)
-            .catch(() => ({}) as { favCount?: number; favText?: string; commentCount?: number })
-          if (st.favText) rows['收藏量'] = st.favText
-          else if (st.favCount != null) rows['收藏量'] = formatCount(st.favCount)
-          if (st.commentCount != null) rows['评论数'] = formatCount(st.commentCount)
-        }
+        if (song.qqId) rows['歌曲ID'] = String(song.qqId)
+        if (song.favCount != null) rows['收藏数'] = String(song.favCount)
       } else if (song.source === 'KUGOU') {
         rows['来源'] = '酷狗音乐'
         rows['状态'] = getStore().downloadedIds.includes(song.id) ? '已下载' : '在线播放'
-        if (song.kugouHash) {
-          rows['文件Hash'] = song.kugouHash
-          const st = await kugou
-            .getKugouSongStats(song.kugouHash, song.title, song.artist)
-            .catch(() => ({}) as { favCount?: number; heatLevel?: number })
-          if (st.favCount != null) rows['收藏量'] = formatCount(st.favCount)
-          if (st.heatLevel != null) rows['热度等级'] = `${st.heatLevel} / 10`
-        }
+        if (song.kugouHash) rows['文件Hash'] = song.kugouHash
         if (song.kugouAlbumId) rows['专辑ID'] = song.kugouAlbumId
+        // 收藏数:搜索结果里已带(OwnerCount);历史入库的歌再按同名曲补查一次
+        let fav = song.favCount
+        if (fav == null && song.kugouHash) {
+          fav =
+            (await kugou
+              .searchKugouSongs(`${song.title} ${song.artist}`.trim(), 1, 20)
+              .then((list) =>
+                list.find((s) => s.kugouHash?.toUpperCase() === song.kugouHash?.toUpperCase())
+              )
+              .then((hit) => hit?.favCount)
+              .catch(() => undefined)) ?? undefined
+        }
+        if (fav != null) rows['收藏数'] = String(fav)
       } else if (song.source === 'BILIBILI' && song.bvid) {
         const p = song.page > 1 ? `?p=${song.page}` : ''
         rows['链接'] = `https://www.bilibili.com/video/${bvidOf(song)}${p}`
@@ -491,6 +643,7 @@ export function registerIpc(): void {
           rows['UP主'] = detail.owner
           rows['播放量'] = String(detail.stat?.view ?? '-')
           rows['点赞'] = String(detail.stat?.like ?? '-')
+          rows['收藏'] = String(detail.stat?.favorite ?? '-')
           rows['弹幕'] = String(detail.stat?.danmaku ?? '-')
         }
       } else if (song.localPath) {
@@ -579,6 +732,17 @@ export function registerIpc(): void {
       setSetting(key, value)
       // 主题即时应用(此前仅在启动时应用,切换后标题栏按钮颜色要等重启才更新)
       if (key === 'theme' && typeof value === 'string') applyThemeNow(value)
+      // 悬浮窗锁定即时生效(鼠标穿透/恢复)
+      if (key === 'floatLyricLocked') setFloatLocked(!!value)
+      // 悬浮窗相关设置:把最新值推回已打开的设置菜单,避免菜单显示旧值
+      if (
+        key === 'floatFontScale' ||
+        key === 'floatShowTrans' ||
+        key === 'floatShowNextLine' ||
+        key === 'floatLyricLocked'
+      ) {
+        notifyFloatMenuState()
+      }
       return getStore().settings
     }
   )
@@ -1010,8 +1174,7 @@ export function registerIpc(): void {
   }))
   // 手动检查更新(渲染层"关于"区按钮;启动自动检查在 index.ts)
   ipcMain.handle('app:checkUpdate', async () => {
-    const info = await checkUpdateAvailable()
-    return info
+    return await checkUpdateDetailed()
   })
 
   // ===== 备份 / 恢复 / 恢复出厂 =====
@@ -1254,5 +1417,55 @@ export function registerIpc(): void {
   })
   ipcMain.handle('float:openMain', () => {
     openMainWindow()
+  })
+  // 缩放手柄:渲染层上报新尺寸,主进程夹到工作区并落盘
+  ipcMain.on('float:setBounds', (e, b: { x: number; y: number; width: number; height: number }) => {
+    if (BrowserWindow.fromWebContents(e.sender) !== getFloatWindow()) return
+    if (!b || !isFinite(b.width) || !isFinite(b.height)) return
+    applyUserBounds(b)
+  })
+  // 歌词过长自动加宽:null=回到基准宽度
+  ipcMain.on('float:fitWidth', (e, needed: number | null) => {
+    if (BrowserWindow.fromWebContents(e.sender) !== getFloatWindow()) return
+    fitFloatWidth(typeof needed === 'number' && isFinite(needed) ? needed : null)
+  })
+  ipcMain.handle('float:resetBounds', () => {
+    resetFloatBounds()
+  })
+  // 设置菜单:打开/关闭/改设置
+  ipcMain.on('float:menuOpen', (e) => {
+    if (BrowserWindow.fromWebContents(e.sender) !== getFloatWindow()) return
+    openFloatMenu()
+  })
+  ipcMain.on('float:menuClose', (e) => {
+    const w = BrowserWindow.fromWebContents(e.sender)
+    if (w === getFloatWindow() || w?.webContents.getURL().includes('#floatmenu')) closeFloatMenu()
+  })
+  ipcMain.on('float:menuSet', (e, key: string, value: unknown) => {
+    const url = e.sender.getURL()
+    if (!url.includes('#floatmenu')) return
+    forwardMenuSetting(key, value)
+  })
+  ipcMain.handle('float:menuGet', (e) => {
+    const url = e.sender.getURL()
+    if (!url.includes('#floatmenu')) return null
+    return getFloatMenuState()
+  })
+
+  // ===== 听歌识别 =====
+  ipcMain.handle('api:desktopSources', async () => {
+    const { desktopCapturer } = await import('electron')
+    const sources = await desktopCapturer.getSources({
+      types: ['screen'],
+      fetchWindowIcons: false
+    })
+    return sources.map((s) => ({ id: s.id, name: s.name }))
+  })
+  ipcMain.handle('api:recognizeAudio', async (_e, wav: ArrayBuffer) => {
+    return recognizeAudio(Buffer.from(wav))
+  })
+  ipcMain.handle('api:getRecognizeToken', () => getAuddToken())
+  ipcMain.handle('api:setRecognizeToken', (_e, token: string) => {
+    setAuddToken(typeof token === 'string' ? token.trim() : '')
   })
 }

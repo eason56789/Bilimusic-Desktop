@@ -2,6 +2,7 @@
 import { useRef, useState } from 'react'
 import type { KeyboardEvent as ReactKeyboardEvent, PointerEvent as ReactPointerEvent } from 'react'
 import { makeStyles, tokens } from '@fluentui/react-components'
+import type { HighlightPoint } from '@shared/types'
 
 const useStyles = makeStyles({
   hit: {
@@ -29,6 +30,18 @@ const useStyles = makeStyles({
     background: `linear-gradient(90deg, ${tokens.colorBrandBackground}, ${tokens.colorBrandForeground2})`,
     transition: 'width 0.08s linear'
   },
+  /** 高潮点:轨道上的小圆点标记(点,不是段;白色) */
+  mark: {
+    position: 'absolute',
+    top: '50%',
+    width: '7px',
+    height: '7px',
+    borderRadius: '50%',
+    background: '#ffffff',
+    boxShadow: '0 0 4px rgba(255,255,255,0.55)',
+    transform: 'translate(-50%, -50%)',
+    pointerEvents: 'none'
+  },
   thumb: {
     position: 'absolute',
     top: '50%',
@@ -51,7 +64,8 @@ export function NiceSlider({
   hoverHeight = 8,
   width,
   disabled = false,
-  ariaLabel
+  ariaLabel,
+  highlights
 }: {
   value: number
   max: number
@@ -65,6 +79,8 @@ export function NiceSlider({
   width?: string | number
   disabled?: boolean
   ariaLabel?: string
+  /** 高潮点(副歌/高潮段起点):毫秒时间点,轨道上画圆点 */
+  highlights?: HighlightPoint[]
 }) {
   const styles = useStyles()
   const ref = useRef<HTMLDivElement>(null)
@@ -127,6 +143,15 @@ export function NiceSlider({
   const thumbSize = dragging ? 14 : hover ? 12 : 10
   const h = hover || dragging ? hoverHeight : trackHeight
 
+  /** 高潮点位置(%):2% 内的点合并,避免糊成一片 */
+  const markPcts: number[] = []
+  for (const s of highlights ?? []) {
+    const at = (s.timeMs / 1000 / safeMax) * 100
+    if (!isFinite(at) || at < 0 || at >= 100) continue
+    if (markPcts.some((p) => Math.abs(p - at) < 2)) continue
+    markPcts.push(at)
+  }
+
   return (
     <div
       ref={ref}
@@ -148,6 +173,15 @@ export function NiceSlider({
     >
       <div className={styles.track} style={{ height: `${h}px` }}>
         <div className={styles.fill} style={{ width: `${pct}%`, opacity: disabled ? 0.5 : 1 }} />
+        {/* 高潮点:轨道上的圆点标记(点,不是段) */}
+        {markPcts.map((at) => (
+          <div
+            key={at}
+            className={styles.mark}
+            style={{ left: `${at}%`, opacity: disabled ? 0.4 : 1 }}
+            title="高潮点"
+          />
+        ))}
         {!disabled && (
           <div
             className={styles.thumb}

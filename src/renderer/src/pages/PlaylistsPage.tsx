@@ -15,7 +15,7 @@ import {
   tokens,
   Spinner,
   Tooltip
-} from '../ui/controls'
+} from '@fluentui/react-components'
 import {
   AddRegular,
   ArrowClockwiseRegular,
@@ -31,7 +31,7 @@ import {
   QrCodeRegular,
   SaveRegular,
   SearchRegular
-} from '../ui/icons'
+} from '@fluentui/react-icons'
 import type { NeteasePlaylistMeta, Playlist, Song } from '@shared/types'
 import { api } from '../lib/api'
 import { useStore } from '../store'
@@ -96,6 +96,8 @@ function PlaylistDetailBody({
 }) {
   const styles = useStyles()
   const playQueue = useStore((s) => s.playQueue)
+  /** 音源加载中禁用播放键(与播放条/全屏页一致的屏蔽策略) */
+  const playerLoading = useStore((s) => s.loading)
   const [kw, setKw] = useState('')
   const [meta, setMeta] = useState<NeteasePlaylistMeta | null>(null)
   const neteaseId = playlist?.neteasePlaylistId ?? null
@@ -193,7 +195,7 @@ function PlaylistDetailBody({
         <Button
           appearance="primary"
           icon={<PlayRegular />}
-          disabled={songs.length === 0}
+          disabled={songs.length === 0 || playerLoading}
           onClick={() => playQueue(songs, 0)}
         >
           播放全部
@@ -225,7 +227,7 @@ function PlaylistDetailBody({
         </Tooltip>
       </div>
 
-      {/* 网易云歌单描述(MD3:整块宽行) */}
+      {/* 网易云歌单描述(整块宽行) */}
       {meta?.description && (
         <Text
           size={200}
@@ -278,6 +280,8 @@ function PlaylistDetailBody({
 function RemotePlaylistDetail({ view, onBack }: { view: RemoteView; onBack: () => void }) {
   const styles = useStyles()
   const playQueue = useStore((s) => s.playQueue)
+  /** 音源加载中禁用播放键 */
+  const playerLoading = useStore((s) => s.loading)
   const refresh = useStore((s) => s.refreshLibrary)
   const anim = useStore((s) => s.library?.settings.pageAnimation ?? 'scale')
   const animCls = anim !== 'none' ? `page-anim-${anim}` : undefined
@@ -401,7 +405,7 @@ function RemotePlaylistDetail({ view, onBack }: { view: RemoteView; onBack: () =
           <Button
             appearance="primary"
             icon={<PlayRegular />}
-            disabled={songs.length === 0}
+            disabled={songs.length === 0 || playerLoading}
             onClick={() => playQueue(songs, 0)}
           >
             播放已加载
@@ -941,6 +945,8 @@ export function RecentPage() {
   const library = useStore((s) => s.library)
   const refresh = useStore((s) => s.refreshLibrary)
   const playQueue = useStore((s) => s.playQueue)
+  /** 音源加载中禁用播放键 */
+  const playerLoading = useStore((s) => s.loading)
   if (!library) return null
   const songs = library.recentPlays.map((r) => r.song)
   const ls = library.listenStats
@@ -962,7 +968,7 @@ export function RecentPage() {
           <Button
             appearance="primary"
             icon={<PlayRegular />}
-            disabled={songs.length === 0}
+            disabled={songs.length === 0 || playerLoading}
             onClick={() => playQueue(songs, 0)}
           >
             播放全部
@@ -986,7 +992,7 @@ export function RecentPage() {
         <div className={styles.empty}>
           <HeartRegular fontSize={40} />
           <Text size={400}>暂无播放记录</Text>
-          <Text size={300}>双击搜索结果或歌单中的歌曲开始播放</Text>
+          <Text size={300}>单击搜索结果或歌单中的歌曲开始播放</Text>
         </div>
       )}
     </PageLayout>

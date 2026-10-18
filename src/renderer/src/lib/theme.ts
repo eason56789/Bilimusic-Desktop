@@ -1,13 +1,4 @@
-/**
- * 主题入口:经典 Fluent / Material 3 Expressive 两套。
- *
- * - fluent:沿用 Fluent 官方 webLightTheme / webDarkTheme(仅按主题色改品牌色)
- * - md3:交给 ./ui/md3/theme.ts 产出**完整的** M3 主题(459 个 Fluent token
- *   全部由 M3 色彩角色/字阶/形状/海拔/动效派生),组件造型层见 ./ui/md3/components.ts
- */
 import { webLightTheme, webDarkTheme, type Theme } from '@fluentui/react-components'
-import { buildM3Theme, DEFAULT_M3_VARIANT } from '../ui/md3/theme'
-import type { M3Variant } from '../ui/md3/tokens'
 
 export const ACCENTS: { name: string; color: string }[] = [
   { name: '默认蓝', color: '#0f6cbd' },
@@ -31,20 +22,10 @@ function shade(hex: string, amount: number): string {
   return `#${((r << 16) | (g << 8) | b).toString(16).padStart(6, '0')}`
 }
 
-/**
- * 构建 FluentProvider 主题。
- * md3 模式下返回的是从 M3 色彩角色完整派生的主题对象(不是"改几个圆角")。
- */
-export function buildTheme(
-  dark: boolean,
-  accent: string,
-  uiStyle: 'fluent' | 'md3' = 'fluent',
-  variant: M3Variant = DEFAULT_M3_VARIANT,
-  contrast = 0
-): Theme {
+/** 主题构建:经典 Fluent(浅色/深色) + 品牌强调色派生 */
+export function buildTheme(dark: boolean, accent: string): Theme {
   const base = dark ? webDarkTheme : webLightTheme
   const a = accent || '#0f6cbd'
-  if (uiStyle === 'md3') return buildM3Theme(dark, a, variant, contrast).theme
   if (a.toLowerCase() === '#0f6cbd') return base
   return {
     ...base,

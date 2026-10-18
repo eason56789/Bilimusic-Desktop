@@ -1,9 +1,11 @@
 /**
- * QQ音乐 / 酷狗音乐 歌单抓取(链接导入用)
- * 两个平台均只有元数据入库:播放时经B站搜索取流,歌词经网易云搜索。
+ * QQ音乐 / 酷狗音乐 歌单抓取(链接导入 / 搜索结果预览共用)
+ * - QQ:歌单曲目带 songmid/songid,可直接走 vkey 原生取流
+ * - 酷狗:歌单曲目带 hash/album_audio_id,可直接走原生取流;封面取 trans_param.union_cover
  */
 import type { Song } from '@shared/types'
 import type { LinkedPlaylist } from './linkImport'
+import { normalizeKugouCover, songFromKugouFileItem } from './kugou'
 
 const UA =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
@@ -56,7 +58,7 @@ export async function fetchQqPlaylist(id: string): Promise<LinkedPlaylist> {
   const songs: Song[] = list
     .map((it): Song | null => {
       const songid = it.songid ?? it.songId
-      const songmid = it.songmid ?? it.mid ?? ''
+      const songmid = String(it.songmid ?? it.mid ?? '')
       if (!songid && !songmid) return null
       const name = decodeEntities(String(it.songname ?? it.title ?? '').trim())
       if (!name) return null
@@ -77,17 +79,28 @@ export async function fetchQqPlaylist(id: string): Promise<LinkedPlaylist> {
         duration: Math.max(0, Math.round(Number(it.interval ?? it.duration ?? 0))),
         source: 'QQMUSIC',
         page: 1,
-        addedAt: Date.now()
+        addedAt: Date.now(),
+        // 原生取流/评论所需:歌单曲目同样带 mid 与数字 id
+        qqMid: songmid || undefined,
+        qqId: Number(songid) || undefined
       }
     })
     .filter((s): s is Song => s !== null)
   if (songs.length === 0) throw new Error('QQ音乐歌单解析失败')
+  // 封面:logo 是歌单封面(旧字段 album_pic_mid/pic_mid 常为空)
+  const cover = String(cd.logo ?? cd.dir_pic_url2 ?? cd.headurl ?? '').trim()
+  const play = Number(cd.visitnum ?? 0)
+  const fav = Number(cd.favnum ?? 0)
   return {
     platform: 'qq',
     playlistId: id,
     name: decodeEntities(String(cd.dissname ?? `QQ音乐歌单 ${id}`)),
-    coverUrl: String(cd.disscover ?? ''),
-    songs
+    coverUrl: cover,
+    songs,
+    description: decodeEntities(String(cd.desc ?? '')),
+    creator: decodeEntities(String(cd.nickname ?? cd.nick ?? '')),
+    playCount: play > 0 ? play : undefined,
+    favCount: fav > 0 ? fav : undefined
   }
 }
 
@@ -113,36 +126,26 @@ export async function fetchKugouPlaylist(id: string): Promise<LinkedPlaylist> {
     const json = await getJson(`${base}/song${q}&page=${page}&pagesize=${pageSize}`, referer)
     const list: any[] = json?.data?.info ?? []
     for (const it of list) {
-      const hash = String(it.hash ?? '').toUpperCase()
-      const filename = String(it.filename ?? '')
-      if (!hash || !filename) continue
-      // filename 形如 "歌手 - 歌名"(可含多级 " - ",取最后一段为歌名)
-      const parts = filename.split(' - ')
-      const artist = parts.length > 1 ? parts.slice(0, -1).join(' - ').trim() : '未知'
-      const title = parts.length > 1 ? parts[parts.length - 1].trim() : filename.trim()
-      if (!title) continue
-      songs.push({
-        id: `kg-${hash}`,
-        title: decodeEntities(title),
-        artist: decodeEntities(artist),
-        album: '',
-        coverUrl: null,
-        duration: Math.max(0, Math.round(Number(it.duration ?? 0))),
-        source: 'KUGOU',
-        page: 1,
-        addedAt: Date.now()
-      })
+      // 曲目映射与歌手曲目共用:hash/album_audio_id 原生可用,封面取 trans_param.union_cover
+      const song = songFromKugouFileItem(it)
+      if (song) songs.push(song)
     }
     if (list.length === 0) break
     if (total > 0 ? songs.length >= total : list.length < pageSize) break
     if (list.length < pageSize) break
   }
   if (songs.length === 0) throw new Error('酷狗歌单为空或不可访问(可能链接失效)')
+  const fav = Number(info.collectcount ?? 0)
+  const play = Number(info.playcount ?? 0)
   return {
     platform: 'kugou',
     playlistId: id,
     name: decodeEntities(String(info.specialname ?? `酷狗歌单 ${id}`)),
-    coverUrl: String(info.imgurl ?? ''),
-    songs
+    coverUrl: normalizeKugouCover(info.imgurl) ?? '',
+    songs,
+    description: decodeEntities(String(info.intro ?? '')),
+    creator: decodeEntities(String(info.nickname ?? '')),
+    playCount: play > 0 ? play : undefined,
+    favCount: fav > 0 ? fav : undefined
   }
 }

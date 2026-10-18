@@ -80,6 +80,32 @@ function stripLines(lines: LyricLine[]): LyricLine[] {
   return lines.map((l) => (l.words && l.words.length > 0 ? l : { ...l, text: stripEdgeDecor(l.text) }))
 }
 
+/**
+ * 把网易云翻译(tlyric)按时间对齐合并进主歌词。
+ * tlyric 与 lrc/yrc 的时间戳基本一一对应,少数行会差几十毫秒,
+ * 因此用「就近 500ms 内匹配」而不是严格相等。
+ */
+function mergeTranslation(lines: LyricLine[], tlyric: string): LyricLine[] {
+  if (!tlyric || lines.length === 0) return lines
+  const trans = parseLrc(tlyric)
+  if (trans.length === 0) return lines
+  const idx = new Map<number, string>()
+  for (const t of trans) idx.set(t.timeMs, t.text)
+  const keys = [...idx.keys()].sort((a, b) => a - b)
+  const nearest = (ms: number): string | undefined => {
+    let best: number | null = null
+    for (const k of keys) {
+      if (best === null || Math.abs(k - ms) < Math.abs(best - ms)) best = k
+      if (k > ms + 500) break
+    }
+    return best !== null && Math.abs(best - ms) <= 500 ? idx.get(best) : undefined
+  }
+  return lines.map((l) => {
+    const t = nearest(l.timeMs)
+    return t && t !== l.text ? { ...l, trans: t } : l
+  })
+}
+
 export async function getLyrics(song: Song): Promise<LyricsResult> {
   const cached = lyricCache.get(song.id)
   if (cached) return cached
@@ -90,7 +116,11 @@ export async function getLyrics(song: Song): Promise<LyricsResult> {
       const ly = await getLyricNew(song.neteaseId)
       let lines = ly.yrc ? parseYrc(ly.yrc) : []
       if (lines.length === 0) lines = parseLrc(ly.lrc ?? '')
-      if (lines.length > 0) result = { lines: stripLines(lines), provider: 'netease', title: song.title }
+      if (lines.length > 0) {
+        lines = stripLines(lines)
+        if (ly.tlyric) lines = mergeTranslation(lines, ly.tlyric)
+        result = { lines, provider: 'netease', title: song.title }
+      }
     } else if (song.source === 'QQMUSIC' || song.source === 'KUGOU') {
       // QQ/酷狗无自建歌词:按「标题 歌手」到网易云搜索,取最接近的一首的歌词
       try {
@@ -102,8 +132,11 @@ export async function getLyrics(song: Song): Promise<LyricsResult> {
           const ly = await getLyricNew(cand.neteaseId)
           let lines = ly.yrc ? parseYrc(ly.yrc) : []
           if (lines.length === 0) lines = parseLrc(ly.lrc ?? '')
-          if (lines.length > 0)
-            result = { lines: stripLines(lines), provider: 'netease', title: song.title }
+          if (lines.length > 0) {
+            lines = stripLines(lines)
+            if (ly.tlyric) lines = mergeTranslation(lines, ly.tlyric)
+            result = { lines, provider: 'netease', title: song.title }
+          }
         }
       } catch (e) {
         console.warn('[Lyrics] qq/kugou netease search failed', e)

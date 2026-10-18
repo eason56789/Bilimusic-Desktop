@@ -9,8 +9,8 @@ import {
   DialogTitle,
   Text,
   tokens
-} from '../ui/controls'
-import { ArrowDownloadRegular } from '../ui/icons'
+} from '@fluentui/react-components'
+import { ArrowDownloadRegular } from '@fluentui/react-icons'
 import { useStore } from '../store'
 import { api } from '../lib/api'
 import { toastSuccess } from '../lib/toast'
@@ -63,7 +63,7 @@ export function UpdateDialog() {
               onClick={async () => {
                 await useStore.getState().updateSetting('skippedUpdateVersion', info.version)
                 close()
-                toastSuccess('已忽略该版本', '下次启动不再提示,可在设置中手动检查')
+                toastSuccess('已忽略该版本', '下次启动不再弹窗提示')
               }}
             >
               忽略此版本

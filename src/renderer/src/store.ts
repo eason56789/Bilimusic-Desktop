@@ -2,6 +2,7 @@
 import { create } from 'zustand'
 import type {
   AudioLoadProgress,
+  HighlightPoint,
   Library,
   LyricsResult,
   Song,
@@ -9,6 +10,7 @@ import type {
   UpdateInfo
 } from '@shared/types'
 import { api } from './lib/api'
+import { detectChorus } from './lib/chorus'
 import { toast, toastError } from './lib/toast'
 
 export type PlayMode = 'loop' | 'shuffle' | 'single'
@@ -45,6 +47,8 @@ let analyserNode: AnalyserNode | null = null
 let triedHtml5For: string | null = null
 /** 最近一次播放位置(秒):突发中断重试时续播用(如流断了/超时,不能从头放) */
 let lastKnownPos = 0
+/** lastKnownPos 属于哪首歌:跨曲兜底时不能沿用上一首/上一次失败的位置 */
+let lastKnownPosSongId: string | null = null
 /** 最近一次 timeupdate 时间戳 + 卡死恢复冷却(看门狗用) */
 let lastTimeupdateAt = 0
 let recoveringAt = 0
@@ -151,6 +155,8 @@ interface PlayerState {
   quality: string | null
   /** 音源加载进度(resolving/downloading/done;done 或空表示无进度可展示) */
   loadProgress: AudioLoadProgress | null
+  /** 进度条高潮点标记(酷狗原生 climax / 歌词副歌推导) */
+  highlights: HighlightPoint[]
   /** 当前打开的网易云歌手主页 id(独立页面,与歌单详情同构) */
   artistPageId: number | null
   /** 发现的新版本(启动自动检查/手动检查命中后弹窗) */
@@ -196,22 +202,72 @@ interface PlayerState {
 }
 
 export const useStore = create<PlayerState>((set, get) => {
+  /**
+   * 重新计算进度条高潮点:
+   * 酷狗原生 climax_info 优先;否则按歌词重复段(副歌)推导。
+   * 统一取每段起点作为"点"标记。
+   */
+  const refreshHighlights = async (song: Song, lyrics: LyricsResult | null) => {
+    let points: HighlightPoint[] = []
+    if (song.kugouHash || song.source === 'KUGOU') {
+      try {
+        const native = await api.songClimax(song)
+        if (native && native.length > 0) points = native
+      } catch {
+        /* 原生高潮点取不到就用歌词推导 */
+      }
+    }
+    if (points.length === 0 && lyrics && lyrics.lines.length > 0) {
+      points = detectChorus(lyrics.lines, song.duration)
+    }
+    if (get().current?.id === song.id) set({ highlights: points })
+  }
+
+  /** 播放态变更的统一入口:加载音源期间屏蔽新的播放/换曲请求 */
+  const blockedByLoading = (action: string): boolean => {
+    if (!get().loading) return false
+    toast('音源加载中', `${action}请等当前歌曲加载完成`)
+    return true
+  }
+
   /** 实际开始播放一首歌(html5Fallback=m4s 不支持时改用 mp4;resumeAt=续播位置秒) */
   const startPlayback = async (song: Song, html5Fallback = false, resumeAt = 0) => {
     const el = getAudio()
     // keepMeta 是一次性标记:本次播放保留原曲歌词,消费后失效(重播/落库不会误保留)
     const keepMeta = song.keepMeta === true
     if (keepMeta) song.keepMeta = false
+    // 续播位置只对"同一首歌的再次尝试"有意义:换源/失败重试时那个不到 1 秒的位置
+    // 会让进度条在 0 与断点之间反复横跳,VIP 歌曲尤其明显
+    const resume = resumeAt > 3 ? resumeAt : 0
+    const keepLyrics = keepMeta ? get().lyrics : null
     set({
       current: song,
       loading: true,
-      lyrics: keepMeta ? get().lyrics : null,
-      position: resumeAt > 0 ? resumeAt : 0,
+      lyrics: keepLyrics,
+      position: resume,
       duration: song.duration,
       quality: null,
+      highlights: [],
       loadProgress: { stage: 'resolving' }
     })
-    lastKnownPos = resumeAt > 0 ? resumeAt : 0
+    lastKnownPos = resume
+    lastKnownPosSongId = song.id
+    // 立即停掉上一首的音频:解析新音源(尤其换源要搜别的平台)期间,旧流仍在触发
+    // timeupdate,会把新歌的进度位置反复写回旧位置 → 进度条横跳
+    if (el.src) {
+      try {
+        el.pause()
+      } catch {
+        /* ignore */
+      }
+      el.removeAttribute('src')
+      try {
+        el.load()
+      } catch {
+        /* ignore */
+      }
+    }
+    void refreshHighlights(song, keepLyrics)
     // VIP 歌曲且未登录网易云 → 直接走跨平台垫底,不浪费一次取流(设置可关:关=直接报错)
     const settings = get().library?.settings
     const fallbackEnabled = settings?.neteaseFallback !== false
@@ -254,9 +310,9 @@ export const useStore = create<PlayerState>((set, get) => {
       try {
         await el.play()
         // 续播:中断重试时回到中断位置,而不是从头开始
-        if (resumeAt > 1) {
+        if (resume > 1) {
           try {
-            el.currentTime = Math.min(resumeAt, isFinite(el.duration) && el.duration > 0 ? el.duration - 0.5 : resumeAt)
+            el.currentTime = Math.min(resume, isFinite(el.duration) && el.duration > 0 ? el.duration - 0.5 : resume)
           } catch {
             /* 直播流等不可 seek 时忽略 */
           }
@@ -273,16 +329,27 @@ export const useStore = create<PlayerState>((set, get) => {
         updateMediaSession(song)
       } catch (playErr) {
         // 自动播放被拦截等
-        set({ playing: false, loading: false, loadProgress: null })
         const de = playErr as DOMException
         console.warn('play() rejected', de?.name, de?.message)
+        // B站 m4s(fmp4)不被支持 / 音源不可用:同一首歌改用 html5 mp4 重试一次
+        // (保留当前歌词与续播位置,不重新走一遍跨平台兜底)
+        if (song.source === 'BILIBILI' && !html5Fallback && triedHtml5For !== song.id) {
+          triedHtml5For = song.id
+          song.keepMeta = true
+          await startPlayback(song, true, resume)
+          return
+        }
+        set({ playing: false, loading: false, loadProgress: null })
       }
       // 换源播放不重拉歌词(保留原曲歌词)
       if (keepMeta) return
       api
         .lyricsGet(song)
         .then((ly) => {
-          if (get().current?.id === song.id) set({ lyrics: ly })
+          if (get().current?.id === song.id) {
+            set({ lyrics: ly })
+            void refreshHighlights(song, ly)
+          }
         })
         .catch(() => {})
     } catch (e) {
@@ -294,7 +361,7 @@ export const useStore = create<PlayerState>((set, get) => {
           toastError('网易云暂无可用音源', '已关闭跨平台兜底(可在设置开启),不再自动搜索其他平台')
           return
         }
-        await fallbackToOther(song, `网易云暂无可用音源(${msg}),自动切换到其他音源`, resumeAt)
+        await fallbackToOther(song, `网易云暂无可用音源(${msg}),自动切换到其他音源`, resume)
         return
       }
       // QQ/酷狗原生取流失败(VIP 专享/无版权)→ 跨平台垫底
@@ -304,7 +371,7 @@ export const useStore = create<PlayerState>((set, get) => {
           toastError('QQ音乐暂无可用音源', '已关闭跨平台兜底(可在设置开启)')
           return
         }
-        await fallbackToOther(song, `QQ音乐暂无可用音源(${msg}),自动切换到其他音源`, resumeAt)
+        await fallbackToOther(song, `QQ音乐暂无可用音源(${msg}),自动切换到其他音源`, resume)
         return
       }
       if (song.source === 'KUGOU' && !keepMeta) {
@@ -313,7 +380,7 @@ export const useStore = create<PlayerState>((set, get) => {
           toastError('酷狗暂无可用音源', '已关闭跨平台兜底(可在设置开启)')
           return
         }
-        await fallbackToOther(song, `酷狗暂无可用音源(${msg}),自动切换到其他音源`, resumeAt)
+        await fallbackToOther(song, `酷狗暂无可用音源(${msg}),自动切换到其他音源`, resume)
         return
       }
       set({ loading: false, loadProgress: null })
@@ -323,12 +390,18 @@ export const useStore = create<PlayerState>((set, get) => {
 
   /**
    * 跨平台音源兜底(原 fallbackToBilibili 扩展):
-   * 依次尝试 B站 → QQ音乐 → 酷狗,取时长最接近的一首,只换音频流,
-   * 标题/封面/歌手/歌词/评论全部保留原曲(source 置为命中平台以便原生音质)。
+   * B站 → QQ音乐 → 酷狗,只换音频流,标题/封面/歌手/歌词/评论全部保留原曲。
+   *
+   * B站命中项必须与「更换音源」弹窗里的第一项一致:同一关键词、同一排序
+   * (totalrank)、第一页的第一条。此前按"时长最接近"挑,常挑到同名翻唱/Live,
+   * 与弹窗首项不一致(VIP 歌曲自动兜底时尤为明显)。
    */
   const fallbackToOther = async (song: Song, reason: string, resumeAt = 0) => {
     const tried: string[] = []
-    const pick = (list: Song[]): Song | null => {
+    /** 跨曲兜底不做"续播到 0.x 秒"这种无意义跳变(进度条横跳的另一个来源) */
+    const resume = resumeAt > 3 ? resumeAt : 0
+    /** 时长兜底匹配(QQ/酷狗无候选列表可对照时使用):优先时长接近,否则取第一项 */
+    const pickByDuration = (list: Song[]): Song | null => {
       if (list.length === 0) return null
       const best = list.reduce((a, b) =>
         song.duration > 0 &&
@@ -339,9 +412,10 @@ export const useStore = create<PlayerState>((set, get) => {
       return song.duration > 0 && Math.abs(best.duration - song.duration) <= 50 ? best : list[0]
     }
     let picked: Song | null = null
-    // 1) B站(有现成的缓存/兜底经验)
+    // 1) B站(有现成的缓存/兜底经验):取搜索结果第一项
     try {
-      picked = pick(await api.biliSearch(`${song.title} ${song.artist}`, 1, 'totalrank'))
+      const list = await api.biliSearch(`${song.title} ${song.artist}`, 1, 'totalrank')
+      picked = list[0] ?? null
       if (picked) tried.push('B站')
     } catch {
       /* 下一个平台 */
@@ -351,7 +425,7 @@ export const useStore = create<PlayerState>((set, get) => {
       try {
         const r = await api.qqSearch(`${song.title} ${song.artist}`, 1)
         if (r.ok && r.data) {
-          picked = pick(r.data.filter((s) => !s.vipOnly))
+          picked = pickByDuration(r.data.filter((s) => !s.vipOnly))
           if (picked) tried.push('QQ音乐')
         }
       } catch {
@@ -363,7 +437,7 @@ export const useStore = create<PlayerState>((set, get) => {
       try {
         const r = await api.kugouSearch(`${song.title} ${song.artist}`, 1)
         if (r.ok && r.data) {
-          picked = pick(r.data.filter((s) => !s.vipOnly))
+          picked = pickByDuration(r.data.filter((s) => !s.vipOnly))
           if (picked) tried.push('酷狗')
         }
       } catch {
@@ -403,7 +477,7 @@ export const useStore = create<PlayerState>((set, get) => {
       }
       triedHtml5For = null
       set({ playing: false, loading: false })
-      await startPlayback(audioOnly, false, resumeAt)
+      await startPlayback(audioOnly, false, resume)
       // 最近播放记录原曲(重播时重新走垫底逻辑,已登录用户可直接用网易云音源)
       api
         .libraryAddRecent(song)
@@ -413,7 +487,10 @@ export const useStore = create<PlayerState>((set, get) => {
       api
         .lyricsGet(song)
         .then((ly) => {
-          if (get().current?.id === audioOnly.id) set({ lyrics: ly })
+          if (get().current?.id === audioOnly.id) {
+            set({ lyrics: ly })
+            void refreshHighlights(audioOnly, ly)
+          }
         })
         .catch(() => {})
     } catch (err) {
@@ -449,6 +526,11 @@ export const useStore = create<PlayerState>((set, get) => {
   const bindAudioEvents = () => {
     const el = getAudio()
     el.addEventListener('timeupdate', () => {
+      // 加载中(含换源兜底)不写位置:此刻 el 上可能还挂着上一首/上一段的残留时间轴,
+      // 写进去会让进度条在 0 与旧位置之间反复横跳
+      if (get().loading) return
+      const cur = get().current
+      if (!cur || cur.id !== lastKnownPosSongId) return
       set({ position: el.currentTime })
       lastTimeupdateAt = Date.now()
       if (el.currentTime > 0.5) lastKnownPos = el.currentTime
@@ -471,6 +553,8 @@ export const useStore = create<PlayerState>((set, get) => {
       }
     })
     el.addEventListener('durationchange', () => {
+      // 加载中不采信元素时长(可能还是上一首的残留),等新音源元数据就绪后再同步
+      if (get().loading) return
       if (isFinite(el.duration)) set({ duration: el.duration })
     })
     el.addEventListener('ended', () => {
@@ -485,8 +569,11 @@ export const useStore = create<PlayerState>((set, get) => {
     el.addEventListener('error', async () => {
       const { current, playing } = get()
       if (!current) return
-      // 突发中断(流断/超时):重试时从最后位置续播,不能从头开始
-      const resumeAt = lastKnownPos > 1 ? lastKnownPos : 0
+      // 加载/换源过程中的解析错误由 startPlayback 的 try/catch 统一处理,避免双重兜底
+      if (get().loading) return
+      // 突发中断(流断/超时):重试时从最后位置续播,不能从头开始。
+      // 位置必须是"这首歌"的:换源/失败重试留下的零点几秒不应被当作续播点
+      const resumeAt = lastKnownPosSongId === current.id && lastKnownPos > 3 ? lastKnownPos : 0
       const fallbackEnabled = get().library?.settings.neteaseFallback !== false
       if (current.source === 'BILIBILI' && triedHtml5For !== current.id) {
         // m4s 可能不被支持 → 换 html5 mp4(同一首歌重试,保留当前歌词,续播中断位置)
@@ -574,6 +661,12 @@ export const useStore = create<PlayerState>((set, get) => {
     set({ updateInfo: info })
   })
 
+  // 启动自动检查结果:无新版本 / 检查失败 → 右下角轻提示(更新窗口见上)
+  api.onUpdateLatest?.((version) => {
+    if (version) toast('检查更新', `已是最新版本(v${version})`)
+    else toast('检查更新', '未能获取版本信息,可稍后在设置中重试')
+  })
+
   return {
     library: null,
     page: 'search',
@@ -596,6 +689,7 @@ export const useStore = create<PlayerState>((set, get) => {
     activeDialog: null,
     quality: null,
     loadProgress: null,
+    highlights: [],
     artistPageId: null,
     updateInfo: null,
 
@@ -620,6 +714,8 @@ export const useStore = create<PlayerState>((set, get) => {
 
     async playQueue(songs, startIndex = 0) {
       if (songs.length === 0) return
+      // 加载音源期间屏蔽列表/歌单的播放操作:此刻 el 里还没有可播内容,点了只会状态错乱
+      if (blockedByLoading('开始播放')) return
       triedHtml5For = null
       set({ queue: songs, queueIndex: startIndex })
       await startPlayback(songs[startIndex])
@@ -739,6 +835,8 @@ export const useStore = create<PlayerState>((set, get) => {
     },
     setLyrics(l) {
       set({ lyrics: l })
+      const cur = get().current
+      if (cur) void refreshHighlights(cur, l)
     },
 
     startSleepTimer(minutes) {
@@ -847,6 +945,7 @@ export const useStore = create<PlayerState>((set, get) => {
     playAt(index) {
       const { queue } = get()
       if (index < 0 || index >= queue.length) return
+      if (blockedByLoading('切换曲目')) return
       triedHtml5For = null
       set({ queueIndex: index })
       startPlayback(queue[index])
@@ -874,6 +973,8 @@ export const useStore = create<PlayerState>((set, get) => {
 
     async replaceCurrentAndPlay(song) {
       const { queue, current } = get()
+      // 加载音源期间屏蔽更换音源/分P切换,避免与正在进行的解析互相打断
+      if (blockedByLoading('更换音源')) return
       const q = [...queue]
       // 按 id 定位当前曲(队列项可能因移除/换源与 queueIndex 错位):
       // 找到 → 原位替换;找不到 → 追加为新的一项,避免覆盖错误的队列项

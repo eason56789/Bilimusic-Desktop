@@ -11,7 +11,7 @@ import {
   Tooltip,
   makeStyles,
   tokens
-} from '../ui/controls'
+} from '@fluentui/react-components'
 import {
   PauseRegular,
   PlayRegular,
@@ -36,8 +36,10 @@ import {
   ClockRegular,
   GaugeRegular,
   CheckmarkRegular,
-  SettingsRegular
-} from '../ui/icons'
+  SettingsRegular,
+  LockClosedRegular,
+  LockOpenRegular
+} from '@fluentui/react-icons'
 import { useStore, fmtDur } from '../store'
 import { Cover } from './Cover'
 import { NiceSlider } from './NiceSlider'
@@ -133,6 +135,10 @@ export function PlayerBar() {
   const rate = useStore((s) => s.library?.settings.playbackRate ?? 1)
   const ui = useStore((s) => s.library?.settings.uiModules)
   const floatLyric = useStore((s) => s.library?.settings.floatLyric ?? false)
+  const floatLocked = useStore((s) => s.library?.settings.floatLyricLocked ?? false)
+  /** 进度条高潮点标记(设置可关) */
+  const highlights = useStore((s) => s.highlights)
+  const showChorus = useStore((s) => s.library?.settings.showChorusMarks !== false)
   const setDlg = useStore((s) => s.setActiveDialog)
   const { togglePlay, next, prev, seek, setVolume, setMuted, cycleMode, setNowPlayingOpen } =
     useStore.getState()
@@ -186,6 +192,7 @@ export function PlayerBar() {
           max={Math.max(duration, 1)}
           onChange={(v) => seek(v)}
           disabled={!current}
+          highlights={showChorus ? highlights : undefined}
           ariaLabel="播放进度"
         />
         <span className={styles.time}>{formatTime(duration)}</span>
@@ -199,7 +206,7 @@ export function PlayerBar() {
               <span className={styles.artist}>{current.artist}</span>
             </div>
           ) : (
-            <Text style={{ color: tokens.colorNeutralForeground3 }}>尚未播放 · 双击列表中的歌曲开始</Text>
+            <Text style={{ color: tokens.colorNeutralForeground3 }}>尚未播放 · 单击列表中的歌曲开始</Text>
           )}
         </div>
 
@@ -269,12 +276,36 @@ export function PlayerBar() {
                 <MenuItem icon={<ArrowSwapRegular />} disabled={!current} onClick={() => setDlg('source')}>
                   更换音源
                 </MenuItem>
-                <MenuItem
-                  icon={floatLyric ? <CheckmarkRegular /> : <OpenRegular />}
-                  onClick={() => void useStore.getState().updateSetting('floatLyric', !floatLyric)}
-                >
-                  悬浮歌词窗
-                </MenuItem>
+                <Menu>
+                  <MenuTrigger disableButtonEnhancement>
+                    <MenuItem icon={<OpenRegular />}>
+                      悬浮歌词窗{floatLyric ? (floatLocked ? '(已锁定)' : '(已开启)') : ''}
+                    </MenuItem>
+                  </MenuTrigger>
+                  <MenuPopover>
+                    <MenuList>
+                      <MenuItem
+                        icon={floatLyric ? <CheckmarkRegular /> : undefined}
+                        onClick={() =>
+                          void useStore.getState().updateSetting('floatLyric', !floatLyric)
+                        }
+                      >
+                        {floatLyric ? '关闭悬浮歌词窗' : '开启悬浮歌词窗'}
+                      </MenuItem>
+                      <MenuItem
+                        icon={floatLocked ? <LockClosedRegular /> : <LockOpenRegular />}
+                        disabled={!floatLyric}
+                        onClick={() =>
+                          void useStore
+                            .getState()
+                            .updateSetting('floatLyricLocked', !floatLocked)
+                        }
+                      >
+                        {floatLocked ? '解除锁定(恢复可交互)' : '锁定(鼠标穿透,不挡操作)'}
+                      </MenuItem>
+                    </MenuList>
+                  </MenuPopover>
+                </Menu>
                 <Menu>
                   <MenuTrigger disableButtonEnhancement>
                     <MenuItem icon={<ClockRegular />}>

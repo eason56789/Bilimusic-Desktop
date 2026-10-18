@@ -9,13 +9,13 @@ import {
   Tooltip,
   makeStyles,
   tokens
-} from '../ui/controls'
+} from '@fluentui/react-components'
 import {
   ArrowLeftRegular,
   PlayRegular,
   SearchRegular,
   DismissRegular
-} from '../ui/icons'
+} from '@fluentui/react-icons'
 import type { NeteaseArtistDetail, Song } from '@shared/types'
 import { api } from '../lib/api'
 import { useStore } from '../store'
@@ -57,6 +57,8 @@ export function ArtistPage() {
   const id = useStore((s) => s.artistPageId)
   const close = useStore((s) => s.closeArtistPage)
   const playQueue = useStore((s) => s.playQueue)
+  /** 音源加载中禁用播放键 */
+  const playerLoading = useStore((s) => s.loading)
   const [detail, setDetail] = useState<NeteaseArtistDetail | null>(null)
   const [songs, setSongs] = useState<Song[] | null>(null)
   const [loading, setLoading] = useState(true)
@@ -164,14 +166,14 @@ export function ArtistPage() {
             <Button
               appearance="primary"
               icon={<PlayRegular />}
-              disabled={!songs || songs.length === 0}
+              disabled={!songs || songs.length === 0 || playerLoading}
               onClick={() => songs && playQueue(songs, 0)}
             >
               播放全部
             </Button>
             <Button
               icon={<PlayRegular />}
-              disabled={!songs || songs.length === 0}
+              disabled={!songs || songs.length === 0 || playerLoading}
               onClick={() => {
                 if (!songs || songs.length === 0) return
                 const shuffled = [...songs].sort(() => Math.random() - 0.5)

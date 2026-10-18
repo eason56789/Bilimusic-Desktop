@@ -38,10 +38,13 @@ const defaultSettings: Settings = {
   lyricSize: 'standard',
   density: 'standard',
   floatLyric: false,
+  floatLyricLocked: false,
+  floatLyricBoundsVersion: 2,
+  floatFontScale: 1,
+  floatShowTrans: true,
+  floatShowNextLine: true,
   closeBehavior: 'ask',
-  uiStyle: 'fluent',
-  md3Variant: 'tonalSpot',
-  md3Contrast: 0,
+  showChorusMarks: true,
   lyricAlphaCurrent: 1,
   lyricAlphaInactive: 0.15,
   defaultSearchSource: 'netease',
@@ -204,6 +207,18 @@ export function initStore(): void {
   if (s.closeBehavior !== 'ask' && s.closeBehavior !== 'tray' && s.closeBehavior !== 'quit') {
     s.closeBehavior = 'ask'
   }
+  // 界面样式已统一为经典 Fluent:清掉历史存档里的 uiStyle 字段(MD3 风格已移除)
+  delete (s as unknown as Record<string, unknown>).uiStyle
+  if (typeof s.showChorusMarks !== 'boolean') s.showChorusMarks = defaultSettings.showChorusMarks
+  // 悬浮窗布局升级:旧存档记的是旧式窄条位置,统一换成 QQ 音乐式底部居中默认布局
+  if (s.floatLyricBoundsVersion !== 2) {
+    s.floatLyricBoundsVersion = 2
+    delete s.floatLyricBounds
+  }
+  if (typeof s.floatFontScale !== 'number' || !isFinite(s.floatFontScale)) s.floatFontScale = 1
+  s.floatFontScale = Math.min(1.6, Math.max(0.7, s.floatFontScale))
+  if (typeof s.floatShowTrans !== 'boolean') s.floatShowTrans = true
+  if (typeof s.floatShowNextLine !== 'boolean') s.floatShowNextLine = true
 }
 
 /** 默认下载目录(初始化与恢复出厂共用) */

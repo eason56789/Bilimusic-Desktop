@@ -4,8 +4,8 @@
 import { useEffect, useRef } from 'react'
 import { useStore, getAudioElement } from '../store'
 import { api } from '../lib/api'
-import { DEFAULT_M3_VARIANT } from '../ui/md3/theme'
-import type { FloatControlCmd, FloatLyricState } from '@shared/types'
+import { resolveCharTimes, lineEndTime } from '../lib/karaoke'
+import type { FloatControlCmd, FloatLyricState, LyricsResult, Settings } from '@shared/types'
 
 /** 与 NowPlaying 相同的当前行判定:位置+200ms 提前量-歌词偏移 */
 function activeLineIndex(lyrics: { lines: { timeMs: number }[] } | null, posMs: number): number {
@@ -18,9 +18,41 @@ function activeLineIndex(lyrics: { lines: { timeMs: number }[] } | null, posMs: 
   return idx
 }
 
+/** 悬浮窗展示所需的一行数据(文本 + 逐字时间 + 翻译) */
+interface BuiltLine {
+  text: string
+  charTimes: number[] | null
+  startMs: number
+  endMs: number
+  trans: string
+}
+
 export function FloatBridge() {
   const floatLyric = useStore((s) => s.library?.settings.floatLyric ?? false)
   const lastKeyRef = useRef('')
+  /** 逐字时间按行缓存:数组引用稳定,悬浮窗的逐字上色 rAF 不会因重复推送被打断重排 */
+  const charMemoRef = useRef<{ key: string; charTimes: number[] | null }>({ key: '', charTimes: null })
+
+  const buildLine = (lyrics: LyricsResult | null, idx: number): BuiltLine => {
+    const lines = lyrics?.lines ?? []
+    const line = idx >= 0 ? lines[idx] : null
+    if (!line) return { text: '', charTimes: null, startMs: 0, endMs: 0, trans: '' }
+    const key = `${idx}|${line.timeMs}|${line.text.length}`
+    if (charMemoRef.current.key !== key) {
+      charMemoRef.current = {
+        key,
+        // 逐字时间:wordTimes 等长直接用;否则由 words 展开(对齐 trim 偏移)
+        charTimes: resolveCharTimes(line.text, line.wordTimes, line.words)
+      }
+    }
+    return {
+      text: line.text,
+      charTimes: charMemoRef.current.charTimes,
+      startMs: line.timeMs,
+      endMs: lineEndTime(line.timeMs, lines[idx + 1]?.timeMs),
+      trans: line.trans ?? ''
+    }
+  }
 
   // 显隐开关:settings.floatLyric → 主进程窗口
   useEffect(() => {
@@ -38,34 +70,73 @@ export function FloatBridge() {
           ? window.matchMedia('(prefers-color-scheme: dark)').matches
           : settings?.theme === 'dark'
       const offset = settings?.lyricOffsetMs ?? 0
-      const posMs = getAudioElement().currentTime * 1000 + 200 - offset
+      const el = getAudioElement()
+      const posMs = el.currentTime * 1000 + 200 - offset
       const idx = activeLineIndex(s.lyrics, posMs)
       const lines = s.lyrics?.lines ?? []
+      const cur = buildLine(s.lyrics, idx)
+      const nextText = idx + 1 < lines.length ? (lines[idx + 1]?.text ?? '') : ''
       const state: FloatLyricState = {
         hasCurrent: !!s.current,
         title: s.current?.title ?? '',
         artist: s.current?.artist ?? '',
         playing: s.playing,
-        lineText: idx >= 0 ? (lines[idx]?.text ?? '') : '',
-        nextText: idx + 1 < lines.length ? (lines[idx + 1]?.text ?? '') : '',
+        loading: s.loading,
+        lineText: cur.text,
+        charTimes: cur.charTimes,
+        lineStartMs: cur.startMs,
+        lineEndMs: cur.endMs,
+        transText: cur.trans,
+        nextText,
         lineIndex: idx,
         lineCount: lines.length,
+        posMs,
+        pushedAt: Date.now(),
+        rate: el.playbackRate || 1,
+        muted: s.muted,
+        locked: settings?.floatLyricLocked ?? false,
+        fontScale: settings?.floatFontScale ?? 1,
+        showTrans: settings?.floatShowTrans !== false,
+        showNextLine: settings?.floatShowNextLine !== false,
         dark: !!dark,
-        accent: settings?.accent ?? '#0f6cbd',
-        uiStyle: settings?.uiStyle ?? 'fluent',
-        m3Variant: settings?.md3Variant ?? DEFAULT_M3_VARIANT,
-        m3Contrast: settings?.md3Contrast ?? 0
+        accent: settings?.accent ?? '#0f6cbd'
       }
-      const key = `${state.hasCurrent}|${state.title}|${state.playing}|${state.lineIndex}|${state.dark}|${state.accent}|${state.uiStyle}|${state.m3Variant}|${state.m3Contrast}`
-      if (key !== lastKeyRef.current) {
+      // 位置必须持续推送(逐字上色依赖插值基准),其余字段变化也一并跟上;
+      // 键只用于"暂停时避免重复推送"这类节流判断。
+      const key = [
+        state.hasCurrent,
+        state.title,
+        state.playing,
+        state.loading,
+        state.lineIndex,
+        state.dark,
+        state.accent,
+        state.muted,
+        state.locked,
+        state.fontScale,
+        state.showTrans,
+        state.showNextLine
+      ].join('|')
+      const moving = state.playing && !el.paused
+      if (key !== lastKeyRef.current || moving) {
         lastKeyRef.current = key
         api.floatPostState?.(state)
       }
     }
     tick()
-    const t = setInterval(tick, 400)
+    const t = setInterval(tick, 250)
     return () => clearInterval(t)
   }, [floatLyric])
+
+  // 悬浮窗设置菜单改设置 → 统一走 store 落盘(落盘后主进程立即生效)
+  useEffect(() => {
+    const off = api.onFloatMenuSet?.(({ key, value }) => {
+      const st = useStore.getState()
+      const k = key as keyof Settings
+      void st.updateSetting(k, value as Settings[typeof k])
+    })
+    return () => off?.()
+  }, [])
 
   // 悬浮窗控制指令 → 播放器
   useEffect(() => {
@@ -80,6 +151,37 @@ export function FloatBridge() {
           break
         case 'next':
           if (st.current) st.next(true)
+          break
+        case 'mute':
+          st.setMuted(!st.muted)
+          break
+        case 'prevLine':
+        case 'nextLine': {
+          // 上一句/下一句:定位到该句起点;本句已唱过 3 秒则先回本句开头
+          const lines = st.lyrics?.lines ?? []
+          if (lines.length === 0 || !st.current) break
+          const el = getAudioElement()
+          const offset = st.library?.settings.lyricOffsetMs ?? 0
+          const posMs = el.currentTime * 1000 + 200 - offset
+          let idx = activeLineIndex(st.lyrics, posMs)
+          if (cmd === 'prevLine') {
+            const intoLine = idx >= 0 ? posMs - lines[idx].timeMs : 0
+            if (idx >= 0 && intoLine > 3000) {
+              /* 本句唱过 3 秒:回到本句开头 */
+            } else {
+              idx = Math.max(0, idx - 1)
+            }
+          } else {
+            idx = Math.min(lines.length - 1, idx + 1)
+          }
+          if (idx >= 0 && lines[idx]) st.seek(lines[idx].timeMs / 1000)
+          break
+        }
+        case 'lock':
+          void st.updateSetting('floatLyricLocked', !(st.library?.settings.floatLyricLocked ?? false))
+          break
+        case 'openMain':
+          void api.floatOpenMain?.()
           break
         case 'hide':
           void st.updateSetting('floatLyric', false)

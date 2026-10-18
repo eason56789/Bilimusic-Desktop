@@ -11,12 +11,12 @@ import {
   Text,
   makeStyles,
   tokens
-} from '../ui/controls'
+} from '@fluentui/react-components'
 import {
   PauseRegular,
   PlayRegular,
   DismissRegular
-} from '../ui/icons'
+} from '@fluentui/react-icons'
 import { useStore, fmtDur } from '../store'
 import {
   CommentsDialog,

@@ -22,6 +22,14 @@ export interface LinkedPlaylist {
   name: string
   coverUrl: string
   songs: Song[]
+  /** 歌单简介(平台提供时) */
+  description?: string
+  /** 创建者昵称 */
+  creator?: string
+  /** 播放量 */
+  playCount?: number
+  /** 收藏数 */
+  favCount?: number
 }
 
 /** 需要跟随后再解析的短链域名(仅官方短链域名,避免对任意链接发起请求) */
