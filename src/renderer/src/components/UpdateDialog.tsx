@@ -10,49 +10,51 @@ import {
   Text,
   tokens
 } from '@fluentui/react-components'
-import { ArrowDownloadRegular } from '@fluentui/react-icons'
+import { ArrowDownloadRegular, InfoRegular } from '@fluentui/react-icons'
 import { useStore } from '../store'
 import { api } from '../lib/api'
 import { toastSuccess } from '../lib/toast'
+import { MarkdownBlock } from './MarkdownBlock'
 
 export function UpdateDialog() {
   const info = useStore((s) => s.updateInfo)
   const close = (): void => useStore.setState({ updateInfo: null })
 
   if (!info) return null
-  // release notes 只留前 12 行,避免超长
-  const notes = String(info.notes ?? '')
-    .split('\n')
-    .filter((l) => l.trim())
-    .slice(0, 12)
-    .join('\n')
+  const notes = String(info.notes ?? '').trim()
 
   return (
     <Dialog open onOpenChange={(_, d) => !d.open && close()}>
-      <DialogSurface style={{ maxWidth: 520 }}>
+      <DialogSurface style={{ maxWidth: 560 }}>
         <DialogBody>
           <DialogTitle>发现新版本 v{info.version}</DialogTitle>
           <DialogContent>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              {/* 两行提示同级:都是纯文字,无背景块 */}
               <Text size={300}>
                 当前版本较旧,建议更新以获得最新功能与问题修复。
                 {info.publishedAt ? `(发布于 ${info.publishedAt.slice(0, 10)})` : ''}
               </Text>
+              <Text size={300} style={{ display: 'flex', alignItems: 'flex-start', gap: 6 }}>
+                <InfoRegular style={{ flexShrink: 0, marginTop: 2 }} />
+                <span>
+                  若无法打开下载页面,请尝试使用加速器(如 Watt Toolkit / Steam++ 等
+                  GitHub 加速工具)后重试。
+                </span>
+              </Text>
               {notes && (
                 <div
                   style={{
-                    maxHeight: 200,
+                    maxHeight: 320,
                     overflowY: 'auto',
-                    padding: '10px 12px',
+                    padding: '12px 16px',
                     borderRadius: 10,
                     background: tokens.colorNeutralBackground3,
-                    color: tokens.colorNeutralForeground2,
-                    fontSize: tokens.fontSizeBase200,
-                    whiteSpace: 'pre-wrap',
-                    lineHeight: 1.6
+                    color: tokens.colorNeutralForeground1,
+                    fontSize: tokens.fontSizeBase200
                   }}
                 >
-                  {notes}
+                  <MarkdownBlock source={notes} />
                 </div>
               )}
             </div>
@@ -73,13 +75,15 @@ export function UpdateDialog() {
             </Button>
             <Button
               appearance="primary"
+              size="large"
               icon={<ArrowDownloadRegular />}
+              style={{ minWidth: 148, whiteSpace: 'nowrap', flexShrink: 0 }}
               onClick={() => {
                 void api.appOpenExternal(info.url)
                 close()
               }}
             >
-              前往下载
+              下载安装包
             </Button>
           </DialogActions>
         </DialogBody>

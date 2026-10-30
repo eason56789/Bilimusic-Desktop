@@ -1,7 +1,13 @@
 /**
  * Bilibili API 客户端 (移植自安卓端 BilibiliApiClient.kt / BilibiliLogin.kt)
  */
-import type { Song, BiliPage } from '@shared/types'
+import type {
+  Song,
+  BiliPage,
+  ChartCatalog,
+  ChartDetail,
+  ChartBrief
+} from '@shared/types'
 import { wbiSign, buildQuery, refreshWbiKey } from './wbi'
 import { activateBuvid, fetchReplyMain, genBuvid3 } from './bilibili-grpc'
 
@@ -911,5 +917,67 @@ async function getVideoCommentsByTime(
   } catch (e) {
     console.error('[Bilibili] time comments error', e)
     return { total: 0, hasMore: false, comments: [] }
+  }
+}
+
+// ============ 排行榜(音乐分区) ============
+
+/**
+ * B站排行榜没有"榜名目录"接口,用音乐分区的固定 rid 列表自建目录。
+ * rid 为分区 id(与网页 /v/music 下的子分区一致)。
+ */
+const BILI_RIDS: { rid: number; name: string }[] = [
+  { rid: 3, name: '音乐' },
+  { rid: 28, name: '原创音乐' },
+  { rid: 31, name: '翻唱' },
+  { rid: 30, name: 'VOCALOID·UTAU' },
+  { rid: 194, name: '电音' },
+  { rid: 59, name: '演奏' },
+  { rid: 130, name: '音乐综合' },
+  { rid: 29, name: '三次元音乐' },
+  { rid: 26, name: '鬼畜调教' },
+  { rid: 95, name: '数码' }
+]
+
+export function getChartCatalog(): Promise<ChartCatalog> {
+  const label = '哔哩哔哩'
+  const charts: ChartBrief[] = BILI_RIDS.map((r) => ({
+    id: String(r.rid),
+    name: r.name,
+    updateTip: '三日排行'
+  }))
+  return Promise.resolve({ platform: 'bilibili', label, groups: [{ name: '', charts }] })
+}
+
+/**
+ * 分区排行:x/web-interface/ranking/region(legacy,无需 WBI 签名)返回该分区三日内榜单。
+ * duration 是 "0:15" 字符串,走 parseDuration;rank 顺序即榜单顺序(1 为第一)。
+ */
+export async function getChartSongs(chartId: string): Promise<ChartDetail> {
+  const rid = String(chartId)
+  const json = await getJson(
+    `https://api.bilibili.com/x/web-interface/ranking/region?rid=${encodeURIComponent(rid)}&day=3`
+  )
+  if (json.code !== 0) throw new Error(`B站排行接口返回 code=${json.code} ${json.message ?? ''}`)
+  const list: any[] = json.data ?? []
+  const songs = list
+    .filter((it) => it.bvid)
+    .map((it) =>
+      songFromVideo({
+        bvid: it.bvid,
+        title: it.title ?? '',
+        author: it.author ?? '未知',
+        coverUrl: it.pic ?? '',
+        duration: parseDuration(String(it.duration ?? '0:00'))
+      })
+    )
+  const name = BILI_RIDS.find((r) => String(r.rid) === rid)?.name ?? ''
+  return {
+    id: rid,
+    name,
+    platform: 'bilibili',
+    updateTip: '三日排行',
+    songs,
+    total: songs.length
   }
 }

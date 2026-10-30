@@ -287,6 +287,9 @@ export function SleepTimerDialog({ open, onClose }: { open: boolean; onClose: ()
 /** 挂载在 App 的共享弹窗集合 */
 export function GlobalDialogs() {
   const current = useStore((s) => s.current)
+  // 右键菜单指定的目标歌曲优先(详情/换源),否则用当前播放
+  const dialogSong = useStore((s) => s.dialogSong)
+  const target = dialogSong ?? current
   const dlg = useStore((s) => s.activeDialog)
   const setDlg = useStore((s) => s.setActiveDialog)
   // 全屏播放页内评论走右侧停靠面板(NowPlaying 内渲染),这里只兜底非全屏场景
@@ -299,13 +302,13 @@ export function GlobalDialogs() {
         onClose={() => setDlg(null)}
       />
       <PagesDialog open={dlg === 'pages'} onClose={() => setDlg(null)} />
-      <SongInfoDialog song={current} open={dlg === 'info'} onClose={() => setDlg(null)} />
+      <SongInfoDialog song={target} open={dlg === 'info'} onClose={() => setDlg(null)} />
       <LyricEditDialog song={current} open={dlg === 'lyricEdit'} onClose={() => setDlg(null)} />
       <LyricReplaceDialog song={current} open={dlg === 'lyricReplace'} onClose={() => setDlg(null)} />
       <LyricOffsetDialog open={dlg === 'lyricOffset'} onClose={() => setDlg(null)} />
       <QueueDialog open={dlg === 'queue'} onClose={() => setDlg(null)} />
       <EqDialog open={dlg === 'eq'} onClose={() => setDlg(null)} />
-      <SourceSwitchDialog song={current} open={dlg === 'source'} onClose={() => setDlg(null)} />
+      <SourceSwitchDialog song={target} open={dlg === 'source'} onClose={() => setDlg(null)} />
       <SleepTimerDialog open={dlg === 'sleep'} onClose={() => setDlg(null)} />
     </>
   )

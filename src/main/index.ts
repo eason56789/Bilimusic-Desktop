@@ -23,6 +23,7 @@ let mainWindow: BrowserWindow | null = null
 let isQuitting = false
 let tray: Tray | null = null
 
+
 // 单实例:重复启动时聚焦已有窗口,避免双实例读写同一份 library.json
 if (!app.requestSingleInstanceLock()) {
   app.quit()
@@ -69,6 +70,7 @@ function ensureTray(): void {
   )
   tray.on('click', showMainWindow)
 }
+
 
 function showMainWindow(): void {
   if (!mainWindow || mainWindow.isDestroyed()) return

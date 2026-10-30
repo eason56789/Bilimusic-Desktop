@@ -178,6 +178,27 @@ button:active:not(:disabled) {
   -webkit-app-region: no-drag;
 }
 
+/** 听歌识别页:录音中的麦克风按钮向外扩散的脉冲 */
+@keyframes recognize-pulse {
+  0% {
+    box-shadow: 0 0 0 0 rgba(214, 69, 69, 0.45);
+  }
+  70% {
+    box-shadow: 0 0 0 18px rgba(214, 69, 69, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(214, 69, 69, 0);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  @keyframes recognize-pulse {
+    0%,
+    100% {
+      box-shadow: 0 0 0 0 rgba(214, 69, 69, 0);
+    }
+  }
+}
+
 /** 歌词滚动容器 */
 .lyrics-scroll {
   scrollbar-width: none;
@@ -252,3 +273,163 @@ button:active:not(:disabled) {
   to { opacity: 1; transform: none; }
 }
 .shell-enter { animation: shell-enter 0.45s cubic-bezier(0.16, 1, 0.3, 1); }
+
+/* ===== 轻提示(toast):位置 / 样式 / 动画 ===== */
+/* pointer-events:none 让整层不挡操作,只有胶囊本身可点 */
+.bm-toast-stack {
+  position: fixed;
+  z-index: 10000;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: max-content;
+  max-width: min(560px, calc(100vw - 40px));
+  pointer-events: none;
+}
+
+/* 顶部居中(默认):避开 40px 标题栏,从上方滑入 */
+.bm-toast-stack--top-center {
+  top: 48px;
+  left: 50%;
+  transform: translateX(-50%);
+  align-items: center;
+}
+
+/* 顶部右侧:同样避开标题栏与窗口按钮,从上方滑入 */
+.bm-toast-stack--top-right {
+  top: 48px;
+  right: 16px;
+  align-items: flex-end;
+}
+
+/* 右下角:贴近窗口右下(播放条上方),动画与其它位置一致(从上方滑入) */
+.bm-toast-stack--bottom-right {
+  right: 12px;
+  bottom: 80px;
+  align-items: flex-end;
+}
+
+.bm-toast {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 16px;
+  box-sizing: border-box;
+  max-width: 100%;
+  border-radius: 14px;
+  /* 纯黑白灰:深色主题用近黑底 + 白字 */
+  background: rgba(22, 22, 24, 0.94);
+  color: rgba(255, 255, 255, 0.96);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.42), 0 1px 2px rgba(0, 0, 0, 0.28);
+  backdrop-filter: blur(24px) saturate(1.2);
+  -webkit-backdrop-filter: blur(24px) saturate(1.2);
+  font-size: 13px;
+  line-height: 1.45;
+  cursor: pointer;
+  pointer-events: auto;
+  animation: bm-toast-in 0.24s cubic-bezier(0.16, 1, 0.3, 1);
+  will-change: transform, opacity;
+}
+
+/* 右下角与顶部位置共用同一套上下滑入动画(不再单独反向) */
+
+/* ===== 视觉样式三选一 ===== */
+
+/* 1) 玻璃 HUD(默认)—— 半透明 + 毛玻璃 */
+.bm-toast--hud {
+  background: rgba(22, 22, 24, 0.94);
+  backdrop-filter: blur(24px) saturate(1.2);
+  -webkit-backdrop-filter: blur(24px) saturate(1.2);
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.42), 0 1px 2px rgba(0, 0, 0, 0.28);
+}
+
+/* 2) 极简线条 —— 无底色/无阴影,只有一圈细边,文字浮在背景上 */
+.bm-toast--minimal {
+  background: transparent;
+  border: 1px solid rgba(255, 255, 255, 0.42);
+  box-shadow: none;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  /* 无底色时靠描边撑起可读性,加一点文字投影 */
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.75);
+}
+
+/* 3) 实心高对比 —— 不透明纯黑/纯白,无毛玻璃 */
+.bm-toast--solid {
+  background: #0a0a0b;
+  border: 1px solid #26262a;
+  box-shadow: 0 10px 34px rgba(0, 0, 0, 0.62), 0 2px 6px rgba(0, 0, 0, 0.4);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+/* 浅色主题:三种样式都反转成白底黑字(仍无彩色) */
+[data-bm-theme='light'] .bm-toast--hud {
+  background: rgba(250, 250, 252, 0.96);
+  color: rgba(20, 20, 22, 0.96);
+  border-color: rgba(0, 0, 0, 0.12);
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.18), 0 1px 2px rgba(0, 0, 0, 0.1);
+}
+
+[data-bm-theme='light'] .bm-toast--minimal {
+  border-color: rgba(0, 0, 0, 0.45);
+  color: rgba(16, 16, 18, 0.96);
+  text-shadow: 0 1px 3px rgba(255, 255, 255, 0.85);
+}
+
+[data-bm-theme='light'] .bm-toast--solid {
+  background: #ffffff;
+  color: #101012;
+  border-color: #d8d8dc;
+  box-shadow: 0 10px 34px rgba(0, 0, 0, 0.2), 0 2px 6px rgba(0, 0, 0, 0.12);
+}
+
+[data-bm-theme='light'] .bm-toast__msg {
+  color: rgba(20, 20, 22, 0.62);
+}
+
+.bm-toast--leave {
+  animation: bm-toast-out 0.24s cubic-bezier(0.4, 0, 1, 1) forwards;
+}
+
+.bm-toast__body {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.bm-toast__title {
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.bm-toast__msg {
+  color: rgba(255, 255, 255, 0.72);
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+@keyframes bm-toast-in {
+  /* 从屏幕上方之外滑入:-160px 足够越过 48px 顶部偏移 + 胶囊自身高度 */
+  from { opacity: 0; transform: translateY(-160px) scale(0.96); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@keyframes bm-toast-out {
+  from { opacity: 1; transform: translateY(0) scale(1); }
+  to   { opacity: 0; transform: translateY(-160px) scale(0.96); }
+}
+
+/* 减少动效:仅淡入淡出,不位移 */
+@media (prefers-reduced-motion: reduce) {
+  .bm-toast { animation: bm-toast-fade-in 0.16s ease; }
+  .bm-toast--leave { animation: bm-toast-fade-out 0.16s ease forwards; }
+  @keyframes bm-toast-fade-in { from { opacity: 0; } to { opacity: 1; } }
+  @keyframes bm-toast-fade-out { from { opacity: 1; } to { opacity: 0; } }
+}

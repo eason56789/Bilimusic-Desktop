@@ -5,7 +5,14 @@
  * - 取流: vkey.GetVkeyServer CgiGetVkey(免费/试听曲目返回 purl,VIP 专享为空)
  * - 评论: c.y.qq.com fcg_global_comment_h5(cmd=8 热评 / cmd=6 最新,topid 用数字 songid)
  */
-import type { Song, SourcePlaylistBrief, SourceArtistBrief } from '@shared/types'
+import type {
+  Song,
+  SourcePlaylistBrief,
+  SourceArtistBrief,
+  ChartCatalog,
+  ChartDetail,
+  ChartGroup
+} from '@shared/types'
 
 const UA =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
@@ -329,3 +336,85 @@ export async function getQqComments(
   if (order === 'time') comments = [...comments].sort((a, b) => b.time - a.time)
   return { total, comments, hasMore: false }
 }
+
+// ============ 排行榜 ============
+
+/**
+ * 榜单目录:musicu.fcg musicToplist.ToplistInfoServer / GetAll(匿名可用)。
+ * 注意返回是 req.data.group[](巅峰榜/地区榜/特色榜/全球榜四组),不是平铺 topList。
+ */
+export async function getChartCatalog(): Promise<ChartCatalog> {
+  const label = 'QQ音乐'
+  try {
+    const json = await postMusicu(
+      {
+        module: 'musicToplist.ToplistInfoServer',
+        method: 'GetAll',
+        param: {}
+      },
+      { ct: '24', cv: '0', uin: '0', format: 'json' }
+    )
+    const rawGroups: any[] = json?.req?.data?.group ?? []
+    const groups: ChartGroup[] = rawGroups
+      .map((g: any): ChartGroup => {
+        const charts = (g?.toplist ?? [])
+          .map((t: any) => {
+            const id = String(t?.topId ?? '')
+            const name = decodeEntities(String(t?.title ?? '').trim())
+            if (!id || !name) return null
+            return {
+              id,
+              name,
+              // QQ 榜单封面:toplist 自带 frontPicUrl/headPicUrl 之一
+              coverUrl: String(t?.frontPicUrl ?? t?.headPicUrl ?? t?.picUrl ?? '') || undefined,
+              updateTip: String(t?.updateTime ?? t?.period ?? '') || undefined
+            }
+          })
+          .filter((c: any) => c !== null)
+        return { name: decodeEntities(String(g?.groupName ?? '')), charts }
+      })
+      .filter((g: ChartGroup) => g.charts.length > 0)
+    if (groups.length === 0) {
+      return { platform: 'qq', label, groups: [], error: 'QQ音乐榜单目录为空' }
+    }
+    return { platform: 'qq', label, groups }
+  } catch (e) {
+    return { platform: 'qq', label, groups: [], error: e instanceof Error ? e.message : String(e) }
+  }
+}
+
+/** QQ 榜单封面:接口给的常是 `{size}` 占位或小图,统一提升到 300 档 */
+function qqChartCover(raw: unknown): string | undefined {
+  const s = String(raw ?? '').trim()
+  if (!s) return undefined
+  if (s.includes('{size}')) return s.replace(/\{size\}/g, '300')
+  return s
+}
+
+/** 榜单曲目:GetDetail(topId/offset/num),songInfoList 与搜索结果同构 */
+export async function getChartSongs(chartId: string, num = 100): Promise<ChartDetail> {
+  const json = await postMusicu(
+    {
+      module: 'musicToplist.ToplistInfoServer',
+      method: 'GetDetail',
+      param: { topId: Number(chartId) || chartId, offset: 0, num, period: '' }
+    },
+    { ct: '24', cv: '0', uin: '0', format: 'json' }
+  )
+  const root = json?.req?.data ?? {}
+  const list: any[] = root?.songInfoList ?? []
+  const songs = list.map(qqSongFromItem).filter((s): s is Song => s !== null)
+  // 榜名/封面/简介在 root.data 里(songInfoList 是它的兄弟节点,同挂在 req.data 下)
+  const meta = root?.data ?? {}
+  return {
+    id: String(chartId),
+    name: decodeEntities(String(meta?.title ?? root?.title ?? '')),
+    platform: 'qq',
+    coverUrl: qqChartCover(meta?.frontPicUrl ?? meta?.headPicUrl ?? meta?.picUrl ?? meta?.toplistNamePicUrl),
+    updateTip: String(meta?.updateTips ?? meta?.updateTime ?? meta?.period ?? '') || undefined,
+    intro: meta?.intro ? decodeEntities(String(meta.intro)).slice(0, 300) : undefined,
+    songs,
+    total: Number(meta?.totalNum ?? 0) || songs.length
+  }
+}
+

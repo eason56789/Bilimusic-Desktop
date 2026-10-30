@@ -5,7 +5,15 @@
  * - 取流: m.kugou.com getSongInfo.php(免费曲目返回直链,VIP 专享 url 为空)
  * - 评论: 无公开匿名接口,评论区走"网易云/QQ同名搜索"兜底(与旧版 QQ/酷狗行为一致)
  */
-import type { Song, SourcePlaylistBrief, SourceArtistBrief, HighlightPoint } from '@shared/types'
+import type {
+  Song,
+  SourcePlaylistBrief,
+  SourceArtistBrief,
+  HighlightPoint,
+  ChartCatalog,
+  ChartDetail,
+  ChartBrief
+} from '@shared/types'
 
 const UA =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
@@ -291,4 +299,66 @@ export async function getKugouClimax(hash: string): Promise<HighlightPoint[] | n
 export async function getKugouCover(hash: string): Promise<string | null> {
   const info = await fetchKugouSongInfo(hash)
   return info?.cover ?? null
+}
+
+// ============ 排行榜 ============
+
+/**
+ * 榜单目录:mobilecdnbj api/v3/rank/list(56 个榜,含 TOP500/电音/纯音乐/国潮等)。
+ * 该域名的 HTTPS 证书主机名不匹配(ERR_TLS_CERT_ALTNAME_INVALID),必须走 HTTP —
+ * 与 qqkugou.ts 里歌单/歌手搜索的处理一致。
+ */
+export async function getChartCatalog(): Promise<ChartCatalog> {
+  const label = '酷狗音乐'
+  try {
+    const resp = await fetch(
+      'http://mobilecdnbj.kugou.com/api/v3/rank/list?version=9108&plat=0&showtype=2',
+      { headers: { 'User-Agent': UA, Referer: 'https://www.kugou.com/' }, signal: AbortSignal.timeout(15_000) }
+    )
+    if (!resp.ok) throw new Error(`酷狗 HTTP ${resp.status}`)
+    const json = (await resp.json()) as any
+    const info: any[] = json?.data?.info ?? []
+    const charts: ChartBrief[] = info
+      .map((r: any): ChartBrief | null => {
+        const id = String(r?.rankid ?? '')
+        const name = decodeEntities(String(r?.rankname ?? '').trim())
+        if (!id || !name) return null
+        // 酷狗该接口不返回榜单封面,取 update_frequency/简介文本作为副标题
+        const tip = r?.update_frequency ? `更新频率 ${r.update_frequency}` : undefined
+        const intro = r?.intro ? decodeEntities(String(r.intro)).slice(0, 80) : undefined
+        return { id, name, updateTip: tip, intro }
+      })
+      .filter((c): c is ChartBrief => c !== null)
+    if (charts.length === 0) {
+      return { platform: 'kugou', label, groups: [], error: '酷狗榜单目录为空' }
+    }
+    return { platform: 'kugou', label, groups: [{ name: '', charts }] }
+  } catch (e) {
+    return { platform: 'kugou', label, groups: [], error: e instanceof Error ? e.message : String(e) }
+  }
+}
+
+/**
+ * 榜单曲目:api/v3/rank/song。该接口给 filename("歌手 - 歌名")+ hash + album_id,
+ * 没有结构化歌名歌手,复用 songFromKugouFileItem 拆分。
+ */
+export async function getChartSongs(chartId: string, pageSize = 100): Promise<ChartDetail> {
+  const resp = await fetch(
+    `http://mobilecdnbj.kugou.com/api/v3/rank/song?version=9108&plat=0&pagesize=${pageSize}&page=1&rankid=${encodeURIComponent(chartId)}`,
+    { headers: { 'User-Agent': UA, Referer: 'https://www.kugou.com/' }, signal: AbortSignal.timeout(15_000) }
+  )
+  if (!resp.ok) throw new Error(`酷狗 HTTP ${resp.status}`)
+  const json = (await resp.json()) as any
+  const info: any[] = json?.data?.info ?? []
+  const songs = info
+    .map((it: any) => songFromKugouFileItem(it))
+    .filter((s): s is Song => s !== null)
+  // song 接口不返回榜单名,由 ipc 层用目录缓存的名称回填
+  return {
+    id: String(chartId),
+    name: '',
+    platform: 'kugou',
+    songs,
+    total: Number(json?.data?.total ?? 0) || songs.length
+  }
 }

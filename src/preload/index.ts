@@ -41,6 +41,9 @@ const api: DesktopApi = {
   libraryImportSourcePlaylist: (platform, id, name) =>
     invoke('library:importSourcePlaylist', platform, id, name),
   songClimax: (song) => invoke('api:songClimax', song),
+  songHot: (song) => invoke('api:songHot', song),
+  chartCatalog: (platform) => invoke('api:chartCatalog', platform),
+  chartSongs: (platform, chartId) => invoke('api:chartSongs', platform, chartId),
   neteasePlaylistMeta: (id) => invoke('api:neteasePlaylistMeta', id),
   neteaseArtistDetail: (id) => invoke('api:neteaseArtistDetail', id),
 
@@ -72,6 +75,9 @@ const api: DesktopApi = {
     invoke<Playlist[]>('library:removeFromPlaylist', playlistId, songId),
   libraryAddRecent: (song) => invoke('library:addRecent', song),
   libraryClearRecent: () => invoke('library:clearRecent'),
+  libraryToggleFavorite: (song) => invoke('library:toggleFavorite', song),
+  libraryGetFavorites: () => invoke('library:getFavorites'),
+  libraryDedupeFavorites: () => invoke('library:dedupeFavorites'),
   libraryAddSearchHistory: (q) => invoke('library:addSearchHistory', q),
   libraryRemoveSearchHistory: (q) => invoke('library:removeSearchHistory', q),
   libraryClearSearchHistory: () => invoke('library:clearSearchHistory'),
@@ -215,7 +221,12 @@ const api: DesktopApi = {
   desktopSources: () => invoke<{ id: string; name: string }[]>('api:desktopSources'),
   recognizeAudio: (wav) => invoke('api:recognizeAudio', wav),
   getRecognizeToken: () => invoke<string>('api:getRecognizeToken'),
-  setRecognizeToken: (token) => invoke('api:setRecognizeToken', token)
+  setRecognizeToken: (token) => invoke('api:setRecognizeToken', token),
+
+  // 快捷方式伪装
+  disguisePresets: () => invoke('disguise:presets'),
+  disguisePresetIcon: (id) => invoke<string>('disguise:icon', id),
+  disguiseCreate: (presetId, customName) => invoke('disguise:create', presetId, customName)
 } as DesktopApi
 
 contextBridge.exposeInMainWorld('api', api)

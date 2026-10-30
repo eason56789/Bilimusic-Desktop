@@ -149,3 +149,114 @@ export async function fetchKugouPlaylist(id: string): Promise<LinkedPlaylist> {
     favCount: fav > 0 ? fav : undefined
   }
 }
+
+/**
+ * 酷狗概念版歌单(新版分享链接 t1.kugou.com/xxx 跳转到 activity.kugou.com 分享页,
+ * 页面里带 global_specialid=collection_x_y_z 形式的歌单 id)。
+ *
+ * 这类歌单在旧 v3 special 接口上取不到,必须走 mobiles.kugou.com 的 v5 special/song;
+ * filename 形如 "S.H.E - 天灰",拆成歌手/歌名。
+ */
+export async function fetchKugouCollectionPlaylist(
+  globalId: string,
+  specialId?: string
+): Promise<LinkedPlaylist> {
+  const UA_KG =
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+  const referer = 'https://www.kugou.com/'
+  const pageSize = 100
+  const maxPages = 50
+  const songs: Song[] = []
+  let total = 0
+  let meta: Record<string, unknown> = {}
+
+  for (let page = 1; page <= maxPages; page++) {
+    const url =
+      `https://mobiles.kugou.com/api/v5/special/song?specialid=${encodeURIComponent(specialId ?? '')}` +
+      `&global_collection_id=${encodeURIComponent(globalId)}` +
+      `&page=${page}&pagesize=${pageSize}&plat=0&version=8000`
+    const resp = await fetch(url, {
+      headers: { 'User-Agent': UA_KG, Referer: referer },
+      signal: AbortSignal.timeout(20_000)
+    })
+    if (!resp.ok) throw new Error(`酷狗概念版歌单 HTTP ${resp.status}`)
+    const json = (await resp.json()) as {
+      data?: { info?: Record<string, unknown>[]; total?: number }
+      errcode?: number
+      error?: string
+    }
+    if (json.errcode && json.errcode !== 0) {
+      throw new Error(`酷狗概念版歌单接口错误:${json.error ?? json.errcode}`)
+    }
+    const list = json?.data?.info ?? []
+    if (page === 1) {
+      total = Number(json?.data?.total ?? 0)
+      meta = (json?.data ?? {}) as Record<string, unknown>
+    }
+    for (const it of list) {
+      const filename = String(it.filename ?? '').trim()
+      // filename 通常是 "歌手 - 歌名";没有分隔符时整串当歌名
+      const dash = filename.indexOf(' - ')
+      const artist = dash > 0 ? filename.slice(0, dash).trim() : '未知'
+      const title = dash > 0 ? filename.slice(dash + 3).trim() : filename
+      const hash = String(it.hash ?? it.sqhash ?? it['320hash'] ?? '').toUpperCase()
+      if (!hash || !title) continue
+      const duration = Math.max(0, Math.round(Number(it.duration ?? 0)))
+      songs.push({
+        id: `kg-${hash}`,
+        title,
+        artist,
+        album: decodeEntities(String(it.album_name ?? '')) || undefined,
+        coverUrl: normalizeKugouCover(String(it.album_image ?? it.imgurl ?? '')) ?? undefined,
+        duration,
+        source: 'KUGOU',
+        page: 1,
+        addedAt: Date.now(),
+        kugouHash: hash,
+        kugouMixId: it.album_audio_id ? String(it.album_audio_id) : undefined,
+        kugouAlbumId: it.album_id ? String(it.album_id) : undefined
+      })
+    }
+    if (list.length === 0) break
+    if (total > 0 && songs.length >= total) break
+    if (list.length < pageSize) break
+  }
+  if (songs.length === 0) throw new Error('酷狗概念版歌单为空或不可访问(可能链接失效)')
+
+  // 概念版 song 接口不返回歌单元信息,另取 v5 special/info 补名称/封面/简介
+  let metaInfo: Record<string, unknown> = {}
+  if (specialId) {
+    try {
+      const ir = await fetch(
+        `https://mobiles.kugou.com/api/v5/special/info?specialid=${encodeURIComponent(specialId)}` +
+          `&global_collection_id=${encodeURIComponent(globalId)}&plat=0&version=8000`,
+        { headers: { 'User-Agent': UA_KG, Referer: referer }, signal: AbortSignal.timeout(15_000) }
+      )
+      if (ir.ok) {
+        const ij = (await ir.json()) as { data?: Record<string, unknown> }
+        metaInfo = ij?.data ?? {}
+      }
+    } catch {
+      /* 名称取不到就用兜底名 */
+    }
+  }
+  const merged = { ...meta, ...metaInfo }
+
+  return {
+    platform: 'kugou',
+    playlistId: globalId,
+    name: decodeEntities(String(merged.specialname ?? merged.name ?? `酷狗歌单 ${globalId}`)),
+    coverUrl: normalizeKugouCover(String(merged.imgurl ?? merged.img ?? '')) ?? '',
+    songs,
+    description: decodeEntities(String(merged.intro ?? merged.desc ?? '')),
+    creator: decodeEntities(String(merged.nickname ?? merged.username ?? '')),
+    playCount:
+      Number(merged.playcount ?? merged.play_count ?? 0) > 0
+        ? Number(merged.playcount ?? merged.play_count)
+        : undefined,
+    favCount:
+      Number(merged.collectcount ?? merged.collect_count ?? 0) > 0
+        ? Number(merged.collectcount ?? merged.collect_count)
+        : undefined
+  }
+}

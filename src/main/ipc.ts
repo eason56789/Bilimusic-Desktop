@@ -21,12 +21,16 @@ import type {
   Song,
   Settings,
   UserProfile,
-  HighlightPoint
+  HighlightPoint,
+  ChartPlatform,
+  ChartCatalog,
+  ChartDetail
 } from '@shared/types'
 import * as bilibili from './api/bilibili'
 import * as netease from './api/netease'
 import * as qqmusic from './api/qqmusic'
 import * as kugou from './api/kugou'
+import { getSongHot } from './api/songHot'
 import { fetchPlaylistByLink } from './api/linkImport'
 import { fetchQqPlaylist, fetchKugouPlaylist } from './api/qqkugou'
 import { computeSyncPlan } from './syncDelta'
@@ -73,6 +77,7 @@ import {
   notifyFloatMenuState
 } from './float'
 import { recognizeAudio, getAuddToken, setAuddToken } from './api/recognize'
+import { PRESETS, createShortcut, iconDataUrl, getPreset } from './disguise'
 import type { FloatLyricState, FloatControlCmd } from '@shared/types'
 import QRCode from 'qrcode'
 
@@ -115,7 +120,10 @@ function librarySnapshot(): Library {
     settings: d.settings,
     biliProfile: d.biliProfile,
     neteaseProfile: d.neteaseProfile,
-    listenStats: d.listenStats
+    listenStats: d.listenStats,
+    // 收藏 id 列表必须随快照下发:渲染层的行内心形/播放条/全屏页都读它判断收藏态,
+    // 之前漏了这一项,导致「已收藏」永远显示成未收藏
+    favoriteIds: d.favoriteIds ?? []
   }
 }
 
@@ -465,6 +473,63 @@ export function registerIpc(): void {
       return null
     }
   })
+  ipcMain.handle('api:songHot', async (_e, song: Song) => {
+    try {
+      return ok(await getSongHot(song))
+    } catch (e) {
+      return err(e)
+    }
+  })
+  // ===== 排行榜 =====
+  // 目录缓存:榜单曲目接口(酷狗)不返回榜名,用目录里的名称回填;同时避免切榜单反复拉目录
+  const chartCatalogCache = new Map<ChartPlatform, { at: number; data: ChartCatalog }>()
+  const CHART_CATALOG_TTL = 30 * 60 * 1000
+
+  const chartApi = {
+    netease: () => netease,
+    qq: () => qqmusic,
+    kugou: () => kugou,
+    bilibili: () => bilibili
+  }
+
+  async function currentCatalog(platform: ChartPlatform): Promise<ChartCatalog> {
+    const hit = chartCatalogCache.get(platform)
+    if (hit && Date.now() - hit.at < CHART_CATALOG_TTL && !hit.data.error) return hit.data
+    const data = await chartApi[platform]().getChartCatalog()
+    // 只有成功结果才进缓存,失败下次重试
+    if (!data.error) chartCatalogCache.set(platform, { at: Date.now(), data })
+    return data
+  }
+
+  ipcMain.handle('api:chartCatalog', async (_e, platform: ChartPlatform) => {
+    try {
+      if (!chartApi[platform]) return err(new Error(`未知平台 ${platform}`))
+      return ok(await currentCatalog(platform))
+    } catch (e) {
+      return err(e)
+    }
+  })
+
+  ipcMain.handle('api:chartSongs', async (_e, platform: ChartPlatform, chartId: string) => {
+    try {
+      if (!chartApi[platform]) return err(new Error(`未知平台 ${platform}`))
+      const detail: ChartDetail = await chartApi[platform]().getChartSongs(String(chartId))
+      // 榜名/封面/简介:曲目接口缺这些字段时,用目录里的信息补齐(酷狗 B站 都没有)
+      if (!detail.name || !detail.coverUrl || !detail.intro) {
+        const cat = await currentCatalog(platform).catch(() => null)
+        const brief = cat?.groups.flatMap((g) => g.charts).find((c) => c.id === String(chartId))
+        if (brief) {
+          if (!detail.name) detail.name = brief.name
+          if (!detail.coverUrl) detail.coverUrl = brief.coverUrl
+          if (!detail.intro) detail.intro = brief.intro
+          if (!detail.updateTip) detail.updateTip = brief.updateTip
+        }
+      }
+      return ok(detail)
+    } catch (e) {
+      return err(e)
+    }
+  })
   ipcMain.handle('api:neteasePersonalized', async () => {
     try {
       return ok(await netease.getPersonalizedPlaylists(12))
@@ -707,6 +772,54 @@ export function registerIpc(): void {
   ipcMain.handle('library:addRecent', (_e, song: Song) => {
     addRecent(song)
     return true
+  })
+  // 收藏:加入时插入队首(最新收藏在前),同时把歌曲元数据存进库以便收藏页展示
+  ipcMain.handle('library:toggleFavorite', (_e, song: Song) => {
+    const st = getStore()
+    const ids = st.favoriteIds ?? []
+    const has = ids.includes(song.id)
+    if (has) {
+      st.favoriteIds = ids.filter((id) => id !== song.id)
+    } else {
+      upsertSong(song)
+      st.favoriteIds = [song.id, ...ids]
+    }
+    saveStore()
+    return { favorited: !has, favoriteIds: st.favoriteIds }
+  })
+  ipcMain.handle('library:getFavorites', () => {
+    const st = getStore()
+    const ids = st.favoriteIds ?? []
+    return ids.map((id) => st.songs[id]).filter((s): s is Song => !!s)
+  })
+  /**
+   * 去掉收藏里的重复曲目。
+   * 旧版「更换音源」会把 id 换成新平台的 id,同一首歌因此重复收藏成两条(如 B站版 + 网易云版)。
+   * 按 标题+歌手 归并,保留收藏顺序靠前的那条。
+   */
+  ipcMain.handle('library:dedupeFavorites', () => {
+    const st = getStore()
+    const ids = st.favoriteIds ?? []
+    const seen = new Set<string>()
+    const kept: string[] = []
+    for (const id of ids) {
+      const s = st.songs[id]
+      // 元数据缺失的条目原样保留,避免误删用户数据
+      if (!s) {
+        kept.push(id)
+        continue
+      }
+      const key = `${s.title.trim().toLowerCase()}|${s.artist.trim().toLowerCase()}`
+      if (seen.has(key)) continue
+      seen.add(key)
+      kept.push(id)
+    }
+    const removed = ids.length - kept.length
+    if (removed > 0) {
+      st.favoriteIds = kept
+      saveStore()
+    }
+    return { removed, total: kept.length }
   })
   ipcMain.handle('library:clearRecent', () => {
     getStore().recentPlays = []
@@ -1462,10 +1575,32 @@ export function registerIpc(): void {
     return sources.map((s) => ({ id: s.id, name: s.name }))
   })
   ipcMain.handle('api:recognizeAudio', async (_e, wav: ArrayBuffer) => {
+    // 总开关关闭时直接拒绝:入口按钮虽已隐藏,但主进程仍要兜底,
+    // 避免通过其他途径(快捷键/脚本)发起识别而绕过用户设置。
+    // 抛错而非返回空对象——渲染层以 catch 区分失败,返回空对象会被当成"识别成功但无标题"。
+    if (getStore().settings.songRecognizeEnabled === false) {
+      throw new Error('听歌识别已在设置中关闭')
+    }
     return recognizeAudio(Buffer.from(wav))
   })
   ipcMain.handle('api:getRecognizeToken', () => getAuddToken())
   ipcMain.handle('api:setRecognizeToken', (_e, token: string) => {
     setAuddToken(typeof token === 'string' ? token.trim() : '')
+  })
+
+  // ===== 快捷方式伪装 =====
+  ipcMain.handle('disguise:presets', () =>
+    PRESETS.map((p) => ({ id: p.id, name: p.name, description: p.description }))
+  )
+  ipcMain.handle('disguise:icon', (_e, id: string) => iconDataUrl(id))
+  ipcMain.handle('disguise:create', async (_e, presetId: string, customName?: string) => {
+    try {
+      // 只接受已知预设,避免渲染层传入任意名称在桌面建文件
+      if (!getPreset(presetId)) return { ok: false, error: '未知的伪装目标' }
+      const r = await createShortcut(presetId, customName)
+      return { ok: true, path: r.path }
+    } catch (e) {
+      return { ok: false, error: e instanceof Error ? e.message : String(e) }
+    }
   })
 }

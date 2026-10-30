@@ -23,8 +23,7 @@ import {
   PlayRegular,
   ArrowLeftRegular,
   CloudArrowDownRegular,
-  HistoryRegular,
-  MicRegular
+  HistoryRegular
 } from '@fluentui/react-icons'
 import type {
   NeteaseArtistBrief,
@@ -42,7 +41,6 @@ import { SongList } from '../components/SongList'
 import { Cover } from '../components/Cover'
 import { formatCount } from '../lib/format'
 import { toastError, toastSuccess } from '../lib/toast'
-import { captureSystemAudioWav } from '../lib/recognize'
 
 const useStyles = makeStyles({
   root: { display: 'flex', flexDirection: 'column', height: '100%', padding: '16px 24px 0', gap: '12px' },
@@ -127,9 +125,6 @@ export function SearchPage() {
   /** 搜索类型(歌曲/歌单/歌手):网易云、QQ音乐、酷狗 共用同一选择 */
   const [searchType, setSearchType] = useState<SearchType>('songs')
   const [query, setQuery] = useState('')
-  /** 听歌识别:空闲/录音中/识别中 */
-  const [recState, setRecState] = useState<'idle' | 'recording' | 'identifying'>('idle')
-  const [recTip, setRecTip] = useState('')
   const [biliResults, setBiliResults] = useState<Song[]>([])
   const [neResults, setNeResults] = useState<Song[]>([])
   const [neHasMore, setNeHasMore] = useState(false)
@@ -283,28 +278,19 @@ export function SearchPage() {
     void doSearch(q, type)
   }
 
-  /** 听歌识别:抓 8 秒系统声音 → AudD 识别 → 结果填入搜索框并搜索 */
-  const runRecognize = async (): Promise<void> => {
-    if (recState !== 'idle') return
-    setRecTip('')
-    setRecState('recording')
-    try {
-      const wav = await captureSystemAudioWav((s) => {
-        if (s === 'sending') setRecState('identifying')
-      })
-      setRecState('identifying')
-      const r = await api.recognizeAudio(await wav.arrayBuffer())
-      const q = [r.title, r.artist].filter(Boolean).join(' ')
-      setQuery(q)
-      toastSuccess('识别成功', `${r.title} - ${r.artist}`)
-      setRecState('idle')
-      void doSearch(q, 'songs', 'netease')
-    } catch (e) {
-      setRecState('idle')
-      setRecTip(e instanceof Error ? e.message : String(e))
-      toastError('听歌识别失败', e instanceof Error ? e.message : String(e))
-    }
-  }
+  /**
+   * 消费来自识曲页的关键词:识曲成功后跳到这里,自动填入并搜索。
+   * 只在挂载时消费一次 —— takePendingSearch 取走即清空,
+   * 因此之后用户手动切回搜索页不会又被旧关键词覆盖。
+   */
+  useEffect(() => {
+    const q = useStore.getState().takePendingSearch()
+    if (!q) return
+    setQuery(q)
+    void doSearch(q, 'songs', 'netease')
+    // 仅在首次挂载时执行;doSearch 每次渲染都是新引用,放进依赖会重复触发
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   // 打开歌单预览(附带网易云元信息:播放量/创建时间/标签)
   const openPlaylistPreview = async (pl: NeteasePlaylistBrief) => {
@@ -758,18 +744,6 @@ export function SearchPage() {
             setTimeout(() => setFocusHist(false), 200)
           }}
         />
-        <Tooltip content={recTip || '听歌识别:抓取 8 秒系统声音识别正在播放的歌'} relationship="description">
-          <Button
-            size="large"
-            appearance="outline"
-            icon={recState === 'idle' ? <MicRegular /> : <Spinner size="tiny" />}
-            disabled={recState !== 'idle' || loading}
-            title={recState === 'recording' ? '正在聆听系统声音…' : recState === 'identifying' ? '识别中…' : '听歌识别'}
-            onClick={() => void runRecognize()}
-          >
-            {recState === 'recording' ? '聆听中' : recState === 'identifying' ? '识别中' : '识曲'}
-          </Button>
-        </Tooltip>
         <Button
           size="large"
           appearance="primary"

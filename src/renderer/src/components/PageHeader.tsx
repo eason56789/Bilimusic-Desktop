@@ -76,6 +76,10 @@ export function PageLayout({
         display: 'flex',
         flexDirection: 'column',
         height: '100%',
+        // minHeight 必须显式设为 0:flex 子项默认 min-height:auto 会被内容撑高,
+        // 导致整页比 main 的实际可用高度更高、向下溢出,滚动区底边压到播放条底下,
+        // 滚到最后一行时只能看到一半(列表页、最近播放页都受影响)。
+        minHeight: 0,
         padding: '18px 24px 16px',
         gap: '14px',
         minWidth: 0
@@ -90,7 +94,10 @@ export function PageLayout({
           display: 'flex',
           flexDirection: 'column',
           gap: '10px',
-          paddingRight: '4px'
+          paddingRight: '4px',
+          // 底部留一点滚动余量:滚到底时最后一行与边缘之间有空隙,
+          // 不会因为紧贴容器下边缘而显得被裁掉一半
+          paddingBottom: '20px'
         }}
       >
         {children}

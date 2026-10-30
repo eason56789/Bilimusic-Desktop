@@ -44,15 +44,30 @@ export async function checkUpdateDetailed(): Promise<UpdateCheckResult> {
     // 404 = 仓库还没有任何 release:当作"暂无新版本",而不是失败
     if (resp.status === 404) return { status: 'latest', version: current }
     if (!resp.ok) return { status: 'error', message: `GitHub 返回 HTTP ${resp.status}` }
-    const json = (await resp.json()) as any
+    const json = (await resp.json()) as {
+      tag_name?: string
+      body?: string
+      html_url?: string
+      published_at?: string
+      assets?: { name?: string; browser_download_url?: string; size?: number }[]
+    }
     const tag: string = String(json?.tag_name ?? '')
     if (!tag) return { status: 'latest', version: current }
     if (compareVersions(tag, current) <= 0) return { status: 'latest', version: current }
+    // 下载直连安装包资产(不让用户再去 release 页面里找);
+    // 优先 .exe,其次任意资产,都没有才退回 release 页面
+    const assets = Array.isArray(json?.assets) ? json.assets : []
+    const exe = assets.find((a) => /\.exe$/i.test(a?.name ?? ''))
+    const anyAsset = assets.find((a) => !!a?.browser_download_url)
+    const downloadUrl =
+      exe?.browser_download_url ??
+      anyAsset?.browser_download_url ??
+      String(json?.html_url ?? `https://github.com/${OWNER}/${REPO}/releases`)
     return {
       status: 'update',
       info: {
         version: tag.replace(/^v/i, ''),
-        url: String(json?.html_url ?? `https://github.com/${OWNER}/${REPO}/releases`),
+        url: downloadUrl,
         notes: String(json?.body ?? ''),
         publishedAt: json?.published_at ? String(json.published_at) : undefined
       }

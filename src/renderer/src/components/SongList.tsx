@@ -22,7 +22,12 @@ import {
   DismissRegular,
   SelectAllOnRegular,
   FolderAddRegular,
-  ListRegular
+  ListRegular,
+  HeartRegular,
+  HeartFilled,
+  CopyRegular,
+  InfoRegular,
+  ArrowSwapRegular
 } from '@fluentui/react-icons'
 import type { Song } from '@shared/types'
 import { useStore } from '../store'
@@ -98,6 +103,19 @@ const useStyles = makeStyles({
     flexShrink: 0
   },
   eqWrap: { display: 'inline-flex', gap: '2px', alignItems: 'flex-end', height: '12px' },
+  rank: {
+    width: '26px',
+    flexShrink: 0,
+    textAlign: 'right',
+    fontVariantNumeric: 'tabular-nums',
+    color: tokens.colorNeutralForeground3,
+    fontSize: tokens.fontSizeBase300
+  },
+  /** 前三名高亮:金/银/铜 */
+  rankTop: {
+    fontWeight: 700,
+    color: tokens.colorBrandForeground1
+  },
   selBar: {
     position: 'sticky',
     top: 0,
@@ -137,18 +155,31 @@ interface CtxMenuState {
 export function SongList({
   songs,
   onRemove,
-  showAlbum
+  showAlbum,
+  showRank
 }: {
   songs: Song[]
   onRemove?: (song: Song) => void
   showAlbum?: boolean
+  /** 显示排名序号(排行榜页用;按数组顺序即榜单名次) */
+  showRank?: boolean
 }) {
   const styles = useStyles()
   const playQueue = useStore((s) => s.playQueue)
   const playSongNext = useStore((s) => s.playSongNext)
   const current = useStore((s) => s.current)
+  // 注意:不能在 selector 里写 `?? []`——每次渲染都返回新数组会让 React 无限重渲(React #185)。
+  // 先把 library 取出来,再在渲染里判断,引用保持稳定。
+  const favoriteIds = useStore((s) => s.library?.favoriteIds)
+  const faved = (id: string): boolean => !!favoriteIds?.includes(id)
   /** 音源加载中:屏蔽本列表的播放操作(此时 el 里还没有可播内容) */
   const loading = useStore((s) => s.loading)
+  /**
+   * 这一行是不是「正在加载的那首歌」。
+   * 只有它需要禁用:重复点它没意义(已经在取了)。其它行点击立即生效,
+   * 由 store 的请求序号负责抢占并作废旧请求。
+   */
+  const isThisLoading = (song: Song): boolean => loading && current?.id === song.id
   const [addTarget, setAddTarget] = useState<Song[] | null>(null)
   const [ctxMenu, setCtxMenu] = useState<CtxMenuState | null>(null)
   const ctxAnchorRef = useRef<HTMLSpanElement>(null)
@@ -186,10 +217,16 @@ export function SongList({
   const selSongs = songs.filter((s) => selected.has(s.id))
   const allSelected = songs.length > 0 && selSongs.length === songs.length
 
-  /** 立即播放(音源加载中忽略点击,避免与新音源解析互相打断) */
+  /**
+   * 立即播放。
+   * 只拦「正在加载的那首歌本身」——重复点它没有意义(它已经在取了);
+   * 点其它歌一律立即生效:store 会给新请求递增序号并 abort 旧的取流,
+   * 旧请求回来时发现自己已过期就静默退出,所以不需要整列表锁定。
+   */
   const playNow = (index: number) => {
-    if (loading) {
-      toast('音源加载中', '请等当前歌曲加载完成')
+    const target = songs[index]
+    if (loading && target && current?.id === target.id) {
+      toast('音源加载中', '当前歌曲正在加载,请稍候')
       return
     }
     playQueue(songs, index)
@@ -217,37 +254,75 @@ export function SongList({
     api.downloadAdd([song])
     toastSuccess('已加入下载队列', song.title)
   }
+  /** 收藏 / 取消收藏 */
+  const toggleFav = async (song: Song) => {
+    const r = await api.libraryToggleFavorite(song)
+    // 刷新库快照,让 favoriteIds 立刻反映到界面(心形图标/收藏页)
+    await useStore.getState().refreshLibrary()
+    toastSuccess(r.favorited ? '已收藏' : '已取消收藏', song.title)
+  }
+  /** 复制歌曲信息 */
+  const copyInfo = (song: Song) => {
+    void api.appCopy(`${song.title} - ${song.artist}`)
+    toastSuccess('已复制', `${song.title} - ${song.artist}`)
+  }
+  /** 查看歌曲详情:必须针对被右键的那首歌,而不是当前播放 */
+  const openDetail = (song: Song): void => {
+    useStore.getState().openSongDialog('info', song)
+  }
+  /** 更换音源:同上 */
+  const openSwitch = (song: Song): void => {
+    useStore.getState().openSongDialog('source', song)
+  }
 
   /** 右键/更多菜单共用的菜单项 */
-  const menuItems = (song: Song, index: number) => (
-    <>
-      <MenuItem icon={<PlayRegular />} onClick={() => playNow(index)}>
-        立即播放
-      </MenuItem>
-      <MenuItem icon={<ArrowRightRegular />} onClick={() => playNext(song)}>
-        下一首播放
-      </MenuItem>
-      {song.source === 'BILIBILI' && song.bvid && (
-        <MenuItem icon={<ListRegular />} onClick={() => void playAllPages(song)}>
-          播放全部分P
+  const menuItems = (song: Song, index: number) => {
+    const isFav = faved(song.id)
+    return (
+      <>
+        <MenuItem icon={<PlayRegular />} onClick={() => playNow(index)}>
+          立即播放
         </MenuItem>
-      )}
-      <MenuItem icon={<FolderAddRegular />} onClick={() => setAddTarget([song])}>
-        添加到歌单
-      </MenuItem>
-      <MenuItem icon={<ArrowDownloadRegular />} onClick={() => download(song)}>
-        下载
-      </MenuItem>
-      <MenuItem icon={<SelectAllOnRegular />} onClick={enterSelMode}>
-        多选模式
-      </MenuItem>
-      {onRemove && (
-        <MenuItem icon={<DeleteRegular />} onClick={() => onRemove(song)}>
-          移除
+        <MenuItem icon={<ArrowRightRegular />} onClick={() => playNext(song)}>
+          下一首播放
         </MenuItem>
-      )}
-    </>
-  )
+        <MenuItem
+          icon={isFav ? <HeartFilled /> : <HeartRegular />}
+          onClick={() => void toggleFav(song)}
+        >
+          {isFav ? '取消收藏' : '收藏'}
+        </MenuItem>
+        {song.source === 'BILIBILI' && song.bvid && (
+          <MenuItem icon={<ListRegular />} onClick={() => void playAllPages(song)}>
+            播放全部分P
+          </MenuItem>
+        )}
+        <MenuItem icon={<FolderAddRegular />} onClick={() => setAddTarget([song])}>
+          添加到歌单
+        </MenuItem>
+        <MenuItem icon={<ArrowDownloadRegular />} onClick={() => download(song)}>
+          下载
+        </MenuItem>
+        <MenuItem icon={<ArrowSwapRegular />} onClick={() => openSwitch(song)}>
+          更换音源
+        </MenuItem>
+        <MenuItem icon={<InfoRegular />} onClick={() => openDetail(song)}>
+          歌曲详情
+        </MenuItem>
+        <MenuItem icon={<CopyRegular />} onClick={() => copyInfo(song)}>
+          复制歌名歌手
+        </MenuItem>
+        <MenuItem icon={<SelectAllOnRegular />} onClick={enterSelMode}>
+          多选模式
+        </MenuItem>
+        {onRemove && (
+          <MenuItem icon={<DeleteRegular />} onClick={() => onRemove(song)}>
+            移除
+          </MenuItem>
+        )}
+      </>
+    )
+  }
 
   const onRowContextMenu = (e: MouseEvent<HTMLDivElement>, song: Song, index: number) => {
     e.preventDefault()
@@ -323,6 +398,9 @@ export function SongList({
                   onClick={(e) => e.stopPropagation()}
                 />
               )}
+              {showRank && (
+                <span className={`${styles.rank} ${i < 3 ? styles.rankTop : ''}`}>{i + 1}</span>
+              )}
               <Cover url={song.coverUrl} size={40} iconSize={16} />
               <div className={styles.meta}>
                 <span className={styles.title}>
@@ -353,12 +431,13 @@ export function SongList({
               {!selMode && (
                 // 行内操作按钮/菜单:阻止冒泡,避免连带触发整行的"单击播放"
                 <>
-                  <Tooltip content={loading ? '音源加载中…' : '立即播放'} relationship="label">
+                  {/* 只有「正在加载的那首」禁用,其余行随时可点、立即生效 */}
+                  <Tooltip content={isThisLoading(song) ? '当前歌曲加载中…' : '立即播放'} relationship="label">
                     <Button
                       appearance="subtle"
                       size="small"
                       icon={<PlayRegular />}
-                      disabled={loading}
+                      disabled={isThisLoading(song)}
                       onClick={(e) => {
                         e.stopPropagation()
                         playNow(i)
@@ -373,6 +452,18 @@ export function SongList({
                       onClick={(e) => {
                         e.stopPropagation()
                         playNext(song)
+                      }}
+                    />
+                  </Tooltip>
+                  <Tooltip content={faved(song.id) ? '取消收藏' : '收藏'} relationship="label">
+                    <Button
+                      appearance="subtle"
+                      size="small"
+                      icon={faved(song.id) ? <HeartFilled /> : <HeartRegular />}
+                      style={faved(song.id) ? { color: tokens.colorPaletteRedForeground1 } : undefined}
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        void toggleFav(song)
                       }}
                     />
                   </Tooltip>

@@ -20,9 +20,11 @@ import {
   AddRegular,
   ArrowClockwiseRegular,
   ArrowLeftRegular,
+  ArrowSyncRegular,
   CloudArrowDownRegular,
   DeleteRegular,
   EditRegular,
+  HeartFilled,
   HeartRegular,
   HistoryRegular,
   MusicNote2Regular,
@@ -472,6 +474,9 @@ export function PlaylistsPage() {
     { id: number; title: string; coverUrl?: string; songCount: number }[] | null
   >(null)
   const [remoteView, setRemoteView] = useState<RemoteView | null>(null)
+  /** 收藏歌曲视图(收藏不是普通歌单,单独一屏) */
+  const [favView, setFavView] = useState(false)
+  const [favDeduping, setFavDeduping] = useState(false)
 
   /** 登录B站后进入歌单页即拉收藏夹列表(仅元数据;内容点开才取) */
   useEffect(() => {
@@ -583,9 +588,75 @@ export function PlaylistsPage() {
     await refresh()
   }
 
+  /** 去掉收藏里的重复曲目(旧版换源把 id 换成新平台 id 造成的同曲多条) */
+  const dedupeFavorites = async () => {
+    if (favDeduping) return
+    setFavDeduping(true)
+    try {
+      const r = await api.libraryDedupeFavorites()
+      await refresh()
+      if (r.removed > 0) toastSuccess('已去除重复', `移除 ${r.removed} 首,剩余 ${r.total} 首`)
+      else toastSuccess('没有重复', `共 ${r.total} 首`)
+    } finally {
+      setFavDeduping(false)
+    }
+  }
+
   // ===== B站在线视图(登录即出现,打开才拉数据) =====
   if (remoteView) {
     return <RemotePlaylistDetail view={remoteView} onBack={() => setRemoteView(null)} />
+  }
+
+  // ===== 收藏歌曲 =====
+  if (favView) {
+    const favSongs: Song[] = (library.favoriteIds ?? [])
+      .map((id) => library.songs[id])
+      .filter((s): s is Song => !!s)
+    return (
+      <div
+        key="favorites-view"
+        className={animCls}
+        style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}
+      >
+        <PageLayout
+          icon={<HeartFilled />}
+          title="收藏歌曲"
+          subtitle={`共 ${favSongs.length} 首`}
+          actions={
+            <>
+              <Button icon={<ArrowLeftRegular />} onClick={() => setFavView(false)}>
+                返回
+              </Button>
+              <Button
+                icon={<ArrowSyncRegular />}
+                disabled={favDeduping}
+                onClick={() => void dedupeFavorites()}
+              >
+                {favDeduping ? '整理中…' : '去除重复'}
+              </Button>
+              <Button
+                appearance="primary"
+                icon={<PlayRegular />}
+                disabled={favSongs.length === 0}
+                onClick={() => void playQueue(favSongs, 0)}
+              >
+                播放全部
+              </Button>
+            </>
+          }
+        >
+          {favSongs.length === 0 ? (
+            <div className={styles.empty}>
+              <HeartFilled fontSize={40} style={{ opacity: 0.3 }} />
+              <Text size={400}>还没有收藏的歌曲</Text>
+              <Text size={200}>在歌曲列表、播放条或全屏播放页点 ♡ 即可收藏</Text>
+            </div>
+          ) : (
+            <SongList songs={favSongs} showAlbum />
+          )}
+        </PageLayout>
+      </div>
+    )
   }
 
   // ===== 歌单详情(进出有过渡动画:key 变化触发重挂载) =====
@@ -672,7 +743,7 @@ export function PlaylistsPage() {
     <PageLayout
       icon={<MusicNote2Regular />}
       title="我的歌单"
-      subtitle={`${library.playlists.length} 个歌单`}
+      subtitle={`${library.playlists.length} 个歌单 · 收藏 ${library.favoriteIds?.length ?? 0} 首`}
       actions={
         <>
           <Button icon={<CloudArrowDownRegular />} onClick={openNeteaseImport}>
@@ -689,6 +760,46 @@ export function PlaylistsPage() {
     >
       {/* 歌单网格:本地歌单与B站在线条目同层级混排 */}
       <div className={styles.grid}>
+        {/* 收藏歌曲:不是普通歌单(只存 id 列表),单列一张卡片入口 */}
+        <Card
+          key="favorites"
+          className={styles.card}
+          onClick={() => setFavView(true)}
+        >
+          <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
+            <div
+              style={{
+                width: 56,
+                height: 56,
+                borderRadius: 8,
+                background: 'rgba(232,67,90,0.15)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                color: tokens.colorPaletteRedForeground1,
+                flexShrink: 0
+              }}
+            >
+              <HeartFilled fontSize={24} />
+            </div>
+            <div style={{ minWidth: 0 }}>
+              <Text
+                weight="semibold"
+                style={{
+                  display: 'block',
+                  whiteSpace: 'nowrap',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis'
+                }}
+              >
+                收藏歌曲
+              </Text>
+              <Text size={200} style={{ color: tokens.colorNeutralForeground3 }}>
+                {library.favoriteIds?.length ?? 0} 首
+              </Text>
+            </div>
+          </div>
+        </Card>
         {library.playlists.map((pl) => (
           <Card key={pl.id} className={styles.card} onClick={() => setSelected(pl)}>
             <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>

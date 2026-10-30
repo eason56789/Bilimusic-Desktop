@@ -17,6 +17,7 @@ import {
   Switch,
   Text,
   Textarea,
+  Tooltip,
   makeStyles,
   tokens
 } from '@fluentui/react-components'
@@ -29,9 +30,10 @@ import {
   PlayRegular,
   SearchRegular
 } from '@fluentui/react-icons'
-import type { BiliPage, CommentOrder, CommentPlatform, CommentsResult, Song } from '@shared/types'
+import type { BiliPage, CommentOrder, CommentPlatform, CommentsResult, Song, SongHotResult } from '@shared/types'
 import { api } from '../lib/api'
 import { pagesToSongs } from '../lib/pages'
+import { formatCount } from '../lib/format'
 import { useStore, EQ_FREQS, applyEqSettings } from '../store'
 import { toastError, toastSuccess } from '../lib/toast'
 import { Cover } from './Cover'
@@ -446,16 +448,26 @@ export function PagesDialog({
 export function SongInfoDialog({ song, open, onClose }: { song: Song | null; open: boolean; onClose: () => void }) {
   const [rows, setRows] = useState<Record<string, string> | null>(null)
   const [loading, setLoading] = useState(false)
+  const [hot, setHot] = useState<SongHotResult | null>(null)
+  const [hotLoading, setHotLoading] = useState(false)
 
   useEffect(() => {
     if (!open || !song) return
     setLoading(true)
     setRows(null)
+    setHot(null)
+    setHotLoading(true)
     api
       .songDetail(song)
       .then((r) => setRows(r.ok && r.data ? r.data : null))
       .catch(() => {})
       .finally(() => setLoading(false))
+    // 全网热度:三平台并发查询,慢一点不影响基本信息展示
+    api
+      .songHot?.(song)
+      .then((r) => setHot(r.ok && r.data ? r.data : null))
+      .catch(() => {})
+      .finally(() => setHotLoading(false))
   }, [open, song])
 
   if (!song) return null
@@ -506,6 +518,55 @@ export function SongInfoDialog({ song, open, onClose }: { song: Song | null; ope
               </div>
             </div>
             {loading && <div style={{ display: 'flex', justifyContent: 'center', padding: 16 }}><Spinner /></div>}
+            {/* 全网热度:酷狗为真实收藏数,QQ/网易云为平台热度指数(标出指标口径) */}
+            {(hotLoading || (hot && hot.items.length > 0)) && (
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 14,
+                  flexWrap: 'wrap',
+                  padding: '8px 10px',
+                  marginBottom: 8,
+                  borderRadius: 8,
+                  background: tokens.colorNeutralBackground3
+                }}
+              >
+                <Text size={200} style={{ color: tokens.colorNeutralForeground3 }}>
+                  全网热度
+                </Text>
+                {hotLoading && <Spinner size="tiny" />}
+                {hot?.items.map((it) => (
+                  <Tooltip
+                    key={it.platform}
+                    content={
+                      it.metric === 'favorite'
+                        ? `${it.title} · 酷狗真实收藏数`
+                        : `${it.title} · 平台热度指数(非收藏数)`
+                    }
+                    relationship="label"
+                  >
+                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                      <Text size={200} style={{ color: tokens.colorNeutralForeground3 }}>
+                        {it.platform === 'kugou' ? '酷狗' : it.platform === 'qq' ? 'QQ' : '网易云'}
+                      </Text>
+                      <Text size={300} weight="semibold">
+                        {it.metric === 'favorite' ? (
+                          <>♡ {formatCount(it.value)}</>
+                        ) : (
+                          <>{it.value}</>
+                        )}
+                      </Text>
+                      {it.metric === 'heat' && (
+                        <Text size={100} style={{ color: tokens.colorNeutralForeground3 }}>
+                          热度
+                        </Text>
+                      )}
+                    </span>
+                  </Tooltip>
+                ))}
+              </div>
+            )}
             {rows &&
               Object.entries(rows).map(([k, v]) => (
                 <div key={k} style={{ display: 'flex', gap: 12, padding: '5px 0', borderBottom: `1px solid ${tokens.colorNeutralStroke2}` }}>
@@ -985,14 +1046,19 @@ export function SourceSwitchDialog({
   const pick = async (p: Song) => {
     setPickingId(p.id)
     try {
+      // id 保持原曲不变:取流只按 source + 平台字段分发,改 id 会让同一首歌变成两条记录
       const src: Song = {
         ...song,
-        id: p.id,
         source: p.source,
         bvid: p.bvid,
         page: p.page ?? 1,
         // B站结果没有 neteaseId:保留原曲 id,重播时歌词仍取网易云原曲
         neteaseId: p.neteaseId ?? song.neteaseId,
+        qqMid: p.qqMid,
+        qqId: p.qqId,
+        kugouHash: p.kugouHash,
+        kugouMixId: p.kugouMixId,
+        kugouAlbumId: p.kugouAlbumId,
         vipOnly: undefined,
         keepMeta: true
       }
@@ -1007,9 +1073,9 @@ export function SourceSwitchDialog({
   const pickLocal = async () => {
     const paths = await api.appPickLocalAudio()
     if (!paths || paths.length === 0) return
+    // 同上:id 保留原曲,只换成本地路径
     const src: Song = {
       ...song,
-      id: `local-${Date.now().toString(36)}`,
       source: 'LOCAL',
       localPath: paths[0],
       vipOnly: undefined,

@@ -186,14 +186,17 @@ function downloadToCache(
   url: string,
   cachePath: string,
   referer: string,
-  onProgress?: (received: number, total: number) => void
+  onProgress?: (received: number, total: number) => void,
+  signal?: AbortSignal
 ): Promise<boolean> {
   return new Promise((resolve) => {
     fetch(url, {
       headers: {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
         Referer: referer
-      }
+      },
+      // 支持被新播放请求取消:中止时 fetch/reader 会抛 AbortError
+      signal
     })
       .then((resp) => {
         const body = resp.body
@@ -228,6 +231,12 @@ function downloadToCache(
             writer.on('error', () => resolve(false))
           } catch {
             writer.destroy()
+            // 中断/网络错误:删掉半截文件,否则下次启动会把它当成有效缓存命中
+            try {
+              if (existsSync(cachePath)) unlinkSync(cachePath)
+            } catch {
+              /* 删除失败不影响返回 */
+            }
             resolve(false)
           }
         })()
@@ -269,11 +278,40 @@ function neteaseLevelText(level: string, type: string): string {
   }
 }
 
+/**
+ * 同一时刻只保留最新的取流任务。
+ * 用户快速连点不同歌曲时,新请求会 abort 上一个还没完成的下载,
+ * 避免旧歌的几百 MB 缓存下载一直占着带宽、拖慢新歌。
+ * 被取消的任务会抛 AbortError,渲染层凭自己的请求序号判定为"已过期"而静默丢弃。
+ */
+let currentAbort: AbortController | null = null
+
 export async function prepareAudio(
   song: Song,
   html5Fallback = false,
   neteaseQuality = 'exhigh',
   onProgress?: AudioProgressFn
+): Promise<PreparedAudio> {
+  // 抢占:取消上一个仍在进行的取流
+  currentAbort?.abort()
+  const ac = new AbortController()
+  currentAbort = ac
+  const signal = ac.signal
+
+  try {
+    return await prepareAudioInner(song, html5Fallback, neteaseQuality, onProgress, signal)
+  } finally {
+    // 只有自己仍是最新任务时才清空,避免把后来者的 controller 抹掉
+    if (currentAbort === ac) currentAbort = null
+  }
+}
+
+async function prepareAudioInner(
+  song: Song,
+  html5Fallback: boolean,
+  neteaseQuality: string,
+  onProgress: AudioProgressFn | undefined,
+  signal: AbortSignal
 ): Promise<PreparedAudio> {
   if (song.source === 'LOCAL' && song.localPath && existsSync(song.localPath)) {
     return {
@@ -369,9 +407,16 @@ export async function prepareAudio(
     }
     const resolved = await resolvePlayUrl(bvid, cid, { preferHtml5: html5Fallback })
     if (!resolved) throw new Error('no-audio-url')
-    const ok = await downloadToCache(resolved.url, cachePath, 'https://www.bilibili.com/', (received, total) =>
-      onProgress?.({ stage: 'downloading', received, total })
+    // 取消后立刻退出:不再落到下面的"边播边代理",那样旧歌仍会占着流
+    if (signal.aborted) throw new Error('aborted')
+    const ok = await downloadToCache(
+      resolved.url,
+      cachePath,
+      'https://www.bilibili.com/',
+      (received, total) => onProgress?.({ stage: 'downloading', received, total }),
+      signal
     )
+    if (signal.aborted) throw new Error('aborted')
     if (ok && existsSync(cachePath) && statSync(cachePath).size > 10240) {
       onProgress?.({ stage: 'done' })
       return {

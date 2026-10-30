@@ -5,7 +5,7 @@
  */
 import type { Song } from '@shared/types'
 import { getPlaylistDetailWithMeta } from './netease'
-import { fetchQqPlaylist, fetchKugouPlaylist } from './qqkugou'
+import { fetchQqPlaylist, fetchKugouPlaylist, fetchKugouCollectionPlaylist } from './qqkugou'
 
 export type LinkPlatform = 'netease' | 'qq' | 'kugou'
 
@@ -13,6 +13,10 @@ export interface ParsedLink {
   platform: LinkPlatform
   /** 歌单 id(十进制字符串) */
   id: string
+  /** 酷狗概念版歌单 id(形如 collection_3_80905275_1614_0) */
+  globalId?: string
+  /** 与 globalId 配套的旧版 specialid */
+  specialId?: string
 }
 
 export interface LinkedPlaylist {
@@ -78,13 +82,21 @@ export function parsePlaylistLink(input: string): ParsedLink | null {
 
   // ---- 酷狗 ----
   if (/(^|\.)kugou\.com$/.test(host)) {
+    // 概念版分享页(activity.kugou.com/share/...):带 global_specialid + specialid
+    const g = /global_specialid=(collection_[\d_]+)/.exec(all) || /global_collection_id=(collection_[\d_]+)/.exec(all)
+    if (g) {
+      const sp = /[?&#]specialid=(\d+)/.exec(all)
+      return { platform: 'kugou', id: g[1], globalId: g[1], specialId: sp ? sp[1] : undefined }
+    }
     const m =
       /\/special\/[^/]+\/(\d+)(?:\.html)?/.exec(path) || // www.kugou.com/yy/special/single/9277467.html(实测有效)
       /specialid=(\d+)/.exec(all) ||
       (/playlist/i.test(all) && /[?&#]id=(\d+)/.exec(all)) // 老式 #/playlist?id=(id 应为 specialid)
-    if (m) return { platform: 'kugou', id: m[1] }
-    // 短链(如 m.kugou.com/plist/list/xxx):id 为空,调用方抓页面内嵌的 specialid
-    if (/\/(plist|playlist)\//.test(path)) return { platform: 'kugou', id: '' }
+    if (m) return { platform: 'kugou', id: m[1], specialId: m[1] }
+    // 短链(如 m.kugou.com/plist/list/xxx、t1.kugou.com/xxx):id 为空,调用方抓页面内嵌的 specialid
+    if (/\/(plist|playlist)\//.test(path) || /(^|\.)t\d*\.kugou\.com$/.test(host)) {
+      return { platform: 'kugou', id: '' }
+    }
     return null
   }
 
@@ -126,15 +138,33 @@ async function extractKugouSpecialId(url: string): Promise<string | null> {
   }
   if (!/(^|\.)kugou\.com$/.test(u.hostname.toLowerCase())) return null
   try {
+    // 概念版短链(t1.kugou.com/xxx)是 302 跳转到 activity.kugou.com 分享页,
+    // 必须跟随重定向才能拿到含 global_specialid 的最终 URL
     const resp = await fetch(u.href, {
-      signal: AbortSignal.timeout(10_000),
+      redirect: 'follow',
+      signal: AbortSignal.timeout(12_000),
       headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0' }
     })
+    const finalUrl = resp.url || u.href
+    const gid = /global_specialid=(collection_[\d_]+)/.exec(finalUrl)
+    if (gid) {
+      const sp = /[?&#]specialid=(\d+)/.exec(finalUrl)
+      return JSON.stringify({ globalId: gid[1], specialId: sp ? sp[1] : null })
+    }
     const html = await resp.text()
-    const m = html.match(/specialid\s*[:=]\s*["']?(\d+)/i)
-    if (m) return m[1]
-    const m2 = html.match(/special\/[^/]+\/(\d+)/)
-    return m2 ? m2[1] : null
+    // 分享页里常带 og:title / <title>,取歌单名(去站点后缀)
+    const og = /<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']+)/i.exec(html)
+    const title = /<title>([^<]+)<\/title>/i.exec(html)
+    const name = (og?.[1] ?? title?.[1] ?? '').replace(/\s*[-|_].*$/, '').trim()
+    const m = html.match(/global_specialid["'\s:=]+(collection_[\d_]+)/i)
+    if (m) {
+      const sp = html.match(/[?&#]specialid=(\d+)/) || html.match(/specialid["'\s:=]+(\d+)/i)
+      return JSON.stringify({ globalId: m[1], specialId: sp ? sp[1] : null, name })
+    }
+    const m2 = html.match(/specialid\s*[:=]\s*["']?(\d+)/i)
+    if (m2) return m2[1]
+    const m3 = html.match(/special\/[^/]+\/(\d+)/)
+    return m3 ? m3[1] : null
   } catch (e) {
     console.warn('[LinkImport] kugou short page failed', e)
     return null
@@ -144,6 +174,11 @@ async function extractKugouSpecialId(url: string): Promise<string | null> {
 /** 识别链接并拉取歌单内容 */
 export async function fetchPlaylistByLink(input: string): Promise<LinkedPlaylist> {
   let parsed = parsePlaylistLink(input)
+  /** 概念版歌单:短链提取出的 {globalId, specialId} JSON 串 */
+  let kgCollection: { globalId: string; specialId: string | null } | null = null
+  /** 概念版歌单名(分享页 og:title 抓到的,API 不返回时兜底) */
+  let kgCollectionName = ''
+
   const needFollow = !parsed || !parsed.id
   if (needFollow) {
     const host = (() => {
@@ -161,15 +196,28 @@ export async function fetchPlaylistByLink(input: string): Promise<LinkedPlaylist
     if (parsed?.platform === 'qq' && !parsed.id) {
       parsed = (await followShortLink(input)) ?? parsed
     }
-    // 酷狗短链:页面内嵌 specialid
+    // 酷狗短链:页面内嵌 specialid(概念版则内嵌 global_specialid)
     if (parsed?.platform === 'kugou' && !parsed.id) {
       const kg = await extractKugouSpecialId(input)
-      if (kg) parsed = { platform: 'kugou', id: kg }
+      if (kg) {
+        if (kg.startsWith('{')) {
+          try {
+            const c = JSON.parse(kg) as { globalId: string; specialId: string | null; name?: string }
+            kgCollection = { globalId: c.globalId, specialId: c.specialId }
+            kgCollectionName = c.name ?? ''
+            parsed = { platform: 'kugou', id: c.globalId, globalId: c.globalId, specialId: c.specialId ?? undefined }
+          } catch {
+            /* 解析失败则按普通 id 处理 */
+          }
+        } else {
+          parsed = { platform: 'kugou', id: kg, specialId: kg }
+        }
+      }
     }
   }
   if (!parsed || !parsed.id) {
     throw new Error(
-      '无法识别歌单链接:支持网易云 music.163.com/163cn.tv、QQ音乐 y.qq.com、酷狗 kugou.com(/yy/special/single/xxx.html 或 /plist/) 的歌单分享链接'
+      '无法识别歌单链接:支持网易云 music.163.com/163cn.tv、QQ音乐 y.qq.com、酷狗 kugou.com(含概念版 t1.kugou.com 短链)的歌单分享链接'
     )
   }
   switch (parsed.platform) {
@@ -186,7 +234,16 @@ export async function fetchPlaylistByLink(input: string): Promise<LinkedPlaylist
     }
     case 'qq':
       return await fetchQqPlaylist(parsed.id)
-    case 'kugou':
+    case 'kugou': {
+      // 概念版歌单(collection_xxx)走 v5 接口;普通歌单走 v3 special
+      const gid = parsed.globalId ?? kgCollection?.globalId ?? (/^collection_/.test(parsed.id) ? parsed.id : null)
+      if (gid) {
+        const r = await fetchKugouCollectionPlaylist(gid, parsed.specialId ?? kgCollection?.specialId ?? undefined)
+        // API 不返回歌单名时用分享页标题兜底
+        if ((!r.name || r.name.startsWith('酷狗歌单 ')) && kgCollectionName) r.name = kgCollectionName
+        return r
+      }
       return await fetchKugouPlaylist(parsed.id)
+    }
   }
 }

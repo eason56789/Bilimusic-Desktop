@@ -3,10 +3,8 @@ import { useEffect, useMemo, useState } from 'react'
 import {
   FluentProvider,
   Text,
-  Toaster,
   TabList,
   Tab,
-  useToastController,
   makeStyles,
   tokens
 } from '@fluentui/react-components'
@@ -15,11 +13,14 @@ import {
   MusicNote2Regular,
   ArrowDownloadRegular,
   HeartRegular,
-  SettingsRegular
+  HeartFilled,
+  MicRegular,
+  SettingsRegular,
+  TrophyRegular
 } from '@fluentui/react-icons'
 import { useStore } from './store'
 import { buildTheme } from './lib/theme'
-import { setToastController } from './lib/toast'
+import { ToastHost } from './lib/toast'
 import brandIconUrl from './assets/brand.png'
 import type { Settings } from '@shared/types'
 import { PlayerBar } from './components/PlayerBar'
@@ -33,6 +34,9 @@ import { FloatLyricApp } from './components/FloatLyricApp'
 import { FloatMenuApp } from './components/FloatMenuApp'
 import { SearchPage } from './pages/SearchPage'
 import { PlaylistsPage, RecentPage } from './pages/PlaylistsPage'
+import { RecognizePage } from './pages/RecognizePage'
+import { FavoritesPage } from './pages/FavoritesPage'
+import { ChartsPage } from './pages/ChartsPage'
 import { DownloadsPage } from './pages/DownloadsPage'
 import { SettingsPage } from './pages/SettingsPage'
 import { ArtistPage } from './components/ArtistPage'
@@ -106,6 +110,8 @@ function useSystemDark(): boolean {
 function useGlassVars(dark: boolean, effect: string, alpha: number): void {
   useEffect(() => {
     const root = document.documentElement
+    // 供 CSS 区分深浅主题(顶部轻提示等自绘浮层用;Fluent 的 token 管不到 portal 出去的节点)
+    root.setAttribute('data-bm-theme', dark ? 'dark' : 'light')
     const on = effect !== 'none'
     const a = on ? Math.min(1, Math.max(0.35, alpha)) : 1
     /** 材质开启 → 半透明;关闭 → 同色实底 */
@@ -183,6 +189,8 @@ function Shell({ className }: { className?: string }) {
   const artistPageId = useStore((s) => s.artistPageId)
   const anim = useStore((s) => s.library?.settings.pageAnimation ?? 'scale')
   const ui = useStore((s) => s.library?.settings.uiModules)
+  /** 识曲入口跟随总开关:关闭后侧边栏与页面都不再提供入口 */
+  const recognizeEnabled = useStore((s) => s.library?.settings.songRecognizeEnabled !== false)
 
   return (
     <div className={`${styles.frame} ${className ?? ''}`}>
@@ -223,6 +231,15 @@ function Shell({ className }: { className?: string }) {
                 歌单
               </Tab>
             )}
+            <Tab value="charts" icon={<TrophyRegular />}>
+              排行榜
+            </Tab>
+            {/* 识曲入口跟随「设置 → 听歌识别」总开关,关闭时整个 Tab 隐藏 */}
+            {recognizeEnabled && (
+              <Tab value="recognize" icon={<MicRegular />}>
+                听歌识别
+              </Tab>
+            )}
             {ui?.navDownloads !== false && (
               <Tab value="downloads" icon={<ArrowDownloadRegular />}>
                 下载
@@ -233,6 +250,9 @@ function Shell({ className }: { className?: string }) {
                 最近播放
               </Tab>
             )}
+            <Tab value="favorites" icon={<HeartFilled />}>
+              我的收藏
+            </Tab>
             {/* 设置入口固定显示:它是所有自定义开关的唯一恢复路径,不可隐藏 */}
             <Tab value="settings" icon={<SettingsRegular />}>
               设置
@@ -253,8 +273,11 @@ function Shell({ className }: { className?: string }) {
           >
             {page === 'search' && <SearchPage />}
             {page === 'playlists' && <PlaylistsPage />}
+            {page === 'charts' && <ChartsPage />}
+            {page === 'recognize' && <RecognizePage />}
             {page === 'downloads' && <DownloadsPage />}
             {page === 'recent' && <RecentPage />}
+            {page === 'favorites' && <FavoritesPage />}
             {page === 'settings' && <SettingsPage />}
           </div>
           )}
@@ -306,18 +329,10 @@ function MainApp() {
   const init = useStore((s) => s.init)
   const systemDark = useSystemDark()
   const [obDone, setObDone] = useState(false)
-  const toasterId = 'app-toaster'
-  const { dispatchToast, dismissToast } = useToastController(toasterId)
 
   useEffect(() => {
     init()
-    setToastController(
-      (content, options) => dispatchToast(content as never, options as never),
-      (toastId) => dismissToast(toastId)
-    )
-    return () => setToastController(null)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [dispatchToast, dismissToast])
+  }, [init])
 
   const dark = library ? (library.settings.theme === 'system' ? systemDark : library.settings.theme === 'dark') : true
   const theme = useMemo(
@@ -359,7 +374,15 @@ function MainApp() {
         background: 'var(--app-frame-bg, transparent)'
       }}
     >
-      <Toaster toasterId={toasterId} position="bottom-end" />
+      {/* 轻提示:位置/样式/时长/图标由设置控制(默认顶部居中滑下) */}
+      <ToastHost
+        prefs={{
+          position: library?.settings.toastPosition ?? 'top-center',
+          duration: library?.settings.toastDuration ?? 1,
+          style: library?.settings.toastStyle ?? 'hud',
+          showIcon: library?.settings.toastShowIcon ?? true
+        }}
+      />
       {/* obDone:刚完成引导时主界面播放入场动画(放大淡入) */}
       <Shell className={obDone ? 'shell-enter' : undefined} />
       <GlobalDialogs />

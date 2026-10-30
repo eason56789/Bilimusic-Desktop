@@ -40,7 +40,9 @@ import {
   OpenRegular,
   CheckmarkRegular,
   LockClosedRegular,
-  LockOpenRegular
+  LockOpenRegular,
+  HeartRegular,
+  HeartFilled
 } from '@fluentui/react-icons'
 import type { Song } from '@shared/types'
 import { useStore, getAudioElement } from '../store'
@@ -228,6 +230,8 @@ export function NowPlaying() {
   const commentsOpen = dlg === 'comments'
   const floatLyric = useStore((s) => s.library?.settings.floatLyric ?? false)
   const floatLocked = useStore((s) => s.library?.settings.floatLyricLocked ?? false)
+  const favoriteIds = useStore((s) => s.library?.favoriteIds)
+  const faved = !!current && !!favoriteIds?.includes(current.id)
   const { setNowPlayingOpen, togglePlay, next, prev, seek, setVolume, cycleMode } =
     useStore.getState()
 
@@ -335,6 +339,7 @@ export function NowPlaying() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, dlg])
 
+
   const ModeIcon =
     mode === 'loop'
       ? ArrowRepeatAllRegular
@@ -371,6 +376,14 @@ export function NowPlaying() {
   }
 
   const hasPages = current?.source === 'BILIBILI' && !!current.bvid
+
+  /** 收藏当前播放的曲目(与列表行内心形共用同一套后端/刷新逻辑) */
+  const toggleFavCurrent = async (): Promise<void> => {
+    if (!current) return
+    const r = await api.libraryToggleFavorite(current)
+    await useStore.getState().refreshLibrary()
+    toastSuccess(r.favorited ? '已收藏' : '已取消收藏', current.title)
+  }
 
   return (
     <>
@@ -683,6 +696,19 @@ export function NowPlaying() {
                   style={{ color: 'rgba(255,255,255,0.92)' }}
                 />
               </Tooltip>
+              <Tooltip content={faved ? '取消收藏' : '收藏'} relationship="label">
+                <Button
+                  appearance="subtle"
+                  size="large"
+                  aria-label={faved ? '取消收藏' : '收藏'}
+                  icon={faved ? <HeartFilled /> : <HeartRegular />}
+                  onClick={() => void toggleFavCurrent()}
+                  disabled={!current}
+                  style={{
+                    color: faved ? tokens.colorPaletteRedForeground1 : 'rgba(255,255,255,0.92)'
+                  }}
+                />
+              </Tooltip>
               <Tooltip content={`音量 ${Math.round((muted ? 0 : volume) * 100)}%`} relationship="label">
                 <NiceSlider
                   value={muted ? 0 : volume}
@@ -823,7 +849,10 @@ export function NowPlaying() {
         </div>
 
         {/* 右侧评论停靠面板:打开时上层内容(marginRight)整体左移让位 */}
-        <div className={`${styles.commentsPanel} ${commentsOpen ? styles.commentsPanelOpen : ''}`}>
+        <div
+          className={`${styles.commentsPanel} ${commentsOpen ? styles.commentsPanelOpen : ''}`}
+          data-comments-panel={commentsOpen ? 'open' : 'closed'}
+        >
           <CommentsBody
             song={current}
             active={open && commentsOpen}

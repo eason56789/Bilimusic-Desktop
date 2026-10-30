@@ -31,6 +31,7 @@ import { BiliLoginDialog, NeteaseLoginDialog } from '../components/LoginDialogs'
 import { PageLayout } from '../components/PageHeader'
 import { GithubLogo, BiliLogo } from '../components/BrandLogos'
 import { toastSuccess, toastError } from '../lib/toast'
+import type { DisguisePresetInfo, Settings } from '@shared/types'
 
 const useStyles = makeStyles({
   root: {
@@ -52,7 +53,8 @@ const useStyles = makeStyles({
   },
   swatchActive: { outline: `2px solid ${tokens.colorStrokeFocus2}`, outlineOffset: '2px' },
   eqGrid: { display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: '12px 16px' },
-  eqBand: { display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '4px' }
+  eqBand: { display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '4px' },
+  presetIcon: { width: '22px', height: '22px', borderRadius: '5px', objectFit: 'contain' }
 })
 
 function SectionTitle({ children }: { children: React.ReactNode }) {
@@ -75,15 +77,62 @@ export function SettingsPage() {
   const [checking, setChecking] = useState(false)
   /** 听歌识别 token 草稿(点保存才落盘,避免每次按键都写文件) */
   const [tokenInput, setTokenInput] = useState('')
+  /** 伪装:可选目标 + 当前选中 + 生成中标记 */
+  const [presets, setPresets] = useState<DisguisePresetInfo[]>([])
+  const [presetIcons, setPresetIcons] = useState<Record<string, string>>({})
+  const [disguiseId, setDisguiseId] = useState('wechat')
+  const [disguiseBusy, setDisguiseBusy] = useState(false)
 
   useEffect(() => {
     api.appVersion().then((v) => setVersion(`${v.version} (Electron ${v.electron})`))
     void api.getRecognizeToken?.().then((t) => setTokenInput(t || ''))
   }, [])
 
+  // 伪装预设:一次性拉列表,再逐个取图标 data URL(图标由主进程从真实 exe 提取或绘制)
+  useEffect(() => {
+    let alive = true
+    void (async () => {
+      let list: DisguisePresetInfo[] = []
+      try {
+        list = (await api.disguisePresets?.()) ?? []
+      } catch {
+        list = []
+      }
+      if (!alive) return
+      setPresets(list)
+      for (const p of list) {
+        try {
+          const url = await api.disguisePresetIcon?.(p.id)
+          if (!alive) return
+          if (url) setPresetIcons((prev) => ({ ...prev, [p.id]: url }))
+        } catch {
+          /* 单个图标失败不影响其他预设 */
+        }
+      }
+    })()
+    return () => {
+      alive = false
+    }
+  }, [])
+
   const saveToken = async (): Promise<void> => {
     await api.setRecognizeToken?.(tokenInput.trim())
     toastSuccess('已保存', tokenInput.trim() ? '听歌识别已启用' : '已清空识别服务密钥')
+  }
+
+  /** 在桌面生成一个外观像所选程序的快捷方式,双击后启动的仍是本应用 */
+  const makeShortcut = async (): Promise<void> => {
+    if (!disguiseId || disguiseBusy) return
+    setDisguiseBusy(true)
+    try {
+      const r = await api.disguiseCreate(disguiseId)
+      if (r.ok) toastSuccess('快捷方式已创建', '在桌面上,双击即可打开')
+      else toastError('创建失败', r.error ?? '未知错误')
+    } catch (e) {
+      toastError('创建失败', String(e))
+    } finally {
+      setDisguiseBusy(false)
+    }
   }
 
   // 外部加载完成后同步草稿
@@ -294,6 +343,67 @@ export function SettingsPage() {
             <Radio value="slide" label="滑动" />
             <Radio value="scale" label="缩放" />
           </RadioGroup>
+        </div>
+
+        {/* ===== 轻提示(toast):出现位置 / 视觉样式 / 停留时长 / 图标 ===== */}
+        <Text size={300} weight="semibold" style={{ marginTop: 6 }}>
+          消息提示
+        </Text>
+        <div className={styles.row}>
+          <Text size={300} style={{ minWidth: 96 }}>
+            出现位置:
+          </Text>
+          <RadioGroup
+            layout="horizontal"
+            value={s.toastPosition}
+            onChange={(_, d) => update('toastPosition', d.value as Settings['toastPosition'])}
+          >
+            <Radio value="top-center" label="顶部居中(滑下)" />
+            <Radio value="top-right" label="顶部右侧" />
+            <Radio value="bottom-right" label="右下角" />
+            <Radio value="off" label="关闭提示" />
+          </RadioGroup>
+        </div>
+        <div className={styles.row}>
+          <Text size={300} style={{ minWidth: 96 }}>
+            视觉样式:
+          </Text>
+          <RadioGroup
+            layout="horizontal"
+            value={s.toastStyle}
+            onChange={(_, d) => update('toastStyle', d.value as Settings['toastStyle'])}
+          >
+            <Radio value="hud" label="玻璃" />
+            <Radio value="minimal" label="极简线条" />
+            <Radio value="solid" label="实心高对比" />
+          </RadioGroup>
+        </div>
+        <div className={styles.row} style={{ maxWidth: 420 }}>
+          <Text size={300} style={{ minWidth: 96 }}>
+            停留时长 {s.toastDuration.toFixed(1)}×
+          </Text>
+          <Slider
+            min={0.5}
+            max={2}
+            step={0.1}
+            value={s.toastDuration}
+            style={{ flex: 1 }}
+            onChange={(_, d) => update('toastDuration', d.value)}
+          />
+        </div>
+        <div className={styles.row}>
+          <Switch
+            checked={s.toastShowIcon}
+            label="显示提示图标(成功/错误/警告/信息)"
+            onChange={(_, d) => update('toastShowIcon', d.checked)}
+          />
+          <Button
+            size="small"
+            appearance="subtle"
+            onClick={() => toastSuccess('提示已生效', '这就是当前样式与位置')}
+          >
+            预览
+          </Button>
         </div>
 
         {/* 关闭窗口行为 */}
@@ -617,6 +727,71 @@ export function SettingsPage() {
             <Radio value="left" label="靠左" />
           </RadioGroup>
         </div>
+        {/* ===== 歌词翻译:显示模式 + 译文外观 ===== */}
+        <div className={styles.row}>
+          <Text size={300} style={{ minWidth: 96 }}>
+            歌词显示:
+          </Text>
+          <RadioGroup
+            layout="horizontal"
+            value={s.lyricTransMode}
+            onChange={(_, d) => update('lyricTransMode', d.value as typeof s.lyricTransMode)}
+          >
+            <Radio value="off" label="仅原文" />
+            <Radio value="both" label="原文+翻译" />
+            <Radio value="transOnly" label="仅翻译" />
+          </RadioGroup>
+        </div>
+        <Text size={200} style={{ color: tokens.colorNeutralForeground3 }}>
+          选「仅翻译」时,没有译文的行(纯音乐等)会自动回退显示原文,不会留空。
+        </Text>
+        {s.lyricTransMode !== 'off' && (
+          <>
+            {/* 排版只对「原文+翻译」有意义:仅翻译模式下原文已隐藏,不存在左右排布 */}
+            {s.lyricTransMode === 'both' && (
+              <div className={styles.row}>
+                <Text size={300}>译文排版:</Text>
+                <RadioGroup
+                  layout="horizontal"
+                  value={s.lyricTransLayout}
+                  onChange={(_, d) => update('lyricTransLayout', d.value as typeof s.lyricTransLayout)}
+                >
+                  <Radio value="below" label="原文下方" />
+                  <Radio value="inline" label="原文右侧" />
+                </RadioGroup>
+              </div>
+            )}
+            <div className={styles.row} style={{ maxWidth: 460 }}>
+              <Text size={300} style={{ minWidth: 210 }}>
+                译文字号 {Math.round((s.lyricTransScale ?? 0.78) * 100)}%
+              </Text>
+              <Slider
+                min={0.5}
+                max={1}
+                step={0.02}
+                value={s.lyricTransScale ?? 0.78}
+                style={{ flex: 1 }}
+                onChange={(_, d) => update('lyricTransScale', d.value)}
+              />
+            </div>
+            <div className={styles.row} style={{ maxWidth: 460 }}>
+              <Text size={300} style={{ minWidth: 210 }}>
+                译文不透明度 {Math.round((s.lyricTransAlpha ?? 0.8) * 100)}%
+              </Text>
+              <Slider
+                min={0.3}
+                max={1}
+                step={0.05}
+                value={s.lyricTransAlpha ?? 0.8}
+                style={{ flex: 1 }}
+                onChange={(_, d) => update('lyricTransAlpha', d.value)}
+              />
+            </div>
+            <Text size={200} style={{ color: tokens.colorNeutralForeground3 }}>
+              译文字号按原文字号的百分比缩放,不随当前句放大,保持主次分明。
+            </Text>
+          </>
+        )}
         <div className={styles.row}>
           <Switch
             checked={s.lyricBlurEnabled}
@@ -640,13 +815,13 @@ export function SettingsPage() {
         </div>
         <div className={styles.row} style={{ maxWidth: 460 }}>
           <Text size={300} style={{ minWidth: 210 }}>
-            非当前歌词不透明度 {Math.round((s.lyricAlphaInactive ?? 0.15) * 100)}%
+            非当前歌词不透明度 {Math.round((s.lyricAlphaInactive ?? 0.75) * 100)}%
           </Text>
           <Slider
             min={0.05}
             max={1}
             step={0.05}
-            value={s.lyricAlphaInactive ?? 0.15}
+            value={s.lyricAlphaInactive ?? 0.75}
             style={{ flex: 1 }}
             onChange={(_, d) => update('lyricAlphaInactive', d.value)}
           />
@@ -739,9 +914,50 @@ export function SettingsPage() {
 
       <Divider />
 
+      {/* 快捷方式伪装 */}
+      <div className={styles.section}>
+        <SectionTitle>快捷方式伪装</SectionTitle>
+        <Text size={200} style={{ color: tokens.colorNeutralForeground3, maxWidth: 720 }}>
+          在桌面生成一个看起来像所选软件的快捷方式,双击后打开的仍是本应用。
+        </Text>
+        <div className={styles.row}>
+          <Dropdown
+            value={presets.find((p) => p.id === disguiseId)?.name ?? '微信'}
+            selectedOptions={[disguiseId]}
+            onOptionSelect={(_, d) => d.optionValue && setDisguiseId(d.optionValue)}
+            style={{ minWidth: 200 }}
+          >
+            {presets.map((p) => (
+              <Option key={p.id} value={p.id} text={p.name}>
+                <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  {presetIcons[p.id] && <img src={presetIcons[p.id]} alt="" className={styles.presetIcon} />}
+                  {p.name}
+                </span>
+              </Option>
+            ))}
+          </Dropdown>
+          <Button appearance="primary" disabled={disguiseBusy} onClick={() => void makeShortcut()}>
+            {disguiseBusy ? '生成中…' : '创建桌面快捷方式'}
+          </Button>
+        </div>
+      </div>
+
+      <Divider />
+
       {/* 听歌识别 */}
       <div className={styles.section}>
         <SectionTitle>听歌识别</SectionTitle>
+        <div className={styles.row}>
+          <Switch
+            checked={s.songRecognizeEnabled}
+            label="启用听歌识别"
+            onChange={(_, d) => update('songRecognizeEnabled', d.checked)}
+          />
+          <Text size={200} style={{ color: tokens.colorNeutralForeground3, maxWidth: 640 }}>
+            开启后搜索页会显示「识曲」按钮,抓取 8 秒系统声音识别正在播放的歌。
+            关闭只是隐藏入口,已填写的 Token 会保留。
+          </Text>
+        </div>
         <div className={styles.row}>
           <Text size={200} style={{ color: tokens.colorNeutralForeground3, maxWidth: 640 }}>
             识别需要音频指纹服务。免费且无需账号的公开接口并不存在(在线识曲站都用服务端代理自己的密钥),
@@ -753,16 +969,27 @@ export function SettingsPage() {
             <Input
               type="password"
               value={tokenInput}
-              placeholder="留空表示未启用听歌识别"
+              placeholder={s.songRecognizeEnabled ? '留空表示未配置识别服务' : '听歌识别已关闭'}
+              disabled={!s.songRecognizeEnabled}
               onChange={(_, d) => setTokenInput(d.value)}
               contentAfter={
-                <Button size="small" appearance="subtle" onClick={() => void saveToken()}>
+                <Button
+                  size="small"
+                  appearance="subtle"
+                  disabled={!s.songRecognizeEnabled}
+                  onClick={() => void saveToken()}
+                >
                   保存
                 </Button>
               }
             />
           </Field>
         </div>
+        {s.songRecognizeEnabled && !s.songRecognizeToken && (
+          <Text size={200} style={{ color: tokens.colorPaletteDarkOrangeForeground1 }}>
+            尚未填写 AudD API Token,「识曲」按钮点击后会提示未配置。
+          </Text>
+        )}
       </div>
 
       <Divider />

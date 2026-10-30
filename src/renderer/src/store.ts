@@ -14,7 +14,15 @@ import { detectChorus } from './lib/chorus'
 import { toast, toastError } from './lib/toast'
 
 export type PlayMode = 'loop' | 'shuffle' | 'single'
-export type PageKey = 'search' | 'playlists' | 'downloads' | 'settings' | 'recent'
+export type PageKey =
+  | 'search'
+  | 'playlists'
+  | 'downloads'
+  | 'settings'
+  | 'recent'
+  | 'favorites'
+  | 'charts'
+  | 'recognize'
 /** 全局共享弹窗(全屏播放页与迷你播放条都能打开) */
 export type DialogKey =
   | null
@@ -44,6 +52,8 @@ let audio: HTMLAudioElement | null = null
 let audioContext: AudioContext | null = null
 let eqNodes: BiquadFilterNode[] = []
 let analyserNode: AnalyserNode | null = null
+/** 变调节点:用 playbackRate 变速后,用 detune 把音高拉回目标半音 */
+let pitchSource: AudioBufferSourceNode | null = null
 let triedHtml5For: string | null = null
 /** 最近一次播放位置(秒):突发中断重试时续播用(如流断了/超时,不能从头放) */
 let lastKnownPos = 0
@@ -129,6 +139,11 @@ export function getSpectrum(): Uint8Array | null {
 interface PlayerState {
   library: Library | null
   page: PageKey
+  /**
+   * 跨页面传递的搜索关键词:识曲页拿到结果后写入并跳到搜索页,
+   * 搜索页消费一次就清空(避免返回时又被旧词覆盖用户输入)。
+   */
+  pendingSearch: string | null
   // player
   queue: Song[]
   queueIndex: number
@@ -151,6 +166,8 @@ interface PlayerState {
   sleepTotalMs: number
   /** 当前打开的共享弹窗 */
   activeDialog: DialogKey
+  /** 弹窗目标歌曲:右键菜单等场景显式指定;空=用当前播放曲目 */
+  dialogSong: Song | null
   /** 当前播放音质描述(如 极高 320k MP3 / 320k / 本地文件) */
   quality: string | null
   /** 音源加载进度(resolving/downloading/done;done 或空表示无进度可展示) */
@@ -166,6 +183,10 @@ interface PlayerState {
   init(): Promise<void>
   refreshLibrary(): Promise<void>
   setPage(p: PageKey): void
+  /** 识曲页 → 搜索页:写入关键词并切页 */
+  searchWithQuery(q: string): void
+  /** 搜索页取走待搜索词(取后清空) */
+  takePendingSearch(): string | null
   playQueue(songs: Song[], startIndex?: number): Promise<void>
   playSongNext(song: Song): void
   togglePlay(): void
@@ -188,8 +209,14 @@ interface PlayerState {
   cancelSleepTimer(): void
   /** 打开/关闭共享弹窗 */
   setActiveDialog(d: DialogKey): void
+  /** 打开针对某首歌的弹窗(右键详情/换源等);song 为 null 时回退当前播放 */
+  openSongDialog(d: DialogKey, song: Song | null): void
   updateSetting<K extends keyof Settings>(key: K, value: Settings[K]): Promise<void>
   setPlaybackRate(rate: number): void
+  /** 设置音调(半音,-12~+12);0=原调 */
+  setPitch(semitones: number): void
+  /** 升降 n 个半音 */
+  stepPitch(delta: number): void
   playAt(index: number): void
   removeFromQueue(index: number): void
   clearQueue(): void
@@ -223,15 +250,23 @@ export const useStore = create<PlayerState>((set, get) => {
     if (get().current?.id === song.id) set({ highlights: points })
   }
 
-  /** 播放态变更的统一入口:加载音源期间屏蔽新的播放/换曲请求 */
-  const blockedByLoading = (action: string): boolean => {
-    if (!get().loading) return false
-    toast('音源加载中', `${action}请等当前歌曲加载完成`)
-    return true
-  }
+  /**
+   * 播放请求序号:每次开始播放 +1。
+   * 异步取流返回后用「序号是否仍是最新」判断自己是否已被新请求抢占,
+   * 被抢占了就静默退出,不再写 current/lyrics/播放状态。
+   * 这样连点两首歌时,后一次点击立即生效,前一次的慢请求自动作废,
+   * 不需要"加载中禁止点击"这种全局锁。
+   *
+   * 主进程侧另有一层取消:prepareAudio 收到新请求会 abort 旧的下载
+   * (见 audio.ts 的 currentAbort),所以旧歌的大文件下载不会继续占用带宽。
+   */
+  let playSeq = 0
+  /** 当前这次播放请求是否已被更新的请求取代 */
+  const isStale = (seq: number): boolean => seq !== playSeq
 
   /** 实际开始播放一首歌(html5Fallback=m4s 不支持时改用 mp4;resumeAt=续播位置秒) */
   const startPlayback = async (song: Song, html5Fallback = false, resumeAt = 0) => {
+    const seq = ++playSeq
     const el = getAudio()
     // keepMeta 是一次性标记:本次播放保留原曲歌词,消费后失效(重播/落库不会误保留)
     const keepMeta = song.keepMeta === true
@@ -297,18 +332,23 @@ export const useStore = create<PlayerState>((set, get) => {
     }
     try {
       const prepared = await api.audioPrepare(song, html5Fallback)
-      if (get().current?.id !== song.id) return
+      // 已被更新的播放请求抢占:丢弃这次结果,什么都不写
+      if (isStale(seq) || get().current?.id !== song.id) return
       el.src = prepared.url
       const st = get().library?.settings
-      el.playbackRate = st?.playbackRate ?? 1
-      // 倍速保持音调(2026 播放器标配)
-      const pitch = st?.preservePitch ?? true
+      // 音调优先:有升降调时用 tape 变速移调(关闭 pitch 保持),否则按倍速+保持音调
+      const semi = st?.pitchSemitones ?? 0
+      const baseRate = st?.playbackRate ?? 1
+      el.playbackRate = semi !== 0 ? baseRate * Math.pow(2, semi / 12) : baseRate
+      const pitch = semi !== 0 ? false : (st?.preservePitch ?? true)
       ;(el as HTMLAudioElement & { preservesPitch?: boolean }).preservesPitch = pitch
       ;(el as HTMLAudioElement & { webkitPreservesPitch?: boolean }).webkitPreservesPitch = pitch
       // 建立音频图(频谱可视化 + 均衡器)
       if (st) ensureEqChain(st)
       try {
         await el.play()
+        // play() 是异步的:等它 resolve 期间用户可能已经点了下一首,需再判一次
+        if (isStale(seq)) return
         // 续播:中断重试时回到中断位置,而不是从头开始
         if (resume > 1) {
           try {
@@ -328,6 +368,8 @@ export const useStore = create<PlayerState>((set, get) => {
         }
         updateMediaSession(song)
       } catch (playErr) {
+        // 已被新请求抢占:旧歌的播放失败不该影响当前这首
+        if (isStale(seq)) return
         // 自动播放被拦截等
         const de = playErr as DOMException
         console.warn('play() rejected', de?.name, de?.message)
@@ -346,13 +388,16 @@ export const useStore = create<PlayerState>((set, get) => {
       api
         .lyricsGet(song)
         .then((ly) => {
-          if (get().current?.id === song.id) {
+          // 歌词回来时用户可能已切歌:只认当前曲目且请求仍是最新
+          if (!isStale(seq) && get().current?.id === song.id) {
             set({ lyrics: ly })
             void refreshHighlights(song, ly)
           }
         })
         .catch(() => {})
     } catch (e) {
+      // 已被新请求抢占:这次失败属于旧歌,不要弹错误、不要把 loading 关掉
+      if (isStale(seq)) return
       const msg = e instanceof Error ? e.message : String(e)
       // 网易云任何取流失败都垫底到其他平台(无源/VIP/风控);设置关闭时不垫底
       if (song.source === 'NETEASE') {
@@ -451,10 +496,11 @@ export const useStore = create<PlayerState>((set, get) => {
     }
     try {
       toast('切换音源', `${reason}(${tried.join(' / ') || 'B站'})`)
-      // 只换音频流:保留原曲标题/封面/歌手/neteaseId,换入命中平台 id 以走原生音质
+      // 只换音频流:保留原曲标题/封面/歌手/neteaseId,换入命中平台字段以走原生音质。
+      // 注意 id 必须保持原曲不变 —— 取流只按 source + 各平台字段分发,从不读 id;
+      // 一旦改成 picked.id,同一首歌就有了第二个身份,列表高亮与收藏会被拆成两条。
       const audioOnly: Song = {
         ...song,
-        id: picked.id,
         source: picked.source,
         bvid: picked.bvid,
         page: picked.page,
@@ -670,6 +716,7 @@ export const useStore = create<PlayerState>((set, get) => {
   return {
     library: null,
     page: 'search',
+    pendingSearch: null,
     queue: [],
     queueIndex: -1,
     current: null,
@@ -687,6 +734,7 @@ export const useStore = create<PlayerState>((set, get) => {
     sleepRemainingMs: 0,
     sleepTotalMs: 0,
     activeDialog: null,
+    dialogSong: null,
     quality: null,
     loadProgress: null,
     highlights: [],
@@ -712,10 +760,22 @@ export const useStore = create<PlayerState>((set, get) => {
       set({ page: p, artistPageId: null })
     },
 
+    searchWithQuery(q) {
+      // 识曲页拿到结果后调用:写入待搜索词并切到搜索页
+      set({ pendingSearch: q, page: 'search', artistPageId: null })
+    },
+
+    takePendingSearch() {
+      const q = get().pendingSearch
+      // 取走即清空,避免用户下次回到搜索页时又被旧关键词覆盖输入
+      if (q !== null) set({ pendingSearch: null })
+      return q
+    },
+
     async playQueue(songs, startIndex = 0) {
       if (songs.length === 0) return
-      // 加载音源期间屏蔽列表/歌单的播放操作:此刻 el 里还没有可播内容,点了只会状态错乱
-      if (blockedByLoading('开始播放')) return
+      // 不再因"上一首还在加载"而拒绝:新播放请求会递增序号并 abort 上一个请求,
+      // 旧请求回来时发现自己已过期就静默退出,因此这里直接放行、立即生效。
       triedHtml5For = null
       set({ queue: songs, queueIndex: startIndex })
       await startPlayback(songs[startIndex])
@@ -831,6 +891,16 @@ export const useStore = create<PlayerState>((set, get) => {
       )
     },
     setNowPlayingOpen(open) {
+      // 收起全屏时一并清掉 'comments'。
+      // 全屏页里的评论区是右侧停靠面板,但状态仍记在 activeDialog 上;
+      // GlobalDialogs 的兜底条件是 dlg==='comments' && !nowPlayingOpen,
+      // 若不清,收起全屏的那次渲染里条件立刻成立,评论会以弹窗形态再弹一次。
+      // 放在 store 里统一处理:Esc / 收起按钮 / 快捷键等所有入口都能覆盖,
+      // 且与 nowPlayingOpen 同一次 set,不存在"先渲染再清理"的闪烁窗口。
+      if (!open && get().activeDialog === 'comments') {
+        set({ nowPlayingOpen: false, activeDialog: null })
+        return
+      }
       set({ nowPlayingOpen: open })
     },
     setLyrics(l) {
@@ -936,6 +1006,10 @@ export const useStore = create<PlayerState>((set, get) => {
       set({ activeDialog: d })
     },
 
+    openSongDialog(d, song) {
+      set({ activeDialog: d, dialogSong: song })
+    },
+
     async updateSetting(key, value) {
       const settings = await api.librarySetSetting(key, value)
       const lib = get().library
@@ -945,10 +1019,10 @@ export const useStore = create<PlayerState>((set, get) => {
     playAt(index) {
       const { queue } = get()
       if (index < 0 || index >= queue.length) return
-      if (blockedByLoading('切换曲目')) return
+      // 同上:允许在上一首加载中直接切歌,由 startPlayback 的请求序号负责抢占
       triedHtml5For = null
       set({ queueIndex: index })
-      startPlayback(queue[index])
+      void startPlayback(queue[index])
     },
 
     removeFromQueue(index) {
@@ -967,14 +1041,45 @@ export const useStore = create<PlayerState>((set, get) => {
     },
 
     setPlaybackRate(rate) {
-      getAudio().playbackRate = rate
+      const semi = get().library?.settings.pitchSemitones ?? 0
+      const el = getAudio()
+      // 与音调叠加:rate 最终 = 倍速 × 2^(半音/12)
+      el.playbackRate = semi !== 0 ? rate * Math.pow(2, semi / 12) : rate
+      if (semi === 0) {
+        const pp = el as HTMLAudioElement & { preservesPitch?: boolean; webkitPreservesPitch?: boolean }
+        const keep = get().library?.settings.preservePitch ?? true
+        pp.preservesPitch = keep
+        pp.webkitPreservesPitch = keep
+      }
       get().updateSetting('playbackRate', rate)
+    },
+
+    /**
+     * 音调(半音):
+     * 用 playbackRate 做 tape-style 变调(2^(n/12) 倍速),并关闭 preservesPitch
+     * 让音高随速度一起变——这正是"升调不变速"在浏览器里的等效做法需要反过来的地方:
+     * 这里播放速度会随音调变化,与手机端"音调"滑杆行为一致(升调=更快更高)。
+     * 倍速设置与音调相互独立:最终 rate = 倍速 × 2^(半音/12)。
+     */
+    setPitch(semitones) {
+      const n = Math.max(-12, Math.min(12, Math.round(semitones)))
+      const el = getAudio()
+      const base = get().library?.settings.playbackRate ?? 1
+      el.playbackRate = base * Math.pow(2, n / 12)
+      const pp = el as HTMLAudioElement & { preservesPitch?: boolean; webkitPreservesPitch?: boolean }
+      pp.preservesPitch = false
+      pp.webkitPreservesPitch = false
+      void get().updateSetting('pitchSemitones', n)
+    },
+
+    stepPitch(delta) {
+      const cur = get().library?.settings.pitchSemitones ?? 0
+      get().setPitch(cur + delta)
     },
 
     async replaceCurrentAndPlay(song) {
       const { queue, current } = get()
-      // 加载音源期间屏蔽更换音源/分P切换,避免与正在进行的解析互相打断
-      if (blockedByLoading('更换音源')) return
+      // 换源/分P切换同样不再等待上一个请求:startPlayback 会 abort 旧请求并抢占序号
       const q = [...queue]
       // 按 id 定位当前曲(队列项可能因移除/换源与 queueIndex 错位):
       // 找到 → 原位替换;找不到 → 追加为新的一项,避免覆盖错误的队列项

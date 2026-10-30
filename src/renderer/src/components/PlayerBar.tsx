@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react'
 import {
   Button,
   Menu,
+  MenuDivider,
   MenuList,
   MenuItem,
   MenuPopover,
@@ -38,7 +39,9 @@ import {
   CheckmarkRegular,
   SettingsRegular,
   LockClosedRegular,
-  LockOpenRegular
+  LockOpenRegular,
+  HeartRegular,
+  HeartFilled
 } from '@fluentui/react-icons'
 import { useStore, fmtDur } from '../store'
 import { Cover } from './Cover'
@@ -133,12 +136,15 @@ export function PlayerBar() {
   const sleepPaused = useStore((s) => s.sleepPaused)
   const sleepRemainingMs = useStore((s) => s.sleepRemainingMs)
   const rate = useStore((s) => s.library?.settings.playbackRate ?? 1)
+  const pitch = useStore((s) => s.library?.settings.pitchSemitones ?? 0)
   const ui = useStore((s) => s.library?.settings.uiModules)
   const floatLyric = useStore((s) => s.library?.settings.floatLyric ?? false)
   const floatLocked = useStore((s) => s.library?.settings.floatLyricLocked ?? false)
   /** 进度条高潮点标记(设置可关) */
   const highlights = useStore((s) => s.highlights)
   const showChorus = useStore((s) => s.library?.settings.showChorusMarks !== false)
+  const favoriteIds = useStore((s) => s.library?.favoriteIds)
+  const faved = !!current && !!favoriteIds?.includes(current.id)
   const setDlg = useStore((s) => s.setActiveDialog)
   const { togglePlay, next, prev, seek, setVolume, setMuted, cycleMode, setNowPlayingOpen } =
     useStore.getState()
@@ -182,6 +188,14 @@ export function PlayerBar() {
   }
 
   const hasPages = current?.source === 'BILIBILI' && !!current.bvid
+
+  /** 收藏当前播放的曲目(与列表行内心形共用同一套后端/刷新逻辑) */
+  const toggleFavCurrent = async (): Promise<void> => {
+    if (!current) return
+    const r = await api.libraryToggleFavorite(current)
+    await useStore.getState().refreshLibrary()
+    toastSuccess(r.favorited ? '已收藏' : '已取消收藏', current.title)
+  }
 
   return (
     <div className={styles.bar}>
@@ -233,6 +247,16 @@ export function PlayerBar() {
         <div className={styles.right}>
           <Tooltip content={modeText} relationship="label">
             <Button appearance="subtle" icon={<ModeIcon />} onClick={() => cycleMode()} />
+          </Tooltip>
+          <Tooltip content={faved ? '取消收藏' : '收藏'} relationship="label">
+            <Button
+              appearance="subtle"
+              aria-label={faved ? '取消收藏' : '收藏'}
+              icon={faved ? <HeartFilled /> : <HeartRegular />}
+              onClick={() => void toggleFavCurrent()}
+              disabled={!current}
+              style={faved ? { color: tokens.colorPaletteRedForeground1 } : undefined}
+            />
           </Tooltip>
           {/* 更多操作(与全屏播放页共享同一组弹窗) */}
           {ui?.barMore !== false && (
@@ -339,6 +363,39 @@ export function PlayerBar() {
                           onClick={() => useStore.getState().setPlaybackRate(r)}
                         >
                           {r}x {r === 1 ? '(正常)' : ''}
+                        </MenuItem>
+                      ))}
+                    </MenuList>
+                  </MenuPopover>
+                </Menu>
+                <Menu>
+                  <MenuTrigger disableButtonEnhancement>
+                    <MenuItem icon={<MusicNote2Regular />}>
+                      音调调节 {pitch !== 0 ? `(${pitch > 0 ? '+' : ''}${pitch})` : '(原调)'}
+                    </MenuItem>
+                  </MenuTrigger>
+                  <MenuPopover>
+                    <MenuList>
+                      <MenuItem onClick={() => useStore.getState().stepPitch(-1)}>
+                        降半音 (当前 {pitch > 0 ? '+' : ''}{pitch})
+                      </MenuItem>
+                      <MenuItem onClick={() => useStore.getState().stepPitch(1)}>
+                        升半音 (当前 {pitch > 0 ? '+' : ''}{pitch})
+                      </MenuItem>
+                      <MenuItem
+                        icon={pitch === 0 ? <CheckmarkRegular /> : undefined}
+                        onClick={() => useStore.getState().setPitch(0)}
+                      >
+                        恢复原调
+                      </MenuItem>
+                      <MenuDivider />
+                      {[-6, -4, -2, 0, 2, 4, 6].map((semi) => (
+                        <MenuItem
+                          key={semi}
+                          icon={semi === pitch ? <CheckmarkRegular /> : undefined}
+                          onClick={() => useStore.getState().setPitch(semi)}
+                        >
+                          {semi === 0 ? '0 (原调)' : `${semi > 0 ? '+' : ''}${semi} 半音`}
                         </MenuItem>
                       ))}
                     </MenuList>

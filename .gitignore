@@ -1,10 +1,10 @@
 node_modules/
 out/
 dist/
-release/
-release-new/
+release*/
 tests/.out/
 tests/*.png
+probe/
 *.log
 *.tsbuildinfo
 .DS_Store

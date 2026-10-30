@@ -1,7 +1,14 @@
 /**
  * 网易云音乐 API 客户端 (移植自安卓端 NeteaseApiClient.kt)
  */
-import type { Song, NeteasePlaylistMeta, NeteaseArtistDetail } from '@shared/types'
+import type {
+  Song,
+  NeteasePlaylistMeta,
+  NeteaseArtistDetail,
+  ChartCatalog,
+  ChartDetail,
+  ChartBrief
+} from '@shared/types'
 import { weApiEncrypt, eApiEncrypt, linuxApiEncrypt, md5Hex } from './neteaseCrypto'
 
 const UA =
@@ -564,6 +571,72 @@ export async function getPersonalizedPlaylists(limit = 12): Promise<any[]> {
   }
   const json2 = await callWeApi('/personalized', { limit: String(limit) })
   return map(json2?.result ?? [])
+}
+
+// ============ 排行榜 ============
+
+/**
+ * 榜单目录:/api/toplist 明文公开接口(无需登录、无需加密),返回全部榜单
+ * (飙升/新歌/原创/热歌 + 电音/说唱/国风/ACG/日语/韩语等分类榜)。
+ */
+export async function getChartCatalog(): Promise<ChartCatalog> {
+  const label = '网易云音乐'
+  try {
+    const json = await getApi('https://music.163.com/api/toplist')
+    const list: any[] = json?.list ?? []
+    if (list.length === 0) {
+      return { platform: 'netease', label, groups: [], error: '网易云榜单目录为空' }
+    }
+    const charts: ChartBrief[] = list
+      .map((c: any): ChartBrief | null => {
+        const id = String(c?.id ?? '')
+        const name = String(c?.name ?? '').trim()
+        if (!id || !name) return null
+        return {
+          id,
+          name,
+          coverUrl: c?.coverImgUrl ? String(c.coverImgUrl) : undefined,
+          updateTip: c?.updateFrequency ? String(c.updateFrequency) : undefined
+        }
+      })
+      .filter((c): c is ChartBrief => c !== null)
+    // 官榜在前(飙升/新歌/原创/热歌),其余分类榜按接口顺序排后
+    return { platform: 'netease', label, groups: [{ name: '', charts }] }
+  } catch (e) {
+    return {
+      platform: 'netease',
+      label,
+      groups: [],
+      error: e instanceof Error ? e.message : String(e)
+    }
+  }
+}
+
+/**
+ * 榜单曲目:/api/playlist/detail?id=<toplistId> 返回 result.tracks(已含 ar/al/dt,无需再补详情)。
+ * 老接口给的是原始字段名 artists/album/duration,由 songFromNetease 兼容读取。
+ */
+export async function getChartSongs(chartId: string): Promise<ChartDetail> {
+  const id = encodeURIComponent(String(chartId))
+  const json = await getApi(`https://music.163.com/api/playlist/detail?id=${id}`)
+  const result = json?.result ?? {}
+  const tracks: any[] = result?.tracks ?? []
+  let songs = tracks.map(songFromNetease)
+  // 该接口偶发只回 trackIds(曲目明细被裁掉),此时按 id 批量补详情
+  if (songs.length === 0 && Array.isArray(result?.trackIds) && result.trackIds.length > 0) {
+    const ids = result.trackIds.slice(0, 100).map((t: any) => Number(t.id)).filter((n: number) => n > 0)
+    songs = await getSongDetail(ids).catch(() => [] as Song[])
+  }
+  return {
+    id: String(chartId),
+    name: String(result?.name ?? ''),
+    platform: 'netease',
+    coverUrl: result?.coverImgUrl ? String(result.coverImgUrl) : undefined,
+    updateTip: result?.updateFrequency ? String(result.updateFrequency) : undefined,
+    intro: result?.description ? String(result.description).slice(0, 300) : undefined,
+    songs,
+    total: Number(result?.trackCount ?? 0) || songs.length
+  }
 }
 
 // ============ 评论(公开接口) ============

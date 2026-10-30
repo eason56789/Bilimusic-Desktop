@@ -1,7 +1,7 @@
 {
   "name": "bilimusic-desktop",
   "productName": "BiliMusic",
-  "version": "1.0.5",
+  "version": "1.0.9",
   "description": "基于哔哩哔哩与网易云音乐的音乐播放器 - 桌面版 (Fluent UI)",
   "main": "out/main/index.js",
   "author": "BiliMusic",
@@ -49,6 +49,12 @@
       "package.json",
       "build/icon.ico",
       "build/icon.png"
+    ],
+    "extraResources": [
+      {
+        "from": "resources/disguise",
+        "to": "disguise"
+      }
     ],
     "asar": true,
     "win": {

@@ -29,16 +29,47 @@ export function parseLrc(lrc: string): LyricLine[] {
 }
 
 /**
- * 解析网易云 YRC(逐字歌词)
- * 行格式: [start,dur](wordStart,wordDur,0)word(wordStart,wordDur,0)word...
+ * 解析网易云 YRC(逐字歌词)。线上实际存在两种格式:
+ *
+ * A) 标准 YRC 文本(带逐字时间):
+ *    [start,dur](wordStart,wordDur,0)word(wordStart,wordDur,0)word...
+ *
+ * B) 逐行 JSON(无逐字时间,只有整行时间):
+ *    {"t":0,"c":[{"tx":"编曲: "},{"tx":"Alan Walker"}]}
+ *   网易部分曲目(如 Faded 36990266)的 yrc 字段返回的是这种格式。
+ *   此前只认 A,遇到 B 会解析出 0 行,而调用方"yrc 非空就不再回退 lrc",
+ *   导致整首歌拿不到任何歌词。这里补上 B 的解析(无 wordTimes,走普通行渲染)。
  */
 export function parseYrc(yrc: string): LyricLine[] {
   const lines: LyricLine[] = []
   for (const raw of yrc.split(/\r?\n/)) {
-    const head = raw.match(/^\[(\d+),(\d+)\]/)
+    const trimmed = raw.trim()
+    if (!trimmed) continue
+
+    // 格式 B:整行是一个 JSON 对象
+    if (trimmed.startsWith('{')) {
+      try {
+        const obj = JSON.parse(trimmed) as {
+          t?: number
+          c?: { tx?: string }[]
+        }
+        const text = (obj.c ?? [])
+          .map((seg) => seg?.tx ?? '')
+          .join('')
+          .trim()
+        if (!text || typeof obj.t !== 'number' || !isFinite(obj.t)) continue
+        lines.push({ timeMs: obj.t, text })
+      } catch {
+        // 非法 JSON 行直接跳过,不影响其余行
+      }
+      continue
+    }
+
+    // 格式 A
+    const head = trimmed.match(/^\[(\d+),(\d+)\]/)
     if (!head) continue
     const start = parseInt(head[1], 10)
-    const body = raw.replace(/^\[(\d+),(\d+)\]/, '')
+    const body = trimmed.replace(/^\[(\d+),(\d+)\]/, '')
     const words: { text: string; timeMs: number }[] = []
     const re = /\((\d+),(\d+),\d+\)([^(]*)/g
     let m: RegExpExecArray | null
@@ -59,6 +90,7 @@ export function parseYrc(yrc: string): LyricLine[] {
   }
   return lines.sort((a, b) => a.timeMs - b.timeMs)
 }
+
 
 const lyricCache = new Map<string, LyricsResult>()
 
@@ -82,28 +114,87 @@ function stripLines(lines: LyricLine[]): LyricLine[] {
 
 /**
  * 把网易云翻译(tlyric)按时间对齐合并进主歌词。
- * tlyric 与 lrc/yrc 的时间戳基本一一对应,少数行会差几十毫秒,
- * 因此用「就近 500ms 内匹配」而不是严格相等。
+ *
+ * 对齐难点:主歌词可能来自 yrc(逐字精确时间),而 tlyric 跟的是 lrc 的行时间,
+ * 两者可能整首存在恒定偏差(实测 Faded:yrc 11090 vs lrc 10420,差 670ms)。
+ * 固定 500ms 容差会把大量行判为"无译文",放宽到 2s 又会把相邻句的译文配错。
+ *
+ * 做法:
+ * 1) 先按「最近时间点」为每一行找候选译文,用较宽窗口(3s)收集偏差样本;
+ * 2) 取偏差的**中位数**作为整首的时间基准偏移(抗离群,不受个别错配影响);
+ * 3) 用「基准偏移 + 1s 容差」重新就近匹配,只接受落在这个窗口里的译文。
+ * 偏移恒定的情况下能把整体平移吸收掉;偏移本就为 0 时,行为与原先一致。
  */
-function mergeTranslation(lines: LyricLine[], tlyric: string): LyricLine[] {
+export function mergeTranslation(lines: LyricLine[], tlyric: string): LyricLine[] {
   if (!tlyric || lines.length === 0) return lines
   const trans = parseLrc(tlyric)
   if (trans.length === 0) return lines
-  const idx = new Map<number, string>()
-  for (const t of trans) idx.set(t.timeMs, t.text)
-  const keys = [...idx.keys()].sort((a, b) => a - b)
-  const nearest = (ms: number): string | undefined => {
-    let best: number | null = null
-    for (const k of keys) {
-      if (best === null || Math.abs(k - ms) < Math.abs(best - ms)) best = k
-      if (k > ms + 500) break
+
+  const keys = trans.map((t) => t.timeMs)
+  const keyToText = new Map<number, string>()
+  for (const t of trans) keyToText.set(t.timeMs, t.text)
+
+  /** 在有序 keys 里找离 target 最近的时间点,返回 [key, 距离] */
+  const nearestKey = (target: number): [number, number] => {
+    let lo = 0
+    let hi = keys.length - 1
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1
+      if (keys[mid] < target) lo = mid + 1
+      else hi = mid
     }
-    return best !== null && Math.abs(best - ms) <= 500 ? idx.get(best) : undefined
+    let bestKey = keys[lo]
+    let bestD = Math.abs(bestKey - target)
+    if (lo > 0 && Math.abs(keys[lo - 1] - target) < bestD) {
+      bestKey = keys[lo - 1]
+      bestD = Math.abs(keys[lo - 1] - target)
+    }
+    return [bestKey, bestD]
   }
+
+  // ---- 1) 收集偏差样本:只取 3s 内、且译文与原文不同的配对 ----
+  const diffs: number[] = []
+  for (const l of lines) {
+    const [k, d] = nearestKey(l.timeMs)
+    if (d > 3000) continue
+    const txt = (keyToText.get(k) ?? '').trim()
+    if (!txt || txt === l.text.trim()) continue
+    diffs.push(k - l.timeMs)
+  }
+
+  // ---- 2) 中位数偏移(样本太少则不修正,避免被个别行带偏) ----
+  let offset = 0
+  if (diffs.length >= Math.max(3, Math.floor(lines.length * 0.2))) {
+    diffs.sort((a, b) => a - b)
+    const med = diffs[Math.floor(diffs.length / 2)]
+    // 只有偏移足够大(超过原容差)才启用,避免无谓扰动
+    if (Math.abs(med) > 500) offset = med
+  }
+
+  // ---- 3) 按偏移重新对齐 ----
+  const TOL = 1000
   return lines.map((l) => {
-    const t = nearest(l.timeMs)
-    return t && t !== l.text ? { ...l, trans: t } : l
+    const [k, d] = nearestKey(l.timeMs + offset)
+    if (d > TOL) return l
+    const txt = (keyToText.get(k) ?? '').trim()
+    if (!txt || txt === l.text.trim()) return l
+    return { ...l, trans: txt }
   })
+}
+
+
+
+/**
+ * 从网易云返回里选出最合适的歌词行。
+ * yrc 优先(带逐字,渲染为卡拉OK),但 yrc 解析失败或行数明显少于 lrc 时回退 lrc:
+ * 线上 yrc 有 JSON 格式变体,历史上只认标准格式会导致整首无歌词。
+ */
+export function pickLines(ly: { yrc?: string; lrc?: string }): LyricLine[] {
+  const fromYrc = ly.yrc ? parseYrc(ly.yrc) : []
+  const fromLrc = parseLrc(ly.lrc ?? '')
+  // yrc 有逐字数据才值得优先;行数不到 lrc 的六成说明 yrc 不完整(常见于只有元信息行)
+  if (fromYrc.length > 0 && fromYrc.length >= fromLrc.length * 0.6) return fromYrc
+  return fromLrc.length > 0 ? fromLrc : fromYrc
 }
 
 export async function getLyrics(song: Song): Promise<LyricsResult> {
@@ -114,8 +205,7 @@ export async function getLyrics(song: Song): Promise<LyricsResult> {
     // 有 neteaseId 优先取网易云歌词(垫底/换源后的 B站流歌曲,标题元数据仍是原曲)
     if (song.neteaseId) {
       const ly = await getLyricNew(song.neteaseId)
-      let lines = ly.yrc ? parseYrc(ly.yrc) : []
-      if (lines.length === 0) lines = parseLrc(ly.lrc ?? '')
+      let lines = pickLines(ly)
       if (lines.length > 0) {
         lines = stripLines(lines)
         if (ly.tlyric) lines = mergeTranslation(lines, ly.tlyric)
@@ -130,8 +220,7 @@ export async function getLyrics(song: Song): Promise<LyricsResult> {
           r.songs[0]
         if (cand?.neteaseId) {
           const ly = await getLyricNew(cand.neteaseId)
-          let lines = ly.yrc ? parseYrc(ly.yrc) : []
-          if (lines.length === 0) lines = parseLrc(ly.lrc ?? '')
+          let lines = pickLines(ly)
           if (lines.length > 0) {
             lines = stripLines(lines)
             if (ly.tlyric) lines = mergeTranslation(lines, ly.tlyric)

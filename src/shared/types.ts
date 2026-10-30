@@ -95,6 +95,8 @@ export interface Settings {
   lyricAlign: 'center' | 'left'
   /** 播放倍速 */
   playbackRate: number
+  /** 音调(半音,-12~+12;0=原调。与倍速独立,改调不变速) */
+  pitchSemitones: number
   /** 音量 0~1(持久化,下次启动恢复) */
   volume: number
   /** 是否已完成首次启动引导 */
@@ -164,14 +166,39 @@ export interface Settings {
   lyricAlphaCurrent: number
   /** 非当前歌词不透明度 0.05~1(对齐手机端) */
   lyricAlphaInactive: number
+  /** ===== 歌词翻译(全屏播放页) ===== */
+  /**
+   * 歌词显示模式:
+   * - 'off'       仅原文
+   * - 'both'      原文 + 翻译
+   * - 'transOnly' 仅翻译(无译文的行回退显示原文,不留空行)
+   */
+  lyricTransMode: 'off' | 'both' | 'transOnly'
+  /** 译文相对原文字号的比例 0.5~1(1=与原文同大) */
+  lyricTransScale: number
+  /** 译文不透明度 0.3~1 */
+  lyricTransAlpha: number
+  /** 译文排版:原文下方 / 原文右侧同行 */
+  lyricTransLayout: 'below' | 'inline'
   /** 搜索默认音源 */
   defaultSearchSource: 'netease' | 'bili' | 'qq' | 'kugou'
   /** 网易云无音源时自动到 B站/QQ/酷狗搜索垫底 */
   neteaseFallback: boolean
   /** 已忽略更新的版本号(启动检查到该版本不再提示) */
   skippedUpdateVersion?: string
-  /** 听歌识别 AudD API Token(audd.io 免费注册;空=未启用识别) */
+  /** 听歌识别 AudD API Token(audd.io 免费注册;空=未配置识别服务) */
   songRecognizeToken?: string
+  /** 听歌识别总开关:关闭后搜索页不显示「识曲」按钮(无需清空 Token) */
+  songRecognizeEnabled: boolean
+  /** ===== 轻提示(toast)外观 ===== */
+  /** 出现位置:顶部居中滑下 / 右下角 / 顶部右侧;off=关闭所有轻提示 */
+  toastPosition: 'top-center' | 'bottom-right' | 'top-right' | 'off'
+  /** 停留时长倍数 0.5~2(1=默认:成功 2.2s / 信息 2.6s / 错误 4.2s) */
+  toastDuration: number
+  /** 视觉样式:HUD 玻璃 / 极简线条 / 实心高对比 */
+  toastStyle: 'hud' | 'minimal' | 'solid'
+  /** 是否显示意图图标 */
+  toastShowIcon: boolean
 }
 
 /** 网易云歌单元信息(详情页展示) */
@@ -310,6 +337,8 @@ export interface Library {
   neteaseProfile?: UserProfile | null
   /** 听歌时长统计(date=自然日,跨天加载时 todayMs 清零、累计保留) */
   listenStats?: ListenStats
+  /** 收藏的歌曲 id(我的收藏,按收藏时间倒序由 favoriteIds 顺序表达) */
+  favoriteIds?: string[]
 }
 
 /** 听歌时长统计 */
@@ -443,6 +472,69 @@ export interface HighlightPoint {
   kind?: 'climax' | 'chorus'
 }
 
+/** 单平台热度/收藏数据 */
+export interface PlatformHot {
+  platform: 'kugou' | 'qq' | 'netease'
+  /** favorite=真实收藏数(酷狗 OwnerCount);heat=平台热度指数 */
+  metric: 'favorite' | 'heat'
+  value: number
+  /** 匹配到的歌曲标题 */
+  title: string
+}
+
+/** 全网热度聚合结果 */
+export interface SongHotResult {
+  items: PlatformHot[]
+  errors: { platform: string; message: string }[]
+}
+
+/** 排行榜所属平台(与 MusicSource 的子集一致,便于取流/标识复用) */
+export type ChartPlatform = 'netease' | 'qq' | 'kugou' | 'bilibili'
+
+/** 榜单分组(QQ 的巅峰榜/地区榜/特色榜/全球榜;其余平台为空) */
+export interface ChartGroup {
+  /** 分组名(无分组时为空字符串) */
+  name: string
+  charts: ChartBrief[]
+}
+
+/** 榜单简要信息(左侧/顶部的榜单列表项) */
+export interface ChartBrief {
+  /** 平台内榜单 id(网易云=toplist id,QQ=topId,酷狗=rankid,B站=rid) */
+  id: string
+  name: string
+  /** 榜单封面(平台提供时;网易云/QQ 有,酷狗/B站无) */
+  coverUrl?: string
+  /** 更新时间文案(平台提供时,如 "每天更新") */
+  updateTip?: string
+  /** 榜单简介(平台提供时) */
+  intro?: string
+}
+
+/** 榜单详情(选中某榜单后的曲目列表) */
+export interface ChartDetail {
+  id: string
+  name: string
+  platform: ChartPlatform
+  coverUrl?: string
+  updateTip?: string
+  /** 榜单简介 */
+  intro?: string
+  songs: Song[]
+  /** 平台声明的总曲目数(可能 > songs.length) */
+  total?: number
+}
+
+/** 某平台的榜单目录(按分组组织;无分组的平台只有一组,组名为空) */
+export interface ChartCatalog {
+  platform: ChartPlatform
+  /** 平台中文名,用于界面标题 */
+  label: string
+  groups: ChartGroup[]
+  /** 该平台榜单目录获取失败时的原因(此时 groups 为空) */
+  error?: string
+}
+
 export interface ApiResponse<T> {
   ok: boolean
   data?: T
@@ -490,6 +582,13 @@ export interface DesktopApi {
   ): Promise<ApiResponse<{ id: string; name: string; count: number }>>
   /** 进度条高潮点:酷狗原生 climax_info(无则为 null,渲染层回退歌词副歌检测) */
   songClimax(song: Song): Promise<HighlightPoint[] | null>
+  /** 全网热度聚合:酷狗真实收藏数 + QQ/网易云热度指数 */
+  songHot(song: Song): Promise<ApiResponse<SongHotResult>>
+  /** ===== 排行榜 ===== */
+  /** 某平台的榜单目录(分组 + 榜单列表) */
+  chartCatalog(platform: ChartPlatform): Promise<ApiResponse<ChartCatalog>>
+  /** 榜单曲目 */
+  chartSongs(platform: ChartPlatform, chartId: string): Promise<ApiResponse<ChartDetail>>
   /** 网易云歌单元信息(描述/播放量/创建时间等) */
   neteasePlaylistMeta(id: number): Promise<ApiResponse<NeteasePlaylistMeta>>
   /** 网易云歌手详情(简介/粉丝数等) */
@@ -522,6 +621,12 @@ export interface DesktopApi {
   libraryRemoveFromPlaylist(playlistId: string, songId: string): Promise<Playlist[]>
   libraryAddRecent(song: Song): Promise<void>
   libraryClearRecent(): Promise<void>
+  /** 切换收藏(加入/取消),返回最新收藏 id 列表 */
+  libraryToggleFavorite(song: Song): Promise<{ favorited: boolean; favoriteIds: string[] }>
+  /** 收藏的歌曲(按收藏时间倒序) */
+  libraryGetFavorites(): Promise<Song[]>
+  /** 去掉收藏里的重复曲目(旧版换源改 id 造成);按标题+歌手归并 */
+  libraryDedupeFavorites(): Promise<{ removed: number; total: number }>
   libraryAddSearchHistory(q: string): Promise<void>
   libraryRemoveSearchHistory(q: string): Promise<void>
   libraryClearSearchHistory(): Promise<void>
@@ -643,6 +748,23 @@ export interface DesktopApi {
   /** AudD API token 读写(设置页) */
   getRecognizeToken(): Promise<string>
   setRecognizeToken(token: string): Promise<void>
+  // ===== 快捷方式伪装 =====
+  /** 可用伪装目标(含本机是否装了真程序 → 图标来源) */
+  disguisePresets(): Promise<DisguisePresetInfo[]>
+  /** 预设图标 data URL,设置页预览用 */
+  disguisePresetIcon(id: string): Promise<string>
+  /** 在桌面生成快捷方式(双击后启动的仍是本应用) */
+  disguiseCreate(
+    presetId: string,
+    customName?: string
+  ): Promise<{ ok: boolean; path?: string; error?: string }>
+}
+
+/** 快捷方式伪装目标(主进程 → 渲染层) */
+export interface DisguisePresetInfo {
+  id: string
+  name: string
+  description: string
 }
 
 /** 听歌识别结果 */
