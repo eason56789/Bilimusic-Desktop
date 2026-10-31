@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Button,
   Menu,
+  MenuDivider,
   MenuList,
   MenuItem,
   MenuPopover,
@@ -23,6 +24,8 @@ import {
   ArrowShuffleRegular,
   ArrowRepeat1Regular,
   ChevronDownRegular,
+  FullScreenMaximizeRegular,
+  FullScreenMinimizeRegular,
   Speaker1Regular,
   SpeakerMuteRegular,
   MoreHorizontalRegular,
@@ -42,7 +45,9 @@ import {
   LockClosedRegular,
   LockOpenRegular,
   HeartRegular,
-  HeartFilled
+  HeartFilled,
+  TextEffectsRegular,
+  TextAlignCenterRegular
 } from '@fluentui/react-icons'
 import type { Song } from '@shared/types'
 import { useStore, getAudioElement } from '../store'
@@ -52,12 +57,30 @@ import { Cover } from './Cover'
 import { NiceSlider } from './NiceSlider'
 import { SpectrumBars } from './SpectrumBars'
 import { LyricLineRow } from './LyricLineRow'
+import { PvLyricsSafe } from './PvLyrics'
 import { CommentsBody } from './PlayerDialogs'
 import { badgeOf } from '../lib/sourceBadge'
 import { formatTime } from './SongList'
 
-/** 右侧评论停靠面板宽度(px):播放内容整体左移同样的量 */
-const COMMENTS_PANEL_W = 360
+/** 文字PV 版式显示名 */
+const PV_ARRANGE_LABEL: Record<string, string> = {
+  pv: '逐字PV',
+  partita: '云阶',
+  claddagh: '回环',
+  still: '时计',
+  tempera: '凝彩'
+}
+
+const PV_LAYOUT_LABEL: Record<string, string> = {
+  'type-impact': '巨字炸裂',
+  'editorial-column': '竖排专栏',
+  'fragment-collage': '碎片拼贴',
+  'tracking-ribbon': '单行带状',
+  'mask-reveal': '中轴落入',
+  'quiet-tableau': '静场堆叠'
+}
+
+/** 右侧评论停靠面板宽度(px):播放内容整体左移同样的量 */const COMMENTS_PANEL_W = 360
 /** 面板滑入/内容左移的同一条曲线 */
 const PANEL_EASE = 'cubic-bezier(0.22, 1, 0.36, 1)'
 
@@ -225,6 +248,71 @@ export function NowPlaying() {
   // 歌词对齐:居中 / 靠左(手机端样式)
   const lyricAlign = useStore((s) => s.library?.settings.lyricAlign ?? 'center')
   const leftAlign = lyricAlign === 'left'
+  /** 歌词视觉样式:经典滚动列表 / 文字PV(与「更多操作」同级按钮切换) */
+  const lyricStyle = useStore((s) => s.library?.settings.lyricStyle ?? 'classic')
+  const pvMode = lyricStyle === 'pv'
+  const pvAnim = useStore((s) => s.library?.settings.pvAnim ?? 'pop')
+  const pvLayout = useStore((s) => s.library?.settings.pvLayout ?? 'center')
+  const pvDecor = useStore((s) => s.library?.settings.pvDecor !== false)
+  /** 排布样式:逐字PV / 云阶 / 回环 / 时计 */
+  const pvArrange = useStore((s) => s.library?.settings.pvArrange ?? 'pv')
+  /** PV 主色:空=跟随主题强调色 */
+  const accentColor = (() => {
+    const raw = st?.pvAccent?.trim()
+    return raw && /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.test(raw) ? raw : st?.accent || '#7aa2ff'
+  })()
+
+  /**
+   * PV 舞台控制区显隐:默认完全隐藏(只留歌词舞台)。
+   * 触发区是**顶部 14%**(收起 / 更多)与**底部 22%**(进度条与播放控制)两条热区 ——
+   * 原先只认底部,导致左上角"收起"永远显现不出来,也就点不到。
+   * 菜单/弹窗打开时恒显。
+   */
+  const [chromeHot, setChromeHot] = useState(false)
+  /**
+   * 全屏状态:F11 或顶栏按钮切换。全屏时窗口铺满显示器(原生全屏,不是最大化),
+   * PV 舞台本来就 fixed inset:0,所以会自动跟着铺满。
+   */
+  const [isFs, setIsFs] = useState(false)
+  const toggleFs = (): void => {
+    void api.windowToggleFullscreen().then((v) => setIsFs(v))
+  }
+  useEffect(() => {
+    void api.windowIsFullscreen().then((v) => setIsFs(v))
+  }, [])
+  useEffect(() => {
+    if (!open) return
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key === 'F11') {
+        e.preventDefault()
+        toggleFs()
+        return
+      }
+      // 全屏下 Esc 先退全屏,不直接收起播放页(避免一下退两级)
+      if (e.key === 'Escape' && isFs) {
+        e.preventDefault()
+        void api.windowSetFullscreen(false).then((v) => setIsFs(v))
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [open, isFs])
+  useEffect(() => {
+    if (!pvMode || !open) {
+      setChromeHot(false)
+      return
+    }
+    const onMove = (e: MouseEvent): void => {
+      const topBand = window.innerHeight * 0.14
+      const bottomBand = window.innerHeight * 0.78
+      setChromeHot(e.clientY <= topBand || e.clientY >= bottomBand)
+    }
+    window.addEventListener('mousemove', onMove)
+    return () => window.removeEventListener('mousemove', onMove)
+  }, [pvMode, open])
+  /** 菜单/弹窗打开时保持控制区可见,否则点不到按钮(activeDialog 直接读 store,避免声明顺序问题) */
+  const chromePinned = !!useStore((s) => s.activeDialog)
+  const pvChrome = !pvMode || chromeHot || chromePinned ? 1 : 0
   const dlg = useStore((s) => s.activeDialog)
   const setDlg = useStore((s) => s.setActiveDialog)
   const commentsOpen = dlg === 'comments'
@@ -406,8 +494,18 @@ export function NowPlaying() {
             transition: `margin-right 0.32s ${PANEL_EASE}`
           }}
         >
-          {/* 顶栏:左=收起,右=更多(避开原生窗口按钮) */}
-          <div className={styles.topBar}>
+          {/* 顶栏:左=收起,右=更多(避开原生窗口按钮)。PV 舞台时随控制区一起淡出 */}
+          <div
+            className={styles.topBar}
+            style={{
+              opacity: pvChrome,
+              pointerEvents: pvChrome > 0.5 ? 'auto' : 'none',
+              transition: 'opacity 0.32s ease',
+              // PV 舞台是铺满视口的 fixed 层:顶栏必须抬到它上面,否则鼠标移上去不显现、也点不到
+              position: 'relative',
+              zIndex: 4
+            }}
+          >
             <Tooltip content="收起(Esc)" relationship="label">
               <Button
                 appearance="subtle"
@@ -419,11 +517,48 @@ export function NowPlaying() {
                 收起
               </Button>
             </Tooltip>
+            {/* 全屏按钮紧跟收起:放右侧会与原生窗口按钮(最小化)重叠 */}
+            <Tooltip content={isFs ? '退出全屏(F11)' : '全屏(F11)'} relationship="label">
+              <Button
+                appearance="subtle"
+                icon={isFs ? <FullScreenMinimizeRegular /> : <FullScreenMaximizeRegular />}
+                onClick={toggleFs}
+                style={{ color: 'rgba(255,255,255,0.85)' }}
+                className="titlebar-nodrag"
+              />
+            </Tooltip>
             <div className={styles.topDrag} />
             <div style={{ width: 140, flexShrink: 0 }} />
           </div>
 
-          {/* 主体:左右等分平衡(评论面板展开时压缩两栏最小宽,避免溢出) */}
+          {/* PV 舞台:fixed 铺满视口 —— content 带 marginRight(评论面板),absolute 会被它限制。
+              不预留底部空间:背景必须铺满整窗,播放条改为浮在上面。 */}
+          {pvMode ? (
+            <div style={{ position: 'fixed', inset: 0, zIndex: 2, display: 'flex', flexDirection: 'column' }}>
+              {lyrics && lyrics.lines.length > 0 ? (
+                <PvLyricsSafe lines={lyrics.lines} activeIdx={activeIdx} smoothMs={smoothMs} />
+              ) : (
+                <div
+                  style={{
+                    flex: 1,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    color: 'rgba(255,255,255,0.45)',
+                    whiteSpace: 'pre-line',
+                    textAlign: 'center',
+                    lineHeight: 1.7
+                  }}
+                >
+                  {current?.source === 'BILIBILI'
+                    ? '该视频暂无 AI 字幕\n登录 B 站后可获取更多字幕'
+                    : current
+                      ? '暂无歌词\n可通过右上角菜单编辑或导入歌词'
+                      : ''}
+                </div>
+              )}
+            </div>
+          ) : (
           <div
             className={styles.middle}
             style={
@@ -551,89 +686,105 @@ export function NowPlaying() {
             </div>
 
             <div className={styles.rightCol}>
-              <div
-                className={`${styles.lyrics} lyrics-scroll`}
-                style={{ textAlign: leftAlign ? 'left' : 'center' }}
-                onWheel={noteBrowsing}
-                onTouchMove={noteBrowsing}
-              >
-                {/* 音源加载进度:加载中的遮罩(歌词区中央),避免用户误以为卡死 */}
-                {loading && current && (
-                  <div
-                    style={{
-                      position: 'absolute',
-                      inset: 0,
-                      display: 'flex',
-                      flexDirection: 'column',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      gap: 14,
-                      zIndex: 3,
-                      background: 'rgba(10,10,12,0.55)',
-                      backdropFilter: 'blur(10px)',
-                      borderRadius: 16
-                    }}
-                  >
-                    <Spinner size="large" />
-                    <Text style={{ color: 'rgba(255,255,255,0.92)' }}>
-                      {loadProgress?.stage === 'downloading' ? '正在下载音频…' : '正在解析音源…'}
-                    </Text>
-                    {loadProgress?.stage === 'downloading' && loadProgress.total ? (
-                      <div style={{ width: 220 }}>
-                        <ProgressBar
-                          value={Math.min(0.999, (loadProgress.received ?? 0) / loadProgress.total)}
-                        />
-                        <Text
-                          size={200}
-                          style={{ color: 'rgba(255,255,255,0.7)', display: 'block', textAlign: 'center', marginTop: 4 }}
-                        >
-                          {Math.round(((loadProgress.received ?? 0) / loadProgress.total) * 100)}%
-                        </Text>
-                      </div>
-                    ) : null}
-                  </div>
-                )}
-                {lyrics && lyrics.lines.length > 0 ? (
-                  lyrics.lines.map((line, i) => {
-                    const isActive = i === activeIdx
-                    const beforeFirst = activeIdx < 0 && i === 0
-                    return (
-                      <LyricLineRow
-                        key={`${line.timeMs}-${i}`}
-                        line={line}
-                        isActive={isActive}
-                        blur={beforeFirst ? 0 : lineBlur(i)}
-                        nextTimeMs={lyrics.lines[i + 1]?.timeMs ?? line.timeMs + 5000}
-                        countdownRemainingMs={
-                          beforeFirst && smoothMs < line.timeMs
-                            ? Math.ceil((line.timeMs - smoothMs) / 500) * 500
-                            : null
-                        }
-                        leftAlign={leftAlign}
-                        registerActive={isActive ? registerActive : undefined}
-                        onSeek={seekLine}
+              {/* 音源加载遮罩:两种样式共用(加载中盖住歌词区) */}
+              {loading && current && (
+                <div
+                  style={{
+                    position: 'absolute',
+                    inset: 0,
+                    display: 'flex',
+                    flexDirection: 'column',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: 14,
+                    zIndex: 4,
+                    background: 'rgba(10,10,12,0.55)',
+                    backdropFilter: 'blur(10px)',
+                    borderRadius: 16
+                  }}
+                >
+                  <Spinner size="large" />
+                  <Text style={{ color: 'rgba(255,255,255,0.92)' }}>
+                    {loadProgress?.stage === 'downloading' ? '正在下载音频…' : '正在解析音源…'}
+                  </Text>
+                  {loadProgress?.stage === 'downloading' && loadProgress.total ? (
+                    <div style={{ width: 220 }}>
+                      <ProgressBar
+                        value={Math.min(0.999, (loadProgress.received ?? 0) / loadProgress.total)}
                       />
-                    )
-                  })
-                ) : (
-                  <div className={styles.empty}>
-                    {/* 多行提示需 whiteSpace: pre-line,否则 \n 在 JSX 中不换行 */}
-                    <div style={{ whiteSpace: 'pre-line', lineHeight: 1.7 }}>
-                      <div style={{ fontSize: 20, marginBottom: 8 }}>♪</div>
-                      {current?.source === 'BILIBILI'
-                        ? '该视频暂无 AI 字幕\n登录 B 站后可获取更多字幕'
-                        : current
-                          ? '暂无歌词\n可通过右上角菜单编辑或导入歌词'
-                          : ''}
+                      <Text
+                        size={200}
+                        style={{ color: 'rgba(255,255,255,0.7)', display: 'block', textAlign: 'center', marginTop: 4 }}
+                      >
+                        {Math.round(((loadProgress.received ?? 0) / loadProgress.total) * 100)}%
+                      </Text>
                     </div>
-                  </div>
-                )}
-              </div>
+                  ) : null}
+                </div>
+              )}
+              {/* 经典歌词:PV 舞台已在更外层独占整窗,这里只负责滚动列表样式 */}
+              <div
+                  className={`${styles.lyrics} lyrics-scroll`}
+                  style={{ textAlign: leftAlign ? 'left' : 'center' }}
+                  onWheel={noteBrowsing}
+                  onTouchMove={noteBrowsing}
+                >
+                  {lyrics && lyrics.lines.length > 0 ? (
+                    lyrics.lines.map((line, i) => {
+                      const isActive = i === activeIdx
+                      const beforeFirst = activeIdx < 0 && i === 0
+                      return (
+                        <LyricLineRow
+                          key={`${line.timeMs}-${i}`}
+                          line={line}
+                          isActive={isActive}
+                          blur={beforeFirst ? 0 : lineBlur(i)}
+                          nextTimeMs={lyrics.lines[i + 1]?.timeMs ?? line.timeMs + 5000}
+                          countdownRemainingMs={
+                            beforeFirst && smoothMs < line.timeMs
+                              ? Math.ceil((line.timeMs - smoothMs) / 500) * 500
+                              : null
+                          }
+                          leftAlign={leftAlign}
+                          registerActive={isActive ? registerActive : undefined}
+                          onSeek={seekLine}
+                        />
+                      )
+                    })
+                  ) : (
+                    <div className={styles.empty}>
+                      {/* 多行提示需 whiteSpace: pre-line,否则 \n 在 JSX 中不换行 */}
+                      <div style={{ whiteSpace: 'pre-line', lineHeight: 1.7 }}>
+                        <div style={{ fontSize: 20, marginBottom: 8 }}>♪</div>
+                        {current?.source === 'BILIBILI'
+                          ? '该视频暂无 AI 字幕\n登录 B 站后可获取更多字幕'
+                          : current
+                            ? '暂无歌词\n可通过右上角菜单编辑或导入歌词'
+                            : ''}
+                      </div>
+                    </div>
+                  )}
+                </div>
             </div>
           </div>
+          )}
 
-          {/* 控制区 */}
-          <div className={styles.controls}>
+          {/* 控制区:PV 舞台时默认隐藏,鼠标移到窗口下方才淡入(只留进度条与播放控制) */}
+          <div
+            className={styles.controls}
+            style={{
+              opacity: pvChrome,
+              transform: pvMode ? `translateY(${(1 - pvChrome) * 18}px)` : undefined,
+              pointerEvents: pvChrome > 0.5 ? 'auto' : 'none',
+              transition: 'opacity 0.32s ease, transform 0.32s ease',
+              // PV 舞台是铺满视口的 fixed 层:控制区也改成 fixed 吸附底部,浮在它上面
+              position: pvMode ? 'fixed' : undefined,
+              left: pvMode ? 0 : undefined,
+              right: pvMode ? 0 : undefined,
+              bottom: pvMode ? 0 : undefined,
+              zIndex: pvMode ? 3 : undefined
+            }}
+          >
             {/* 实时频谱可视化(2026 播放器标配) */}
             {st?.uiModules.npSpectrum !== false && <SpectrumBars height={56} bars={64} />}
             <div className={styles.sideRow}>
@@ -722,6 +873,134 @@ export function NowPlaying() {
                   ariaLabel="音量"
                 />
               </Tooltip>
+              {/* 歌词样式:经典 / 文字PV(与「更多操作」同级;PV 下再展开细化选项) */}
+              <Menu>
+                <MenuTrigger disableButtonEnhancement>
+                  <Tooltip content={pvMode ? '歌词样式:文字PV' : '歌词样式:经典'} relationship="label">
+                    <Button
+                      appearance="subtle"
+                      icon={<TextEffectsRegular />}
+                      style={{
+                        color: pvMode ? accentColor : 'rgba(255,255,255,0.85)',
+                        background: pvMode ? `${accentColor}22` : undefined
+                      }}
+                    >
+                      {pvMode ? 'PV' : ''}
+                    </Button>
+                  </Tooltip>
+                </MenuTrigger>
+                <MenuPopover>
+                  <MenuList>
+                    <MenuItem
+                      icon={!pvMode ? <CheckmarkRegular /> : undefined}
+                      onClick={() => void useStore.getState().updateSetting('lyricStyle', 'classic')}
+                    >
+                      经典歌词(滚动列表)
+                    </MenuItem>
+                    <MenuItem
+                      icon={pvMode ? <CheckmarkRegular /> : undefined}
+                      onClick={() => void useStore.getState().updateSetting('lyricStyle', 'pv')}
+                    >
+                      文字PV(整屏大字 + 动效)
+                    </MenuItem>
+                    <MenuDivider />
+                    {/* 排布样式:同一套 PV 舞台,换整行的摆法(参考 folia 的多种歌词样式) */}
+                    <Menu>
+                      <MenuTrigger disableButtonEnhancement>
+                        <MenuItem icon={<TextEffectsRegular />} disabled={!pvMode}>
+                          排布样式({PV_ARRANGE_LABEL[pvArrange]})
+                        </MenuItem>
+                      </MenuTrigger>
+                      <MenuPopover>
+                        <MenuList>
+                          {(
+                            [
+                              ['pv', '逐字PV(词块 + 镜头)'],
+                              ['partita', '云阶(分栏词块)'],
+                              ['claddagh', '回环(圆弧排布)'],
+                              ['still', '时计(静态三行)'],
+                              ['tempera', '凝彩(构图色块 + 反相大字)']
+                            ] as const
+                          ).map(([k, label]) => (
+                            <MenuItem
+                              key={k}
+                              icon={pvArrange === k ? <CheckmarkRegular /> : undefined}
+                              onClick={() => void useStore.getState().updateSetting('pvArrange', k)}
+                            >
+                              {label}
+                            </MenuItem>
+                          ))}
+                        </MenuList>
+                      </MenuPopover>
+                    </Menu>
+                    <Menu>
+                      <MenuTrigger disableButtonEnhancement>
+                        <MenuItem icon={<ArrowRepeatAllRegular />} disabled={!pvMode}>
+                          入场动效
+                        </MenuItem>
+                      </MenuTrigger>
+                      <MenuPopover>
+                        <MenuList>
+                          {(
+                            [
+                              ['pop', '弹出 Pop'],
+                              ['rise', '上浮 Rise'],
+                              ['slam', '砸落 Slam'],
+                              ['wave', '波浪 Wave'],
+                              ['typewriter', '打字机 Typewriter']
+                            ] as const
+                          ).map(([k, label]) => (
+                            <MenuItem
+                              key={k}
+                              icon={pvAnim === k ? <CheckmarkRegular /> : undefined}
+                              onClick={() => void useStore.getState().updateSetting('pvAnim', k)}
+                            >
+                              {label}
+                            </MenuItem>
+                          ))}
+                        </MenuList>
+                      </MenuPopover>
+                    </Menu>
+                    <Menu>
+                      <MenuTrigger disableButtonEnhancement>
+                        <MenuItem icon={<TextAlignCenterRegular />} disabled={!pvMode}>
+                          版式{pvLayout !== 'auto' ? `(${PV_LAYOUT_LABEL[pvLayout]})` : '(自动)'}
+                        </MenuItem>
+                      </MenuTrigger>
+                      <MenuPopover>
+                        <MenuList>
+                          {(
+                            [
+                              ['auto', '自动(按句轮转)'],
+                              ['type-impact', '巨字炸裂(副歌)'],
+                              ['editorial-column', '竖排专栏'],
+                              ['fragment-collage', '碎片拼贴'],
+                              ['tracking-ribbon', '单行带状'],
+                              ['mask-reveal', '中轴落入'],
+                              ['quiet-tableau', '静场堆叠']
+                            ] as const
+                          ).map(([k, label]) => (
+                            <MenuItem
+                              key={k}
+                              icon={pvLayout === k ? <CheckmarkRegular /> : undefined}
+                              onClick={() => void useStore.getState().updateSetting('pvLayout', k)}
+                            >
+                              {label}
+                            </MenuItem>
+                          ))}
+                        </MenuList>
+                      </MenuPopover>
+                    </Menu>
+                    <MenuItem
+                      icon={pvDecor ? <CheckmarkRegular /> : undefined}
+                      disabled={!pvMode}
+                      onClick={() => void useStore.getState().updateSetting('pvDecor', !pvDecor)}
+                    >
+                      装饰层(网格/光圈/角框)
+                    </MenuItem>
+                  </MenuList>
+                </MenuPopover>
+              </Menu>
               {st?.uiModules.npMore !== false && (
               <Menu>
                 <MenuTrigger disableButtonEnhancement>

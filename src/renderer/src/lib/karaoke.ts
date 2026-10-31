@@ -82,7 +82,16 @@ export function resolveCharTimes(
   return buildCharTimes(text, words)
 }
 
-/** 下一行起始时间(行末推进窗口):取下一行,兜底当前行 +5s */
+/**
+ * 单行最长展示时长:一句歌词不可能超过 15s。
+ *
+ * 间奏/尾奏会让"到下一行"的间隔长达几十秒,若不封顶,逐字动画会被拉成极慢的爬行、
+ * 色块 stagger 也会散到看不见。超过就按 15s 截断,后面交给下一行/间奏处理。
+ */
+export const MAX_LINE_MS = 15_000
+
+/** 下一行起始时间(行末推进窗口):取下一行,兜底当前行 +5s,并且封顶 15s */
 export function lineEndTime(lineTimeMs: number, nextLineTimeMs?: number): number {
-  return nextLineTimeMs ?? lineTimeMs + LINE_FALLBACK_MS
+  const raw = nextLineTimeMs ?? lineTimeMs + LINE_FALLBACK_MS
+  return Math.min(raw, lineTimeMs + MAX_LINE_MS)
 }

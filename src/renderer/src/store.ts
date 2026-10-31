@@ -264,6 +264,23 @@ export const useStore = create<PlayerState>((set, get) => {
   /** 当前这次播放请求是否已被更新的请求取代 */
   const isStale = (seq: number): boolean => seq !== playSeq
 
+  /** 上次播放会话落盘:切歌立即存,播放中每 5s 存一次进度(重启后恢复用) */
+  let lastResumeSongId: string | null = null
+  let lastResumeSaveAt = 0
+  const saveResume = (force = false): void => {
+    const { queue, queueIndex, current, position } = get()
+    if (!current) return
+    const now = Date.now()
+    if (!force && current.id === lastResumeSongId && now - lastResumeSaveAt < 5000) return
+    lastResumeSaveAt = now
+    lastResumeSongId = current.id
+    try {
+      api.playbackSaveResume?.({ queue, queueIndex, pos: position || 0 })
+    } catch {
+      /* 会话落盘失败不影响播放 */
+    }
+  }
+
   /** 实际开始播放一首歌(html5Fallback=m4s 不支持时改用 mp4;resumeAt=续播位置秒) */
   const startPlayback = async (song: Song, html5Fallback = false, resumeAt = 0) => {
     const seq = ++playSeq
@@ -285,6 +302,7 @@ export const useStore = create<PlayerState>((set, get) => {
       highlights: [],
       loadProgress: { stage: 'resolving' }
     })
+    saveResume(true)
     lastKnownPos = resume
     lastKnownPosSongId = song.id
     // 立即停掉上一首的音频:解析新音源(尤其换源要搜别的平台)期间,旧流仍在触发
@@ -580,6 +598,7 @@ export const useStore = create<PlayerState>((set, get) => {
       set({ position: el.currentTime })
       lastTimeupdateAt = Date.now()
       if (el.currentTime > 0.5) lastKnownPos = el.currentTime
+      saveResume()
       if ('mediaSession' in navigator && el.duration > 0) {
         try {
           navigator.mediaSession.setPositionState({
@@ -640,7 +659,10 @@ export const useStore = create<PlayerState>((set, get) => {
         toastError('播放失败', '音频无法播放')
       }
     })
-    el.addEventListener('pause', () => set({ playing: false }))
+    el.addEventListener('pause', () => {
+      set({ playing: false })
+      saveResume(true)
+    })
     el.addEventListener('play', () => set({ playing: true }))
   }
   bindAudioEvents()
@@ -750,6 +772,29 @@ export const useStore = create<PlayerState>((set, get) => {
       el.volume = v
       if (v > 0) lastVolume = v
       set({ volume: v, muted: v === 0 })
+      // 恢复上次播放会话:只恢复曲目元数据/队列/进度(暂停态,不取流),点播放才从头流程走
+      const r = lib.resumePlayback
+      if (
+        r &&
+        Array.isArray(r.queue) &&
+        r.queue.length > 0 &&
+        Number.isInteger(r.queueIndex) &&
+        r.queueIndex >= 0 &&
+        r.queueIndex < r.queue.length
+      ) {
+        const song = r.queue[r.queueIndex]
+        if (song?.id) {
+          set({
+            queue: r.queue,
+            queueIndex: r.queueIndex,
+            current: song,
+            position: r.pos > 0 ? r.pos : 0,
+            duration: song.duration ?? 0
+          })
+          lastResumeSongId = song.id
+          lastResumeSaveAt = Date.now()
+        }
+      }
     },
     async refreshLibrary() {
       const lib = await api.libraryGet()
@@ -794,7 +839,11 @@ export const useStore = create<PlayerState>((set, get) => {
       // 加载音源过程中屏蔽播放键:此时 el 还没有可播内容,点击只会引发状态错乱
       if (st.loading) return
       const el = getAudio()
-      if (!el.src) return
+      if (!el.src) {
+        // 重启恢复的曲目还没取流:点击播放 = 从上次进度开始走完整取流流程
+        if (st.current) void startPlayback(st.current, false, st.position > 3 ? st.position : 0)
+        return
+      }
       // 元素处于错误态(流中断后):点击播放 = 以断点续播(重新取流),而不是从头开始
       if (el.error && st.current) {
         const resumeAt = lastKnownPos > 1 ? lastKnownPos : 0
@@ -850,6 +899,9 @@ export const useStore = create<PlayerState>((set, get) => {
       const el = getAudio()
       if (isFinite(el.duration)) {
         el.currentTime = t
+        set({ position: t })
+      } else if (get().current) {
+        // 尚未取流(重启恢复态):先记住拖到的位置,开始播放时从这里续播
         set({ position: t })
       }
     },

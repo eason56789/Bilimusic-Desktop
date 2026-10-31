@@ -89,6 +89,16 @@ const useStyles = makeStyles({
     overflow: 'hidden',
     display: 'flex',
     flexDirection: 'column',
+    backgroundColor: 'var(--app-content-bg)',
+    position: 'relative'
+  },
+  /** 歌手主页覆盖层:盖在原页面上方,返回后原页面状态(搜索词/结果/滚动位置)不丢 */
+  artistOverlay: {
+    position: 'absolute',
+    inset: 0,
+    zIndex: 10,
+    display: 'flex',
+    flexDirection: 'column',
     backgroundColor: 'var(--app-content-bg)'
   }
 })
@@ -261,11 +271,7 @@ function Shell({ className }: { className?: string }) {
         </nav>
 
         <main className={styles.content}>
-          {artistPageId ? (
-            <div className={anim !== 'none' ? `page-anim-${anim}` : undefined} style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
-              <ArtistPage />
-            </div>
-          ) : (
+          {/* 页面常驻挂载:歌手主页改为覆盖层(此前这里卸载原页面,返回后搜索词/结果全丢,回到搜索主页) */}
           <div
             key={page}
             className={anim !== 'none' ? `page-anim-${anim}` : undefined}
@@ -280,7 +286,13 @@ function Shell({ className }: { className?: string }) {
             {page === 'favorites' && <FavoritesPage />}
             {page === 'settings' && <SettingsPage />}
           </div>
-          )}
+          {artistPageId ? (
+            <div
+              className={`${styles.artistOverlay} ${anim !== 'none' ? `page-anim-${anim}` : undefined}`}
+            >
+              <ArtistPage />
+            </div>
+          ) : null}
         </main>
       </div>
 

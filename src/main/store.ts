@@ -61,6 +61,14 @@ export const defaultSettings: Settings = {
   lyricTransScale: 0.78,
   lyricTransAlpha: 0.8,
   lyricTransLayout: 'below',
+  lyricStyle: 'classic',
+  pvArrange: 'pv',
+  pvAnim: 'pop',
+  pvLayout: 'auto',
+  pvAccent: '',
+  pvScale: 1,
+  pvDecor: true,
+  pvMotion: 1,
   defaultSearchSource: 'netease',
   neteaseFallback: true,
   songRecognizeEnabled: true,
@@ -546,6 +554,12 @@ export function getOrCreateKugouMid(): string {
   data.settings.kugouMid = mid
   scheduleSave()
   return mid
+}
+
+/** 换一个全新的酷狗设备 mid(设备注册只在首次返回 dfid,旧 mid 注册过就再也拿不到) */
+export function rotateKugouMid(): string {
+  data.settings.kugouMid = undefined
+  return getOrCreateKugouMid()
 }
 
 export function setBiliCookieStore(cookie: string): void {

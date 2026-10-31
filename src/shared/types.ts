@@ -46,6 +46,8 @@ export interface Playlist {
   favoriteFolderId?: number | null
   /** QQ 音乐歌单 dissid(导入后可同步) */
   qqPlaylistId?: number | null
+  /** 酷狗歌单 id(specialid 数字或概念版 collection_x_x_x,导入后可同步) */
+  kugouPlaylistId?: string | null
   favoriteFolderName?: string | null
   neteasePlaylistId?: number | null
   /** B站播放记录歌单(可同步) */
@@ -182,6 +184,33 @@ export interface Settings {
   lyricTransAlpha: number
   /** 译文排版:原文下方 / 原文右侧同行 */
   lyricTransLayout: 'below' | 'inline'
+  /** ===== 全屏歌词「文字PV」样式(参考 pv.pixjam.cn / folia) ===== */
+  /**
+   * 歌词视觉样式:
+   * - 'classic' 经典滚动列表(KTV 逐字上色,原有样式,默认)
+   * - 'pv'      文字PV:当前句大字号居中 + 逐字入场动效 + 装饰排版,整屏只留当前句
+   */
+  lyricStyle: 'classic' | 'pv'
+  /**
+   * PV 舞台的排布样式(对齐 folia 的多种歌词样式):
+   * - 'pv'       逐字 PV(默认:词块排版 + 6 套镜头版式)
+   * - 'partita'  云阶:整行切成词块,按字数分 1~5 栏竖直排布
+   * - 'claddagh' 回环:整行沿圆弧排布,字随切线旋转
+   * - 'still'    时计:静态三行(上一句/当前句/下一句)
+   */
+  pvArrange: 'pv' | 'partita' | 'claddagh' | 'still' | 'tempera'
+  /** PV 逐字入场动效 */
+  pvAnim: 'pop' | 'rise' | 'slam' | 'wave' | 'typewriter'
+  /** PV 版式:自动(按句语义/种子轮转)或指定某套排版 */
+  pvLayout: 'auto' | 'type-impact' | 'editorial-column' | 'fragment-collage' | 'tracking-ribbon' | 'mask-reveal' | 'quiet-tableau'
+  /** PV 主色(空=跟随主题强调色) */
+  pvAccent: string
+  /** PV 字号缩放 0.7~1.6 */
+  pvScale: number
+  /** PV 装饰层:关闭后只剩文字(背景动效/装饰线全关) */
+  pvDecor: boolean
+  /** PV 运动强度 0~2(0=静止,1=正常) */
+  pvMotion: number
   /** 搜索默认音源 */
   defaultSearchSource: 'netease' | 'bili' | 'qq' | 'kugou'
   /** 网易云无音源时自动到 B站/QQ/酷狗搜索垫底 */
@@ -335,10 +364,22 @@ export interface KugouCredential {
   userid: string
   vipType?: string
   vipToken?: string
+  /** 设备注册返回的 dfid(云歌单服务需要,与 token 一同保存) */
+  dfid?: string
 }
 
 /** 酷狗身份区分:普通酷狗 与 酷狗概念版(两版 token 不通用,需分别扫码) */
 export type KugouPlatform = 'normal' | 'concept'
+
+/** 酷狗登录用户的在线歌单条目(歌单页自动列出,点卡片导入) */
+export interface KugouUserPlaylistBrief {
+  /** global_collection_id(概念/新版)或 specialid(老版自建) */
+  id: string
+  name: string
+  coverUrl?: string
+  count: number
+  platform: KugouPlatform
+}
 
 export interface Library {
   songs: Record<string, Song>
@@ -357,6 +398,16 @@ export interface Library {
   listenStats?: ListenStats
   /** 收藏的歌曲 id(我的收藏,按收藏时间倒序由 favoriteIds 顺序表达) */
   favoriteIds?: string[]
+  /** 上次播放会话(重启后恢复当前歌曲与进度;暂停状态,点播放才取流) */
+  resumePlayback?: PlaybackResume | null
+}
+
+/** 重启恢复用的播放会话快照 */
+export interface PlaybackResume {
+  queue: Song[]
+  queueIndex: number
+  /** 上次停留位置(秒) */
+  pos: number
 }
 
 /** 听歌时长统计 */
@@ -639,6 +690,8 @@ export interface DesktopApi {
   libraryRemoveFromPlaylist(playlistId: string, songId: string): Promise<Playlist[]>
   libraryAddRecent(song: Song): Promise<void>
   libraryClearRecent(): Promise<void>
+  /** 保存上次播放会话(切歌立即存,播放中节流 5s;null=清除) */
+  playbackSaveResume(r: PlaybackResume | null): void
   /** 切换收藏(加入/取消),返回最新收藏 id 列表 */
   libraryToggleFavorite(song: Song): Promise<{ favorited: boolean; favoriteIds: string[] }>
   /** 收藏的歌曲(按收藏时间倒序) */
@@ -710,6 +763,10 @@ export interface DesktopApi {
     key: string
   ): Promise<{ status: 'waiting' | 'scanned' | 'ok' | 'expired' | 'error'; message: string }>
   kugouLogout(platform: KugouPlatform): Promise<void>
+  /** 酷狗登录用户的在线歌单(自动列出) */
+  kugouUserPlaylists(platform: KugouPlatform): Promise<ApiResponse<KugouUserPlaylistBrief[]>>
+  /** 导入酷狗歌单(collection_ 前缀走概念版接口,其余按 specialid) */
+  kugouImportPlaylist(platform: KugouPlatform, id: string, name: string): Promise<Playlist | null>
   // 下载
   downloadAdd(songs: Song[]): Promise<void>
   downloadCancel(id: string): Promise<void>
@@ -733,6 +790,10 @@ export interface DesktopApi {
   windowMinimize(): void
   windowMaximizeToggle(): void
   windowClose(): void
+  /** 全屏切换(PV 舞台 F11 / 按钮):返回切换后的状态 */
+  windowToggleFullscreen(): Promise<boolean>
+  windowIsFullscreen(): Promise<boolean>
+  windowSetFullscreen(on: boolean): Promise<boolean>
   /** 关闭窗口询问:主进程推送,渲染层弹窗让用户选择(后台运行/直接退出) */
   onWindowCloseAsk(cb: () => void): () => void
   /** 用户对关闭询问的决定:tray=后台运行 quit=直接退出 cancel=取消 */

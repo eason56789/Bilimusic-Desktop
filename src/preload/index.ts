@@ -75,6 +75,7 @@ const api: DesktopApi = {
     invoke<Playlist[]>('library:removeFromPlaylist', playlistId, songId),
   libraryAddRecent: (song) => invoke('library:addRecent', song),
   libraryClearRecent: () => invoke('library:clearRecent'),
+  playbackSaveResume: (r) => ipcRenderer.send('playback:saveResume', r),
   libraryToggleFavorite: (song) => invoke('library:toggleFavorite', song),
   libraryGetFavorites: () => invoke('library:getFavorites'),
   libraryDedupeFavorites: () => invoke('library:dedupeFavorites'),
@@ -138,6 +139,8 @@ const api: DesktopApi = {
   kugouQRStart: (platform) => invoke('auth:kgQRStart', platform),
   kugouQRPoll: (platform, key) => invoke('auth:kgQRPoll', platform, key),
   kugouLogout: (platform) => invoke('auth:kgLogout', platform),
+  kugouUserPlaylists: (platform) => invoke('kugou:userPlaylists', platform),
+  kugouImportPlaylist: (platform, id, name) => invoke('kugou:importPlaylist', platform, id, name),
 
   downloadAdd: (songs) => invoke('download:add', songs),
   downloadCancel: (id) => invoke('download:cancel', id),
@@ -169,6 +172,9 @@ const api: DesktopApi = {
   windowMinimize: () => ipcRenderer.send('window:minimize'),
   windowMaximizeToggle: () => ipcRenderer.send('window:maximizeToggle'),
   windowClose: () => ipcRenderer.send('window:close'),
+  windowToggleFullscreen: () => invoke<boolean>('window:toggleFullscreen'),
+  windowIsFullscreen: () => invoke<boolean>('window:isFullscreen'),
+  windowSetFullscreen: (on: boolean) => invoke<boolean>('window:setFullscreen', on),
   // 关闭窗口询问(主进程 → 渲染层弹窗)
   onWindowCloseAsk: (cb) => {
     const listener = () => cb()

@@ -3,6 +3,7 @@
  * 交互约定(对齐 QQ 音乐):
  *  - 未悬停:只有歌词本身(无背景框/边框/阴影)
  *  - 悬停:淡入深色玻璃底 + 顶部操作条
+ *  - 锁定:整窗鼠标穿透、悬停无反应,仅顶端中央热区出现解锁/设置小按钮(可点)
  *  - 边缘/四角可拖拽缩放(无边框窗口的 drag 区会吃掉系统缩放,故自绘手柄)
  *  - 歌词过长时自动加宽窗口,短句时回到用户设定的基准宽度
  */
@@ -21,6 +22,8 @@ export interface FloatBounds {
 
 let floatWin: BrowserWindow | null = null
 let menuWin: BrowserWindow | null = null
+/** 锁定态:窗口鼠标穿透,仅顶端中央解锁热区可点击 */
+let floatLocked = false
 /** 主窗口访问器(由 index.ts 注入,避免循环依赖) */
 let getMainWindow: (() => BrowserWindow | null) | null = null
 /** 主窗口最后推送的状态:悬浮窗晚开时补发一次,避免白屏等状态 */
@@ -31,6 +34,10 @@ let baseBounds: FloatBounds | null = null
 
 const MIN_W = 320
 const MIN_H = 96
+
+/** 锁定态顶端中央解锁热区(居中宽度×顶边高度):光标落在这里才恢复点击 */
+const LOCK_HOT_W = 150
+const LOCK_HOT_H = 38
 
 export function initFloat(getMain: () => BrowserWindow | null): void {
   getMainWindow = getMain
@@ -245,9 +252,14 @@ export function resetFloatBounds(): void {
  * 悬浮窗整体是拖动区(-webkit-app-region: drag),Windows 下这种区域收不到 mousemove,
  * 渲染层无法自己判断"鼠标移入"。改由主进程轮询光标是否落在窗口矩形内,
  * 只在状态翻转时推送,渲染层据此显示/隐藏控制条。
+ *
+ * 锁定态(QQ 音乐式):
+ *  - 光标只在「顶端中央解锁热区」内才推送 hover 并恢复点击(解锁/设置按钮可点)
+ *  - 其余位置完全不推送 hover(渲染层无任何反应)且保持鼠标穿透,点击落到下层窗口
  */
 let hoverTimer: ReturnType<typeof setInterval> | null = null
 let lastHover = false
+let lastIgnore = false
 
 function startHoverWatch(win: BrowserWindow): void {
   stopHoverWatch()
@@ -259,10 +271,28 @@ function startHoverWatch(win: BrowserWindow): void {
     if (!win.isVisible()) return
     const b = win.getBounds()
     const p = screen.getCursorScreenPoint()
-    const inside =
-      (p.x >= b.x && p.x < b.x + b.width && p.y >= b.y && p.y < b.y + b.height) ||
-      // 设置菜单打开时保持底框可见,否则鼠标移到菜单上底框会闪掉
-      (!!menuWin && !menuWin.isDestroyed() && menuWin.isVisible())
+    const inWin = p.x >= b.x && p.x < b.x + b.width && p.y >= b.y && p.y < b.y + b.height
+    // 设置菜单打开时保持底框可见,否则鼠标移到菜单上底框会闪掉
+    const menuOpen = !!menuWin && !menuWin.isDestroyed() && menuWin.isVisible()
+    // 锁定时悬停区收窄为顶端中央热区
+    const hotZone =
+      floatLocked && inWin
+        ? p.x >= b.x + b.width / 2 - LOCK_HOT_W / 2 &&
+          p.x < b.x + b.width / 2 + LOCK_HOT_W / 2 &&
+          p.y >= b.y &&
+          p.y < b.y + LOCK_HOT_H
+        : false
+    const inside = (inWin || menuOpen) && (!floatLocked || hotZone || menuOpen)
+    // 锁定态:光标不在热区内就保持穿透;热区内/已解锁恢复点击
+    const ignore = floatLocked && !hotZone && !menuOpen
+    if (ignore !== lastIgnore) {
+      lastIgnore = ignore
+      try {
+        win.setIgnoreMouseEvents(ignore, { forward: true })
+      } catch {
+        /* 窗口正在销毁 */
+      }
+    }
     if (inside !== lastHover) {
       lastHover = inside
       if (!win.isDestroyed()) win.webContents.send('float:hover', inside)
@@ -274,15 +304,18 @@ function stopHoverWatch(): void {
   if (hoverTimer) clearInterval(hoverTimer)
   hoverTimer = null
   lastHover = false
+  lastIgnore = false
 }
 
 /**
  * 锁定/解锁悬浮窗:
- * 锁定后窗口鼠标穿透(forward=true 仍转发移动事件,便于悬停显示解锁提示),
- * 避免置顶小窗挡住桌面其它操作;解除入口在主窗口「更多 → 悬浮歌词窗」。
+ * 锁定后窗口鼠标穿透(forward=true 仍转发移动事件),不挡桌面其它操作;
+ * 光标移到顶端中央会出现解锁/设置小按钮(热区内的点击由悬停轮询恢复),也可在
+ * 主窗口「更多 → 悬浮歌词窗」中解除。
  */
 export function setFloatLocked(locked: boolean): boolean {
   if (!floatWin || floatWin.isDestroyed()) return false
+  floatLocked = locked
   try {
     floatWin.setIgnoreMouseEvents(locked, { forward: true })
     return true

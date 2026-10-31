@@ -1,5 +1,5 @@
 ﻿/** 歌单页:本地歌单管理 + B站收藏夹/网易云歌单导入 + 最近播放 */
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Button,
   Card,
@@ -14,6 +14,7 @@ import {
   makeStyles,
   tokens,
   Spinner,
+  ToggleButton,
   Tooltip
 } from '@fluentui/react-components'
 import {
@@ -34,7 +35,7 @@ import {
   SaveRegular,
   SearchRegular
 } from '@fluentui/react-icons'
-import type { NeteasePlaylistMeta, Playlist, Song } from '@shared/types'
+import type { KugouPlatform, NeteasePlaylistMeta, Playlist, Song } from '@shared/types'
 import { api } from '../lib/api'
 import { useStore } from '../store'
 import { SongList } from '../components/SongList'
@@ -69,9 +70,29 @@ export type RemoteView =
   | { kind: 'history' }
   | { kind: 'fav'; id: number; title: string; coverUrl?: string; count: number }
 
-/** 是否可同步(B站收藏夹 / 网易云歌单 / QQ歌单 / 播放记录) */
+/** 是否可同步(B站收藏夹 / 网易云歌单 / QQ歌单 / 酷狗歌单 / 播放记录) */
 const isSyncable = (pl: Playlist | null | undefined): boolean =>
-  !!(pl && (pl.favoriteFolderId || pl.neteasePlaylistId || pl.qqPlaylistId || pl.biliHistory))
+  !!(pl && (pl.favoriteFolderId || pl.neteasePlaylistId || pl.qqPlaylistId || pl.kugouPlaylistId || pl.biliHistory))
+
+/** 歌单来源分类(依据来源 id 标记,无标记为本地) */
+export type PlaylistCategory = 'local' | 'netease' | 'bili' | 'qq' | 'kugou'
+
+export function sourceOf(pl: Playlist): PlaylistCategory {
+  if (pl.neteasePlaylistId) return 'netease'
+  if (pl.favoriteFolderId || pl.biliHistory) return 'bili'
+  if (pl.qqPlaylistId) return 'qq'
+  if (pl.kugouPlaylistId) return 'kugou'
+  return 'local'
+}
+
+/** 登录平台的在线歌单条目(自动列出,点卡片导入;已导入则点开本地详情) */
+type OnlineBrief = {
+  id: number | string
+  name: string
+  coverUrl?: string
+  count: number
+  platform: 'netease' | 'qq' | KugouPlatform
+}
 
 /**
  * 歌单详情主体:头部(封面/名称/描述)+ 网易云元信息(播放量/创建时间/创作者/标签)
@@ -480,6 +501,8 @@ export function PlaylistsPage() {
   /** 收藏歌曲视图(收藏不是普通歌单,单独一屏) */
   const [favView, setFavView] = useState(false)
   const [favDeduping, setFavDeduping] = useState(false)
+  /** 歌单分类筛选(all=全部) */
+  const [category, setCategory] = useState<'all' | PlaylistCategory>('all')
 
   /** 登录B站后进入歌单页即拉收藏夹列表(仅元数据;内容点开才取) */
   useEffect(() => {
@@ -490,7 +513,155 @@ export function PlaylistsPage() {
       .catch(() => setBiliFolders([]))
   }, [library?.biliProfile, biliFolders])
 
+  /** 其它平台在线歌单:登录即自动列出(与B站收藏夹一致),点卡片导入 */
+  const [onlinePls, setOnlinePls] = useState<OnlineBrief[]>([])
+  const [onlineImporting, setOnlineImporting] = useState<string | null>(null)
+  useEffect(() => {
+    let cancelled = false
+    const collected: OnlineBrief[] = []
+    const jobs: Promise<void>[] = []
+    if (library?.neteaseProfile) {
+      jobs.push(
+        api
+          .neteaseUserPlaylists()
+          .then((r) => {
+            if (r.ok && r.data)
+              for (const d of r.data) collected.push({ ...d, platform: 'netease' as const })
+          })
+          .catch(() => {})
+      )
+    }
+    if (library?.qqProfile) {
+      jobs.push(
+        api
+          .qqUserPlaylists()
+          .then((r) => {
+            if (r.ok && r.data) for (const d of r.data) collected.push({ ...d, platform: 'qq' as const })
+          })
+          .catch(() => {})
+      )
+    }
+    for (const kg of ['normal', 'concept'] as const) {
+      const logged = kg === 'normal' ? library?.kugouProfile : library?.kugouConceptProfile
+      if (!logged) continue
+      const tag = kg === 'concept' ? '酷狗概念版歌单获取失败' : '酷狗歌单获取失败'
+      jobs.push(
+        api
+          .kugouUserPlaylists(kg)
+          .then((r) => {
+            if (r.ok && r.data) collected.push(...r.data)
+            else if (!r.ok) toastError(tag, r.error)
+          })
+          .catch((e) => toastError(tag, String(e)))
+      )
+    }
+    Promise.all(jobs).then(() => {
+      if (!cancelled) setOnlinePls(collected)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [library?.neteaseProfile, library?.qqProfile, library?.kugouProfile, library?.kugouConceptProfile])
+
+  /** 已导入的来源 id(避免在线卡片重复导入) */
+  const importedSourceIds = useMemo(() => {
+    const s = new Set<string>()
+    for (const pl of library?.playlists ?? []) {
+      if (pl.neteasePlaylistId) s.add(`netease:${pl.neteasePlaylistId}`)
+      if (pl.qqPlaylistId) s.add(`qq:${pl.qqPlaylistId}`)
+      if (pl.kugouPlaylistId) s.add(`kugou:${pl.kugouPlaylistId}`)
+    }
+    return s
+  }, [library?.playlists])
+
+  const importOnline = async (b: OnlineBrief): Promise<void> => {
+    const key = `${b.platform}:${b.id}`
+    if (onlineImporting) return
+    setOnlineImporting(key)
+    try {
+      let pl: Playlist | null = null
+      if (b.platform === 'netease') pl = await api.importNeteasePlaylist(Number(b.id), b.name)
+      else if (b.platform === 'qq') pl = await api.qqImportPlaylist(Number(b.id), b.name)
+      else pl = await api.kugouImportPlaylist(b.platform as KugouPlatform, String(b.id), b.name)
+      if (pl) {
+        await refresh()
+        toastSuccess('导入成功', `${b.name} · ${pl.songIds.length} 首`)
+      } else {
+        toastError('导入失败', '内容为空或获取失败')
+      }
+    } catch (e) {
+      toastError('导入失败', String(e))
+    } finally {
+      setOnlineImporting(null)
+    }
+  }
+
   if (!library) return null
+
+  /** 分类过滤:本地歌单按来源标记,B站在线条目随 bili 分类显隐 */
+  const visiblePlaylists = library.playlists.filter(
+    (pl) => category === 'all' || sourceOf(pl) === category
+  )
+  const showLocalSection = category === 'all' || category === 'local'
+  const showBiliSection = category === 'all' || category === 'bili'
+  const showNeteaseSection = category === 'all' || category === 'netease'
+  const showQqSection = category === 'all' || category === 'qq'
+  const showKugouSection = category === 'all' || category === 'kugou'
+
+  /** 在线歌单卡片:已导入点开本地详情,未导入一键导入 */
+  const onlineMeta: Record<OnlineBrief['platform'], { label: string; color: string; bg: string }> = {
+    netease: { label: '网易云', color: '#ec4141', bg: 'rgba(236,65,65,0.15)' },
+    qq: { label: 'QQ音乐', color: '#31c27c', bg: 'rgba(49,194,124,0.15)' },
+    normal: { label: '酷狗', color: '#00a9ff', bg: 'rgba(0,169,255,0.15)' },
+    concept: { label: '酷狗概念版', color: '#7c6cff', bg: 'rgba(124,108,255,0.15)' }
+  }
+  const renderOnlineCard = (b: OnlineBrief) => {
+    const key = `${b.platform}:${b.id}`
+    const m = onlineMeta[b.platform]
+    const localPl = importedSourceIds.has(key)
+      ? library.playlists.find(
+          (pl) =>
+            (b.platform === 'netease' && pl.neteasePlaylistId === Number(b.id)) ||
+            (b.platform === 'qq' && pl.qqPlaylistId === Number(b.id)) ||
+            (b.platform !== 'netease' && b.platform !== 'qq' && pl.kugouPlaylistId === String(b.id))
+        )
+      : undefined
+    const busy = onlineImporting === key
+    return (
+      <Card
+        key={`online-${key}`}
+        className={styles.card}
+        onClick={() => {
+          if (localPl) {
+            setSelected(localPl)
+            return
+          }
+          void importOnline(b)
+        }}
+      >
+        <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
+          <Cover url={b.coverUrl} size={56} radius={8} iconSize={24} />
+          <div style={{ minWidth: 0, flex: 1 }}>
+            <Text
+              weight="semibold"
+              style={{
+                display: 'block',
+                whiteSpace: 'nowrap',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis'
+              }}
+            >
+              {b.name}
+            </Text>
+            <Text size={200} style={{ color: tokens.colorNeutralForeground3 }}>
+              {m.label} · {b.count} 首{localPl ? ' · 已导入' : ''}
+            </Text>
+          </div>
+          {busy ? <Spinner size="tiny" /> : null}
+        </div>
+      </Card>
+    )
+  }
 
   /** 同步一个歌单(远端增量拉取,保留手动加入的歌曲) */
   const syncOne = async (pl: Playlist): Promise<void> => {
@@ -795,9 +966,33 @@ export function PlaylistsPage() {
         </>
       }
     >
+      {/* 分类筛选:全部 / 本地 / 网易云 / B站 / QQ / 酷狗 */}
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 14 }}>
+        {(
+          [
+            ['all', '全部'],
+            ['local', '本地'],
+            ['netease', '网易云'],
+            ['bili', 'B站'],
+            ['qq', 'QQ音乐'],
+            ['kugou', '酷狗']
+          ] as const
+        ).map(([key, label]) => (
+          <ToggleButton
+            key={key}
+            size="small"
+            appearance={category === key ? 'primary' : 'subtle'}
+            onClick={() => setCategory(key)}
+          >
+            {label}
+          </ToggleButton>
+        ))}
+      </div>
+
       {/* 歌单网格:本地歌单与B站在线条目同层级混排 */}
       <div className={styles.grid}>
         {/* 收藏歌曲:不是普通歌单(只存 id 列表),单列一张卡片入口 */}
+        {showLocalSection && (
         <Card
           key="favorites"
           className={styles.card}
@@ -837,7 +1032,8 @@ export function PlaylistsPage() {
             </div>
           </div>
         </Card>
-        {library.playlists.map((pl) => (
+        )}
+        {visiblePlaylists.map((pl) => (
           <Card key={pl.id} className={styles.card} onClick={() => setSelected(pl)}>
             <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
               <Cover url={pl.coverUrl} size={56} radius={8} iconSize={24} />
@@ -862,7 +1058,7 @@ export function PlaylistsPage() {
         ))}
 
         {/* B站在线条目:登录即出现,打开才拉数据 */}
-        {library.biliProfile ? (
+        {showBiliSection && (library.biliProfile ? (
           <>
             <Card key="bili-history" className={styles.card} onClick={() => setRemoteView({ kind: 'history' })}>
               <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
@@ -962,7 +1158,13 @@ export function PlaylistsPage() {
               </div>
             </div>
           </Card>
-        )}
+        ))}
+
+        {/* 其他平台在线歌单:登录即自动列出(与B站收藏夹一致),点卡片一键导入,已导入点开详情 */}
+        {showNeteaseSection && onlinePls.filter((b) => b.platform === 'netease').map(renderOnlineCard)}
+        {showQqSection && onlinePls.filter((b) => b.platform === 'qq').map(renderOnlineCard)}
+        {showKugouSection &&
+          onlinePls.filter((b) => b.platform === 'normal' || b.platform === 'concept').map(renderOnlineCard)}
       </div>
       {library.playlists.length === 0 && !library.biliProfile && (
         <div className={styles.empty}>

@@ -36,7 +36,7 @@ import * as kugou from './api/kugou'
 import { createKugouQr, pollKugouQr } from './api/kugouLogin'
 import { getSongHot } from './api/songHot'
 import { fetchPlaylistByLink } from './api/linkImport'
-import { fetchQqPlaylist, fetchKugouPlaylist } from './api/qqkugou'
+import { fetchQqPlaylist, fetchKugouPlaylist, fetchKugouCollectionPlaylist, fetchKugouUserPlaylists } from './api/qqkugou'
 import { computeSyncPlan } from './syncDelta'
 import { getLyrics } from './api/lyrics'
 import { prepareAudio, coverProxyUrl, clearAudioCache, getCacheDir } from './audio'
@@ -86,7 +86,7 @@ import {
 } from './float'
 import { recognizeAudio, getAuddToken, setAuddToken } from './api/recognize'
 import { PRESETS, createShortcut, iconDataUrl, getPreset } from './disguise'
-import type { FloatLyricState, FloatControlCmd } from '@shared/types'
+import type { FloatLyricState, FloatControlCmd, PlaybackResume } from '@shared/types'
 import QRCode from 'qrcode'
 
 /** 对话框宿主窗口:优先当前聚焦窗口,退回第一个窗口(避免 getFocusedWindow() 为 null 时崩溃) */
@@ -148,7 +148,8 @@ function librarySnapshot(): Library {
     listenStats: d.listenStats,
     // 收藏 id 列表必须随快照下发:渲染层的行内心形/播放条/全屏页都读它判断收藏态,
     // 之前漏了这一项,导致「已收藏」永远显示成未收藏
-    favoriteIds: d.favoriteIds ?? []
+    favoriteIds: d.favoriteIds ?? [],
+    resumePlayback: d.resumePlayback ?? null
   }
 }
 
@@ -798,6 +799,20 @@ export function registerIpc(): void {
     addRecent(song)
     return true
   })
+  // 上次播放会话(重启恢复):切歌/节流后发一次,只落库不回传
+  ipcMain.on('playback:saveResume', (_e, r: PlaybackResume | null) => {
+    const d = getStore()
+    if (!r || !Array.isArray(r.queue) || !(r.queueIndex >= 0 && r.queueIndex < r.queue.length)) {
+      d.resumePlayback = null
+    } else {
+      d.resumePlayback = {
+        queue: r.queue,
+        queueIndex: Math.floor(r.queueIndex),
+        pos: isFinite(r.pos) && r.pos > 0 ? Math.min(r.pos, 86_400) : 0
+      }
+    }
+    saveStore()
+  })
   // 收藏:加入时插入队首(最新收藏在前),同时把歌曲元数据存进库以便收藏页展示
   ipcMain.handle('library:toggleFavorite', (_e, song: Song) => {
     const st = getStore()
@@ -945,6 +960,13 @@ export function registerIpc(): void {
       const linked = await fetchQqPlaylist(String(pl.qqPlaylistId))
       remote = linked.songs
       complete = true
+    } else if (pl.kugouPlaylistId) {
+      // 概念版 collection_ 走 v5 分享接口,普通 specialid 走 v3
+      const linked = /^collection_/.test(pl.kugouPlaylistId)
+        ? await fetchKugouCollectionPlaylist(pl.kugouPlaylistId)
+        : await fetchKugouPlaylist(pl.kugouPlaylistId)
+      remote = linked.songs
+      complete = true
     } else if (pl.biliHistory) {
       const r = await bilibili.getWatchHistory()
       if (r.notLoggedIn) return { ok: false, error: '请先在「设置 → 账号」中登录哔哩哔哩' }
@@ -1010,8 +1032,10 @@ export function registerIpc(): void {
         linked.platform === 'netease' ? '网易云' : linked.platform === 'qq' ? 'QQ音乐' : '酷狗'
       // 数量在歌单详情页会单独显示,描述里不再重复
       const pl = createPlaylist(linked.name, `${platformText}链接导入`)
-      // 网易云歌单回填 id → 后续可「同步」
+      // 回填来源 id → 分类展示与「同步」都靠它
       if (linked.platform === 'netease') pl.neteasePlaylistId = Number(linked.playlistId)
+      else if (linked.platform === 'qq') pl.qqPlaylistId = Number(linked.playlistId)
+      else if (linked.platform === 'kugou') pl.kugouPlaylistId = linked.playlistId
       pl.songIds = linked.songs.map((s) => s.id)
       pl.syncedIds = [...pl.songIds]
       if (linked.songs[0]?.coverUrl) pl.coverUrl = linked.songs[0].coverUrl
@@ -1429,6 +1453,29 @@ export function registerIpc(): void {
     setProfile(platform === 'concept' ? 'kugouConcept' : 'kugou', null)
     return true
   })
+  // 酷狗登录用户的在线歌单(歌单页自动列出)
+  ipcMain.handle('kugou:userPlaylists', async (_e, platform: KugouPlatform) => {
+    try {
+      return ok(await fetchKugouUserPlaylists(platform === 'concept' ? 'concept' : 'normal'))
+    } catch (e) {
+      return err(e)
+    }
+  })
+  // 导入酷狗歌单(collection_ 前缀走概念版收藏接口,其余按老版 specialid)
+  ipcMain.handle('kugou:importPlaylist', async (_e, platform: KugouPlatform, id: string, name: string) => {
+    const linked = /^collection_/.test(id)
+      ? await fetchKugouCollectionPlaylist(id)
+      : await fetchKugouPlaylist(id)
+    if (linked.songs.length === 0) return null
+    upsertSongs(linked.songs)
+    const pl = createPlaylist(name, platform === 'concept' ? '酷狗概念版歌单导入' : '酷狗歌单导入')
+    pl.kugouPlaylistId = linked.playlistId
+    pl.songIds = linked.songs.map((s) => s.id)
+    pl.syncedIds = [...pl.songIds]
+    if (linked.coverUrl) pl.coverUrl = linked.coverUrl
+    saveStore()
+    return pl
+  })
 
   // ===== 下载 =====
   ipcMain.handle('download:add', (_e, songs: Song[]) => {
@@ -1695,6 +1742,23 @@ export function registerIpc(): void {
   })
   ipcMain.on('window:close', (e) => {
     BrowserWindow.fromWebContents(e.sender)?.close()
+  })
+  /** 全屏切换(PV 舞台用):返回切换后的状态,渲染进程据此更新按钮图标 */
+  ipcMain.handle('window:toggleFullscreen', (e) => {
+    const win = BrowserWindow.fromWebContents(e.sender)
+    if (!win) return false
+    const next = !win.isFullScreen()
+    win.setFullScreen(next)
+    return next
+  })
+  ipcMain.handle('window:isFullscreen', (e) => {
+    return BrowserWindow.fromWebContents(e.sender)?.isFullScreen() ?? false
+  })
+  ipcMain.handle('window:setFullscreen', (e, on: boolean) => {
+    const win = BrowserWindow.fromWebContents(e.sender)
+    if (!win) return false
+    win.setFullScreen(!!on)
+    return !!on
   })
   ipcMain.handle('app:copy', (_e, text: string) => {
     clipboard.writeText(text)

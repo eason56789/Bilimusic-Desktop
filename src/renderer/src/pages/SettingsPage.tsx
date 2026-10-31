@@ -33,6 +33,26 @@ import { GithubLogo, BiliLogo } from '../components/BrandLogos'
 import { toastSuccess, toastError } from '../lib/toast'
 import type { DisguisePresetInfo, KugouPlatform, Settings } from '@shared/types'
 
+/** 文字PV 入场动效显示名(设置页与全屏页菜单共用文案) */
+const PV_ANIM_LABEL: Record<'pop' | 'rise' | 'slam' | 'wave' | 'typewriter', string> = {
+  pop: '弹出 Pop',
+  rise: '上浮 Rise',
+  slam: '砸落 Slam',
+  wave: '波浪 Wave',
+  typewriter: '打字机 Typewriter'
+}
+
+/** 文字PV 版式显示名(auto=按句语义与种子自动轮转) */
+const PV_LAYOUT_LABEL: Record<string, string> = {
+  auto: '自动(按句轮转)',
+  'type-impact': '巨字炸裂 TypeImpact',
+  'editorial-column': '竖排专栏 Editorial',
+  'fragment-collage': '碎片拼贴 Collage',
+  'tracking-ribbon': '单行带状 Ribbon',
+  'mask-reveal': '中轴落入 MaskReveal',
+  'quiet-tableau': '静场堆叠 Tableau'
+}
+
 const useStyles = makeStyles({
   root: {
     display: 'flex',
@@ -65,8 +85,7 @@ function SectionTitle({ children }: { children: React.ReactNode }) {
   )
 }
 
-export function SettingsPage() {
-  const styles = useStyles()
+export function SettingsPage() {  const styles = useStyles()
   const library = useStore((s) => s.library)
   const refresh = useStore((s) => s.refreshLibrary)
   const update = useStore((s) => s.updateSetting)
@@ -821,6 +840,119 @@ export function SettingsPage() {
       {/* 歌词(分层模糊 + 对齐,对齐手机端) */}
       <div className={styles.section}>
         <SectionTitle>歌词</SectionTitle>
+        {/* ===== 歌词视觉样式:经典滚动 / 文字PV ===== */}
+        <div className={styles.row}>
+          <Text size={300} style={{ minWidth: 96 }}>
+            歌词样式:
+          </Text>
+          <RadioGroup
+            layout="horizontal"
+            value={s.lyricStyle ?? 'classic'}
+            onChange={(_, d) => update('lyricStyle', d.value as typeof s.lyricStyle)}
+          >
+            <Radio value="classic" label="经典(滚动列表)" />
+            <Radio value="pv" label="文字PV(整屏大字+动效)" />
+          </RadioGroup>
+        </div>
+        {s.lyricStyle === 'pv' && (
+          <>
+            {/* 排布样式:同一套 PV 舞台,换整行的摆法(参考 folia 的多种歌词样式) */}
+            <div className={styles.row}>
+              <Text size={300} style={{ minWidth: 96 }}>
+                排布样式:
+              </Text>
+              <RadioGroup
+                layout="horizontal"
+                value={s.pvArrange ?? 'pv'}
+                onChange={(_, d) => update('pvArrange', d.value as typeof s.pvArrange)}
+              >
+                <Radio value="pv" label="逐字PV" />
+                <Radio value="partita" label="云阶" />
+                <Radio value="claddagh" label="回环" />
+                <Radio value="still" label="时计" />
+                <Radio value="tempera" label="凝彩" />
+              </RadioGroup>
+            </div>
+            <div className={styles.row}>
+              <Text size={300} style={{ minWidth: 96 }}>
+                入场动效:
+              </Text>
+              <Dropdown
+                value={PV_ANIM_LABEL[s.pvAnim ?? 'pop']}
+                selectedOptions={[s.pvAnim ?? 'pop']}
+                onOptionSelect={(_, d) => update('pvAnim', d.optionValue as typeof s.pvAnim)}
+              >
+                {Object.entries(PV_ANIM_LABEL).map(([k, label]) => (
+                  <Option key={k} value={k}>
+                    {label}
+                  </Option>
+                ))}
+              </Dropdown>
+            </div>
+            <div className={styles.row}>
+              <Text size={300} style={{ minWidth: 96 }}>
+                版式:
+              </Text>
+              <Dropdown
+                value={
+                  PV_LAYOUT_LABEL[s.pvLayout ?? 'auto'] ??
+                  PV_LAYOUT_LABEL['auto']
+                }
+                selectedOptions={[s.pvLayout ?? 'auto']}
+                onOptionSelect={(_, d) => update('pvLayout', d.optionValue as typeof s.pvLayout)}
+              >
+                {Object.entries(PV_LAYOUT_LABEL).map(([k, label]) => (
+                  <Option key={k} value={k}>
+                    {label}
+                  </Option>
+                ))}
+              </Dropdown>
+            </div>
+            <div className={styles.row}>
+              <Text size={300} style={{ minWidth: 96 }}>
+                文字大小 {Math.round((s.pvScale ?? 1) * 100)}%
+              </Text>
+              <Slider
+                min={0.7}
+                max={1.6}
+                step={0.05}
+                value={s.pvScale ?? 1}
+                onChange={(_, d) => update('pvScale', d.value)}
+              />
+            </div>
+            <div className={styles.row}>
+              <Text size={300} style={{ minWidth: 96 }}>
+                运动强度 {Math.round((s.pvMotion ?? 1) * 100)}%
+              </Text>
+              <Slider
+                min={0}
+                max={2}
+                step={0.05}
+                value={s.pvMotion ?? 1}
+                onChange={(_, d) => update('pvMotion', d.value)}
+              />
+            </div>
+            <div className={styles.row}>
+              <Text size={300} style={{ minWidth: 96 }}>
+                PV 主色:
+              </Text>
+              <Input
+                value={s.pvAccent ?? ''}
+                placeholder="留空=跟随主题强调色(如 #7aa2ff)"
+                onChange={(_, d) => update('pvAccent', d.value)}
+                style={{ maxWidth: 280 }}
+              />
+            </div>
+            <Switch
+              label="装饰层(网格 / 光圈 / 角框 / 飘散色块)"
+              checked={s.pvDecor !== false}
+              onChange={(_, d) => update('pvDecor', d.checked)}
+            />
+            <Text size={200} style={{ color: tokens.colorNeutralForeground3 }}>
+              文字PV 使用逐字卡拉OK上色(与经典样式同一套时间轴);全屏页控制条上的「PV」按钮可随时切换样式与动效。
+            </Text>
+          </>
+        )}
         <div className={styles.row}>
           <Text size={300}>歌词对齐:</Text>
           <RadioGroup

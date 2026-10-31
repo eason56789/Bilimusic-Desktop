@@ -3,6 +3,7 @@
  * 视觉(对齐 QQ 音乐悬浮歌词):
  *  - 未悬停:只有歌词本身,无背景框/边框/阴影,完全融入桌面
  *  - 悬停:淡入深色玻璃底 + 顶部操作条
+ *  - 锁定:鼠标穿透且悬停无反应,仅顶端中央热区出现解锁/设置小按钮(主进程恢复点击)
  *  - 当前行逐字走光(已唱=金色,未唱=蓝色),翻译紧随其下
  *  - 歌词过长时自动加宽窗口(主进程按需 setBounds),短句回到用户基准宽度
  *
@@ -90,18 +91,24 @@ const useStyles = makeStyles({
     color: 'rgba(255,255,255,0.88)',
     ':hover': { background: 'rgba(255,255,255,0.14)' }
   },
-  /** 锁定提示:锁定后窗口鼠标穿透,这里说明如何解除 */
-  lockBadge: {
+  /** 锁定态:顶端中央解锁热区容器(主进程只在这个区域恢复点击),平时完全不可见 */
+  lockZone: {
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: '6px',
     flexShrink: 0,
-    padding: '3px 6px',
-    fontSize: '11px',
-    color: 'rgba(255,255,255,0.85)',
-    background: 'rgba(0,0,0,0.34)',
+    height: '34px',
     WebkitAppRegion: 'no-drag' as unknown as 'no-drag'
+  },
+  /** 解锁/设置小按钮组:圆角胶囊,仅悬停热区时出现 */
+  lockPill: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '2px',
+    padding: '2px 6px',
+    borderRadius: '17px',
+    background: 'rgba(0,0,0,0.45)',
+    border: '1px solid rgba(255,255,255,0.14)'
   },
   lyrics: {
     flex: 1,
@@ -391,12 +398,31 @@ function FloatContent() {
 
   return (
     <FluentProvider theme={theme} style={{ height: '100%', background: 'transparent' }}>
-      <div className={`${styles.root} ${hover || dragDir ? styles.rootHover : ''}`}>
-        {locked && hover ? (
-          // 锁定时窗口鼠标穿透:悬停只提示如何解除(解除入口在主窗口菜单)
-          <div className={styles.lockBadge}>
-            <LockClosedRegular />
-            已锁定 · 在播放条「更多 → 悬浮歌词窗」中解除
+      <div className={`${styles.root} ${hover && !locked ? styles.rootHover : ''}`}>
+        {locked ? (
+          // 锁定:窗口鼠标穿透且悬停无任何反应;仅顶端中央热区(主进程判定)出现
+          // 解锁/设置小按钮,此时主进程已临时恢复点击,两个按钮都能点
+          <div className={styles.lockZone}>
+            {hover ? (
+              <div className={styles.lockPill}>
+                <Button
+                  appearance="subtle"
+                  size="small"
+                  className={styles.btn}
+                  icon={<LockOpenRegular />}
+                  title="解锁悬浮窗(恢复鼠标操作)"
+                  onClick={() => send('lock')}
+                />
+                <Button
+                  appearance="subtle"
+                  size="small"
+                  className={styles.btn}
+                  icon={<SettingsRegular />}
+                  title="歌词设置"
+                  onClick={() => api.floatMenuOpen?.()}
+                />
+              </div>
+            ) : null}
           </div>
         ) : null}
         {!locked ? (

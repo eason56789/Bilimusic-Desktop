@@ -3,10 +3,10 @@
  * - QQ:歌单曲目带 songmid/songid,可直接走 vkey 原生取流
  * - 酷狗:歌单曲目带 hash/album_audio_id,可直接走原生取流;封面取 trans_param.union_cover
  */
-import type { Song } from '@shared/types'
+import type { KugouPlatform, Song } from '@shared/types'
 import type { LinkedPlaylist } from './linkImport'
 import { normalizeKugouCover, songFromKugouFileItem } from './kugou'
-import { getOrCreateKugouMid } from '../store'
+import { getOrCreateKugouMid, getStore } from '../store'
 import { getQqCookie } from './qqmusic'
 import { createHash } from 'crypto'
 
@@ -163,15 +163,334 @@ export async function fetchKugouPlaylist(id: string): Promise<LinkedPlaylist> {
  * 曲目 name 形如 "歌手 - 歌名",timelen 为毫秒。
  */
 const KG_SALT = 'OIlwieks28dk2k092lksi2UIkp'
+/** 概念版(lite)的 android 签名盐值不同(实测用错盐值会被拒) */
+const KG_SALT_LITE = 'LnT6xpN3khm36zse0QzvmgTZ3waWdRSA'
 const KG_SHARE_UA = 'Android9-1070-10597-18-0-Share-wifi'
 
-function kgAndroidSign(params: Record<string, string>): string {
+/** 按平台取 android 签名盐值(普通=主盐,概念=lite 盐) */
+function kgSalt(platform: KugouPlatform = 'normal'): string {
+  return platform === 'concept' ? KG_SALT_LITE : KG_SALT
+}
+
+function kgAndroidSign(params: Record<string, string>, platform: KugouPlatform = 'normal'): string {
   const md5 = (s: string): string => createHash('md5').update(s, 'utf8').digest('hex')
   const joined = Object.keys(params)
     .sort()
     .map((k) => `${k}=${params[k]}`)
     .join('')
-  return md5(KG_SALT + joined + KG_SALT)
+  const salt = kgSalt(platform)
+  return md5(salt + joined + salt)
+}
+
+/** 登录用户的在线歌单条目(自动列出,点卡片导入) */
+export interface KugouUserPlaylistBrief {
+  /** global_collection_id(概念/新版)或 specialid(老版自建) */
+  id: string
+  name: string
+  coverUrl?: string
+  count: number
+  platform: KugouPlatform
+}
+
+/**
+ * 登录态歌单列表协议(逆向自听屿 1.2.2 实际运行代码,勿凭记忆改动):
+ *  - 主路径:POST gateway.kugou.com/v7/get_all_list(x-router: cloudlist.service.kugou.com),
+ *    概念版身份 appid=3116/clientver=11440,盐 LnT6xpN3khm36zse0QzvmgTZ3waWdRSA,
+ *    签名 Rs = md5(盐 + sort(k=v 拼接) + body + 盐);dfid 恒为 '-',不做设备注册。
+ *  - fallback:三个 web 端点(appid=1014/clientver=9003),签名 Bs = md5(NVPh…盐 + sort(k=v 拼接) + 盐),GET。
+ */
+const KG_WEB_SALT = 'NVPh5oo715z5DIWAeQlhMDsWXXQV4hwt'
+const KG_LITE_SALT = 'LnT6xpN3khm36zse0QzvmgTZ3waWdRSA'
+const KG_LITE_APPID = '3116'
+const KG_LITE_CLIENTVER = '11440'
+/** 网关请求 UA(听屿 G() 用的 Android 协议 UA,实测必需) */
+const KG_GATEWAY_UA = 'Android15-1070-11083-46-0-DiscoveryDRADProtocol-wifi'
+const KG_WEB_UA =
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+
+function md5Hex(s: string): string {
+  return createHash('md5').update(s, 'utf8').digest('hex')
+}
+
+/** Rs 签名:盐 + key 排序后的 k=v 拼接 + body + 盐(对象值 JSON 序列化;body 拼在中间) */
+function kgLiteSign(params: Record<string, string | number>, body: string): string {
+  const joined = Object.keys(params)
+    .sort()
+    .map((k) => `${k}=${params[k]}`)
+    .join('')
+  return md5Hex(`${KG_LITE_SALT}${joined}${body}${KG_LITE_SALT}`)
+}
+
+/** Bs 签名:盐 + "k=v" 串排序后拼接 + 盐(无 body;登录/云歌单 fallback 用) */
+function kgWebSign(params: Record<string, string>): string {
+  const joined = Object.keys(params)
+    .map((k) => `${k}=${params[k]}`)
+    .sort()
+    .join('')
+  return md5Hex(`${KG_WEB_SALT}${joined}${KG_WEB_SALT}`)
+}
+
+/** 登录态凭据子集(请求器用) */
+interface KugouAuth {
+  userid: string
+  token: string
+  vipToken?: string
+}
+
+/** Cookie 串(对齐听屿 Vs():userid/KugooID/token/t/dfid,有 vip_token 再补) */
+function kgAuthCookie(cred: KugouAuth, dfid: string): string {
+  const parts = [`userid=${cred.userid}`, `KugooID=${cred.userid}`, `token=${cred.token}`, `t=${cred.token}`]
+  if (dfid !== '-') parts.push(`dfid=${dfid}`)
+  if (cred.vipToken) parts.push(`vip_token=${cred.vipToken}`)
+  return parts.join('; ')
+}
+
+/**
+ * 歌单/登录态接口通用请求器(对齐听屿 G()):
+ * POST,签名 = Rs(query 全参数, body 字符串),kg-* 指纹头 + Authorization: KugooToken。
+ * 不做设备注册,dfid 直接用 '-'(实测云歌单服务接受)。
+ */
+async function kgWebRequest(
+  base: string,
+  path: string,
+  body: unknown,
+  extraParams: Record<string, string | number>,
+  extraHeaders: Record<string, string>,
+  cred: KugouAuth
+): Promise<Record<string, unknown>> {
+  const dfid = '-'
+  const mid = getOrCreateKugouMid()
+  const clienttime = Math.floor(Date.now() / 1000)
+  const bodyStr = body === undefined ? '' : JSON.stringify(body ?? {})
+  const params: Record<string, string | number> = {
+    dfid,
+    mid,
+    uuid: '-',
+    appid: KG_LITE_APPID,
+    clientver: KG_LITE_CLIENTVER,
+    clienttime,
+    token: cred.token,
+    userid: cred.userid,
+    ...extraParams
+  }
+  params.signature = kgLiteSign(params, bodyStr)
+  const qs = Object.keys(params)
+    .map((k) => `${encodeURIComponent(k)}=${encodeURIComponent(String(params[k]))}`)
+    .join('&')
+  const url = `${base.replace(/\/+$/, '')}${path.startsWith('/') ? path : `/${path}`}?${qs}`
+  const resp = await fetch(url, {
+    method: 'POST',
+    headers: {
+      Cookie: kgAuthCookie(cred, dfid),
+      'User-Agent': KG_GATEWAY_UA,
+      'Content-Type': 'application/json',
+      dfid,
+      clienttime: String(clienttime),
+      mid,
+      'kg-rc': '1',
+      'kg-thash': '5d816a0',
+      'kg-rec': '1',
+      'kg-rf': 'B9EDA08A64250DEFFBCADDEE00F8F25F',
+      Authorization: `KugooToken ${cred.token}`,
+      ...extraHeaders
+    },
+    body: bodyStr,
+    signal: AbortSignal.timeout(20_000)
+  })
+  if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
+  return (await resp.json()) as Record<string, unknown>
+}
+
+/** fallback 单页:web 端点 + Bs 签名 + GET(对齐听屿 get_all_list 的降级通道) */
+async function kgWebFallbackPage(
+  base: string,
+  path: string,
+  type: number,
+  page: number,
+  cred: KugouAuth
+): Promise<Record<string, unknown>> {
+  const mid = getOrCreateKugouMid()
+  const params: Record<string, string> = {
+    appid: '1014',
+    clientver: '9003',
+    clienttime: String(Math.floor(Date.now() / 1000)),
+    mid,
+    uuid: mid,
+    dfid: '-',
+    userid: cred.userid,
+    token: cred.token,
+    type: String(type),
+    page: String(page),
+    pagesize: '100',
+    plat: '1'
+  }
+  params.signature = kgWebSign(params)
+  const qs = Object.keys(params)
+    .map((k) => `${encodeURIComponent(k)}=${encodeURIComponent(params[k])}`)
+    .join('&')
+  const resp = await fetch(`${base}${path}?${qs}`, {
+    headers: {
+      Referer: 'https://www.kugou.com/',
+      Cookie: kgAuthCookie(cred, '-'),
+      'User-Agent': KG_WEB_UA,
+      Accept: 'application/json, text/plain, */*'
+    },
+    signal: AbortSignal.timeout(20_000)
+  })
+  if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
+  return (await resp.json()) as Record<string, unknown>
+}
+
+/** 响应成功判定(对齐听屿 qs()):status===1,或 error_code===0 且 status 非 0 */
+function kgRespOk(json: Record<string, unknown> | null): boolean {
+  if (!json) return false
+  if (Number(json.status ?? 0) === 1) return true
+  return Number(json.error_code ?? -1) === 0 && Number(json.status ?? 1) !== 0
+}
+
+/** 从响应里按听屿 Js() 的路径顺序取第一个非空数组(多版本字段兼容) */
+function pickKugouListArray(json: Record<string, unknown>): Record<string, unknown>[] {
+  const data = (json.data ?? {}) as Record<string, unknown>
+  const nested = (data.data ?? {}) as Record<string, unknown>
+  const candidates: unknown[] = [
+    data,
+    data.info,
+    data.files,
+    data.songs,
+    data.list,
+    data.lists,
+    data.playlist,
+    data.playlists,
+    data.list_info,
+    data.listInfo,
+    data.info_list,
+    data.collection_list,
+    data.collections,
+    nested.info,
+    nested.list,
+    nested.files,
+    json.info,
+    json.list,
+    json.lists,
+    json.files
+  ]
+  for (const c of candidates) {
+    if (Array.isArray(c) && c.length > 0) return c as Record<string, unknown>[]
+  }
+  return []
+}
+
+/**
+ * 登录用户的歌单列表(普通版/概念版通用,协议同上):
+ * 主路径(gateway + Rs 签名)失败后依次降级到三个 web 端点(Bs 签名),
+ * 每次尝试都记入 attempts,全失败时随 Error 抛出便于诊断。
+ */
+export async function fetchKugouUserPlaylists(platform: KugouPlatform): Promise<KugouUserPlaylistBrief[]> {
+  const store = getStore()
+  const cred = store.kugouTokens?.[platform]
+  if (!cred?.token || !cred?.userid) throw new Error('酷狗未登录')
+  const auth: KugouAuth = { userid: String(cred.userid), token: String(cred.token) }
+  if (cred.vipToken) auth.vipToken = cred.vipToken
+  const attempts: Record<string, unknown>[] = []
+
+  // 主路径单页:gateway.kugou.com/v7/get_all_list,分页参数在 body、身份参数在 query(听屿 G() 原样)
+  const fetchPrimaryPage = (type: number, page: number): Promise<Record<string, unknown>> =>
+    kgWebRequest(
+      'https://gateway.kugou.com',
+      '/v7/get_all_list',
+      { userid: auth.userid, token: auth.token, total_ver: 979, type, page, pagesize: 100 },
+      { plat: 1, userid: Number(auth.userid) || auth.userid, token: auth.token },
+      { 'x-router': 'cloudlist.service.kugou.com' },
+      auth
+    )
+
+  // fallback 单页构造(三个 web 端点)
+  const fetchFallback =
+    (base: string, path: string) =>
+    (type: number, page: number): Promise<Record<string, unknown>> =>
+      kgWebFallbackPage(base, path, type, page, auth)
+
+  /**
+   * 遍历 type∈[2,0,1] 并翻页(每页 100,最多 10 页):
+   * 某个 type 首页失败即换下一个 type;翻页途中失败则保留已拉到的条目。
+   * 全部失败返回 null。
+   */
+  const collect = async (
+    fetchPage: (type: number, page: number) => Promise<Record<string, unknown>>,
+    via: string
+  ): Promise<Record<string, unknown>[] | null> => {
+    for (const type of [2, 0, 1]) {
+      const items: Record<string, unknown>[] = []
+      let anyOk = false
+      for (let page = 1; page <= 10; page++) {
+        let json: Record<string, unknown> | null = null
+        try {
+          json = await fetchPage(type, page)
+        } catch (e) {
+          attempts.push({ via, type, page, error: e instanceof Error ? e.message : String(e) })
+          break
+        }
+        if (!kgRespOk(json)) {
+          attempts.push({
+            via,
+            type,
+            page,
+            status: json?.status,
+            error_code: json?.error_code,
+            body: JSON.stringify(json ?? {}).slice(0, 300)
+          })
+          break
+        }
+        const list = pickKugouListArray(json)
+        attempts.push({ via, type, page, ok: true, count: list.length })
+        items.push(...list)
+        anyOk = true
+        if (list.length < 100) break
+      }
+      if (anyOk && items.length > 0) return items
+    }
+    return null
+  }
+
+  let rawList = (await collect(fetchPrimaryPage, 'gateway/v7/get_all_list')) ?? []
+  if (rawList.length === 0) {
+    for (const fb of [
+      { base: 'https://wwwapi.kugou.com', path: '/cloudlist.service/v1/get_all_list' },
+      { base: 'https://wwwapi.kugou.com', path: '/cloudlist/v1/get_all_list' },
+      { base: 'https://gateway.kugou.com', path: '/cloudlist.service/v1/get_all_list' }
+    ]) {
+      const got = await collect(fetchFallback(fb.base, fb.path), `${fb.base}${fb.path}`)
+      if (got) {
+        rawList = got
+        break
+      }
+    }
+  }
+  if (rawList.length === 0) {
+    throw new Error(`酷狗歌单列表失败(所有通道):${JSON.stringify(attempts).slice(0, 1000)}`)
+  }
+
+  const out: KugouUserPlaylistBrief[] = []
+  for (const it of rawList) {
+    const gcid = String(it.global_collection_id ?? it.gcid ?? '').trim()
+    const specialId = String(it.specialid ?? it.special_id ?? '').trim()
+    const id = gcid || (specialId && specialId !== '0' ? specialId : '')
+    const name = String(it.name ?? it.specialname ?? it.list_name ?? '').trim()
+    if (!id || !name) continue
+    out.push({
+      id,
+      name: decodeEntities(name),
+      coverUrl: normalizeKugouCover(String(it.imgurl ?? it.pic ?? it.img ?? it.s_cover ?? '')) ?? undefined,
+      count: Number(it.count ?? it.songcount ?? it.song_count ?? 0) || 0,
+      platform
+    })
+  }
+  if (out.length === 0) {
+    throw new Error(
+      `酷狗歌单列表解析失败:${JSON.stringify(rawList[0]).slice(0, 200)} attempts=${JSON.stringify(attempts).slice(0, 500)}`
+    )
+  }
+  return out
 }
 
 export async function fetchKugouCollectionPlaylist(
@@ -198,6 +517,7 @@ export async function fetchKugouCollectionPlaylist(
       page: String(page),
       pagesize: String(pageSize)
     }
+    // 匿名分享接口,两版盐值均可(实测),固定用主盐
     params.signature = kgAndroidSign(params)
     const qs = Object.entries(params)
       .map(([k, v]) => `${k}=${encodeURIComponent(v)}`)

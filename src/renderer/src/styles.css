@@ -274,6 +274,39 @@ button:active:not(:disabled) {
 }
 .shell-enter { animation: shell-enter 0.45s cubic-bezier(0.16, 1, 0.3, 1); }
 
+/* ===== 文字PV 歌词动效(逐字入场 / 装饰呼吸) ===== */
+@keyframes pv-pop {
+  0% { opacity: 0; transform: translateY(0.28em) scale(0.72) rotate(-4deg); filter: blur(6px); }
+  60% { opacity: 1; filter: blur(0); }
+  100% { opacity: 1; transform: translateY(0) scale(1) rotate(0deg); filter: blur(0); }
+}
+@keyframes pv-rise {
+  0% { opacity: 0; transform: translateY(0.75em); filter: blur(8px); }
+  100% { opacity: 1; transform: translateY(0); filter: blur(0); }
+}
+@keyframes pv-slam {
+  0% { opacity: 0; transform: scale(1.85) translateY(-0.12em); filter: blur(4px); }
+  55% { opacity: 1; transform: scale(0.94); filter: blur(0); }
+  100% { opacity: 1; transform: scale(1); }
+}
+@keyframes pv-wave {
+  0% { opacity: 0; transform: translateY(0.5em) rotate(6deg) scale(0.86); }
+  55% { opacity: 1; transform: translateY(-0.12em) rotate(-2deg) scale(1.04); }
+  100% { opacity: 1; transform: translateY(0) rotate(0) scale(1); }
+}
+@keyframes pv-type {
+  0% { opacity: 0; transform: none; }
+  100% { opacity: 1; transform: none; }
+}
+@keyframes pv-ring-breathe {
+  0%, 100% { transform: scale(1); opacity: 0.75; }
+  50% { transform: scale(1.045); opacity: 1; }
+}
+@keyframes pv-float {
+  0%, 100% { transform: translate3d(0, 0, 0) scale(1); }
+  50% { transform: translate3d(14px, -22px, 0) scale(1.07); }
+}
+
 /* ===== 轻提示(toast):位置 / 样式 / 动画 ===== */
 /* pointer-events:none 让整层不挡操作,只有胶囊本身可点 */
 .bm-toast-stack {

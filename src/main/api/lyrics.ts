@@ -197,6 +197,56 @@ export function pickLines(ly: { yrc?: string; lrc?: string }): LyricLine[] {
   return fromLrc.length > 0 ? fromLrc : fromYrc
 }
 
+/** 一行是否带逐字时间(卡拉OK/PV 需要) */
+const hasCharTiming = (l: LyricLine): boolean =>
+  (Array.isArray(l.wordTimes) && l.wordTimes.length > 1) || (Array.isArray(l.words) && l.words.length > 1)
+
+/** 歌词是否整体具备逐字能力(抽样判断,避免个别行缺数据就误判) */
+export function hasRichTiming(lines: LyricLine[]): boolean {
+  if (lines.length === 0) return false
+  const sample = lines.filter((l) => l.text.trim().length > 1).slice(0, 12)
+  if (sample.length === 0) return false
+  const rich = sample.filter(hasCharTiming).length
+  return rich >= Math.ceil(sample.length * 0.5)
+}
+
+/**
+ * 逐字补齐:如果当前歌词没有逐字数据,去网易云再找一遍。
+ *
+ * 用户的诉求是"任一平台拿不到逐字就去别的平台找,三家都没有才强制逐字"。
+ * 目前只有网易云提供 yrc(逐字),所以这里把它作为唯一的逐字来源:
+ * 已经拿到逐字就直接返回;否则按「标题 + 歌手」搜索并按行数/时间接近度挑最匹配的一首。
+ */
+async function enrichWithRichTiming(song: Song, lines: LyricLine[]): Promise<LyricLine[] | null> {
+  if (hasRichTiming(lines)) return null
+  try {
+    const r = await searchSongs(`${song.title} ${song.artist}`, 8, 0)
+    if (!r.songs.length) return null
+    const firstArtist = song.artist.split(' / ')[0]?.trim() ?? ''
+    // 优先同名同歌手
+    const ordered = [
+      ...r.songs.filter((s) => s.title.trim() === song.title.trim()),
+      ...r.songs.filter((s) => s.title.trim() !== song.title.trim())
+    ].filter((s) => s.neteaseId)
+    for (const cand of ordered.slice(0, 4)) {
+      const ly = await getLyricNew(cand.neteaseId as number)
+      const rich = ly.yrc ? parseYrc(ly.yrc) : []
+      if (rich.length === 0 || !hasRichTiming(rich)) continue
+      // 行数太少说明 yrc 不完整,不值得替换
+      if (rich.length < Math.max(4, lines.length * 0.5)) continue
+      // 首行时间差太大说明不是同一版本(现场版/remix)
+      if (lines.length > 0 && Math.abs(rich[0].timeMs - lines[0].timeMs) > 20_000) continue
+      const out = stripLines(rich)
+      if (ly.tlyric) return mergeTranslation(out, ly.tlyric)
+      void firstArtist
+      return out
+    }
+  } catch (e) {
+    console.warn('[Lyrics] rich-timing enrichment failed', e)
+  }
+  return null
+}
+
 export async function getLyrics(song: Song): Promise<LyricsResult> {
   const cached = lyricCache.get(song.id)
   if (cached) return cached
@@ -252,6 +302,14 @@ export async function getLyrics(song: Song): Promise<LyricsResult> {
     }
   } catch (e) {
     console.error('[Lyrics] error', e)
+  }
+  // 逐字补齐:主来源只有整行时间时,去其它来源找一份带逐字的版本
+  if (result.lines.length > 0 && !hasRichTiming(result.lines)) {
+    const rich = await enrichWithRichTiming(song, result.lines)
+    if (rich && rich.length > 0) {
+      // provider 仍标注原来源:逐字数据来自网易云,但行文本沿用原平台更可靠
+      result = { ...result, lines: rich }
+    }
   }
   lyricCache.set(song.id, result)
   if (lyricCache.size > 200) {
