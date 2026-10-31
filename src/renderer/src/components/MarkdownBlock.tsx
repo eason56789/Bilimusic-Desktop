@@ -39,11 +39,16 @@ function inline(text: string, keyPrefix: string): ReactNode[] {
         </code>
       )
     } else if (m[3] != null && m[4] != null) {
-      out.push(
-        <Link key={key} href={m[4]} target="_blank" rel="noreferrer" style={{ fontSize: 'inherit' }}>
-          {m[3]}
-        </Link>
-      )
+      // 仅渲染 http/https 链接;其它协议(javascript: 等)按原文输出
+      if (/^https?:\/\//i.test(m[4])) {
+        out.push(
+          <Link key={key} href={m[4]} target="_blank" rel="noreferrer" style={{ fontSize: 'inherit' }}>
+            {m[3]}
+          </Link>
+        )
+      } else {
+        out.push(m[0])
+      }
     }
     last = m.index + m[0].length
   }

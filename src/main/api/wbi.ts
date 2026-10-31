@@ -11,6 +11,8 @@ const MIXIN_KEY_ENC_TAB = [
 
 let cachedMixinKey: string | null = null
 let cacheDay = -1
+/** 最近一次成功获取的密钥:当天拉取失败时兜底,但不作为"当日缓存"写入 */
+let lastGoodKey: string | null = null
 
 function getMixinKey(orig: string): string {
   return MIXIN_KEY_ENC_TAB.map((i) => (i < orig.length ? orig[i] : '')).join('')
@@ -60,15 +62,17 @@ export async function getMixinKeyFromServer(): Promise<string> {
     if (imgKey && subKey) {
       cachedMixinKey = getMixinKey(imgKey + subKey)
       cacheDay = today
+      lastGoodKey = cachedMixinKey
       return cachedMixinKey
     }
     console.warn('[WbiSign] failed to get keys, code:', json.code)
   } catch (e) {
     console.error('[WbiSign] error getting keys', e)
   }
-  cachedMixinKey = '9b288b8f10ef90b6a4e5e7a1e5e7a1e5'
-  cacheDay = today
-  return cachedMixinKey
+  // 拉取失败:沿用最近一次成功的密钥(可能过期但大概率仍有效,服务端判失效会走 -403 重试),
+  // 不把失败结果写入当日缓存,否则一整天都无法自愈
+  if (lastGoodKey) return lastGoodKey
+  throw new Error('WBI 密钥获取失败(无法访问 B 站)')
 }
 
 export async function refreshWbiKey(): Promise<void> {

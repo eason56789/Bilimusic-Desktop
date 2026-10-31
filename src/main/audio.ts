@@ -25,6 +25,7 @@ import {
 import { getSongUrl } from './api/netease'
 import { getQqSongUrl } from './api/qqmusic'
 import { getKugouSongUrl } from './api/kugou'
+import { getStore } from './store'
 
 let cacheDir = ''
 
@@ -68,6 +69,39 @@ function isHttpUrl(u: string): boolean {
   }
 }
 
+/**
+ * 代理目标域名白名单(封面/音频 CDN):
+ * bmedia://img 与 bmedia://proxy 不再是任意 URL 的开放转发通道,
+ * 渲染层传入的 target 只允许命中这些后缀(各大平台音视频/图片 CDN)。
+ */
+const PROXY_HOST_SUFFIXES = [
+  // B站(视频 CDN + 图片 + 海外镜像)
+  'bilivideo.com',
+  'bilivideo.cn',
+  'akamaized.net',
+  'biliapi.net',
+  'hdslb.com',
+  // 网易云(音频/图片,126.net 覆盖 music.126.net)
+  'music.126.net',
+  '126.net',
+  // QQ 音乐(vkey 流媒体 sip 主机在 qq.com 下)
+  'qq.com',
+  // 酷狗(音频与图片 CDN)
+  'kugou.com',
+  'kgimg.com',
+  'kglink.cn'
+]
+
+function isAllowedProxyTarget(u: string): boolean {
+  if (!isHttpUrl(u)) return false
+  try {
+    const h = new URL(u).hostname.toLowerCase()
+    return PROXY_HOST_SUFFIXES.some((s) => h === s || h.endsWith('.' + s))
+  } catch {
+    return false
+  }
+}
+
 async function handleBMedia(req: Request): Promise<Response> {
   const url = new URL(req.url)
   try {
@@ -75,7 +109,7 @@ async function handleBMedia(req: Request): Promise<Response> {
     if (url.hostname === 'img') {
       const target = url.searchParams.get('url') ?? ''
       if (!target) return new Response('missing url', { status: 400 })
-      if (!isHttpUrl(target)) return new Response('bad url', { status: 400 })
+      if (!isAllowedProxyTarget(target)) return new Response('bad url', { status: 400 })
       const resp = await fetch(target, {
         headers: { 'User-Agent': 'Mozilla/5.0', Referer: 'https://www.bilibili.com/' }
       })
@@ -95,7 +129,7 @@ async function handleBMedia(req: Request): Promise<Response> {
       const target = url.searchParams.get('url') ?? ''
       const referer = url.searchParams.get('referer') ?? ''
       if (!target) return new Response('missing url', { status: 400 })
-      if (!isHttpUrl(target)) return new Response('bad url', { status: 400 })
+      if (!isAllowedProxyTarget(target)) return new Response('bad url', { status: 400 })
       const headers: Record<string, string> = {
         'User-Agent':
           'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
@@ -121,14 +155,39 @@ async function handleBMedia(req: Request): Promise<Response> {
   }
 }
 
-/** 允许直接读取的音频扩展名(本地歌曲可能位于任意目录,凭扩展名放行音频文件) */
-const AUDIO_EXT_RE = /\.(mp3|flac|m4a|m4s|mp4|wav|ogg|aac|opus|webm)$/i
+/**
+ * bmedia://local 可读取的路径白名单(主进程侧维护,渲染层无法注入):
+ * 1) 播放缓存目录 2) 下载目录 3) prepareAudio 播放过的本地歌曲 4) 库中登记的本地歌曲。
+ * 不再按扩展名放行全盘文件。
+ */
+const allowedLocalPaths = new Set<string>()
+
+function registerLocalPath(p: string): void {
+  try {
+    allowedLocalPaths.add(resolve(p))
+  } catch {
+    /* 非法路径忽略 */
+  }
+}
+
+function isLocalPathAllowed(rp: string): boolean {
+  if (cacheDir !== '' && (rp === cacheDir || rp.startsWith(cacheDir + sep))) return true
+  const dl = getStore().settings.downloadDir
+  if (dl) {
+    const rdl = resolve(dl)
+    if (rp === rdl || rp.startsWith(rdl + sep)) return true
+  }
+  if (allowedLocalPaths.has(rp)) return true
+  // 库中登记的本地歌曲(含历史会话/恢复备份进来的)
+  for (const s of Object.values(getStore().songs)) {
+    if (s.source === 'LOCAL' && s.localPath && resolve(s.localPath) === rp) return true
+  }
+  return false
+}
 
 function serveLocalFile(p: string, req: Request): Response {
-  // 仅放行:播放缓存目录内,或扩展名为音频的本地文件(拒绝任意文档读取)
   const rp = resolve(p)
-  const inCache = cacheDir !== '' && (rp === cacheDir || rp.startsWith(cacheDir + sep))
-  if (!inCache && !AUDIO_EXT_RE.test(rp)) {
+  if (!isLocalPathAllowed(rp)) {
     return new Response('forbidden', { status: 403 })
   }
   if (!existsSync(p)) return new Response('not found', { status: 404 })
@@ -151,11 +210,19 @@ function serveLocalFile(p: string, req: Request): Response {
   })
   if (range) {
     const m = range.match(/bytes=(\d*)-(\d*)/)
-    let start = m && m[1] ? parseInt(m[1], 10) : 0
-    let end = m && m[2] ? parseInt(m[2], 10) : total - 1
-    if (isNaN(start)) start = 0
-    if (isNaN(end) || end >= total) end = total - 1
-    if (start > end) start = 0
+    let start = 0
+    let end = total - 1
+    if (m && m[1] === '' && m[2]) {
+      // suffix range(bytes=-N):取末尾 N 字节,而不是开头
+      const n = Math.min(parseInt(m[2], 10) || 0, total)
+      start = total - n
+    } else {
+      if (m && m[1]) start = parseInt(m[1], 10)
+      if (m && m[2]) end = parseInt(m[2], 10)
+      if (isNaN(start)) start = 0
+      if (isNaN(end) || end >= total) end = total - 1
+      if (start > end) start = 0
+    }
     const stream = createReadStream(p, { start, end })
     return new Response(stream as unknown as ReadableStream, {
       status: 206,
@@ -206,6 +273,9 @@ function downloadToCache(
         }
         const total = Number(resp.headers.get('content-length') ?? 0)
         const writer = createWriteStream(cachePath)
+        // finish/error 监听器必须在 end() 之前挂上,否则 end 后立刻出错时 Promise 永不 settle
+        writer.on('finish', () => resolve(true))
+        writer.on('error', () => resolve(false))
         ;(async () => {
           const reader = body.getReader()
           let received = 0
@@ -221,14 +291,12 @@ function downloadToCache(
                 lastReport = now
                 onProgress(received, total)
               }
-              if (!writer.write(Buffer.from(value))) {
-                await new Promise<void>((r) => writer.once('drain', r))
-              }
+            if (!writer.write(Buffer.from(value))) {
+              await new Promise<void>((r) => writer.once('drain', r))
+            }
             }
             if (onProgress) onProgress(received, total)
             writer.end()
-            writer.on('finish', () => resolve(true))
-            writer.on('error', () => resolve(false))
           } catch {
             writer.destroy()
             // 中断/网络错误:删掉半截文件,否则下次启动会把它当成有效缓存命中
@@ -252,6 +320,21 @@ const neteaseUrlCache = new Map<string, { url: string; quality: string; at: numb
 const STREAM_URL_TTL_MS = 8 * 60 * 1000
 const qqUrlCache = new Map<string, { url: string; quality: string; at: number }>()
 const kgUrlCache = new Map<string, { url: string; quality: string; at: number }>()
+
+/** 直链缓存条目上限:超过时淘汰最早的(键按插入序,基本等价于最旧) */
+const URL_CACHE_MAX = 100
+
+function cachePut(
+  m: Map<string, { url: string; quality: string; at: number }>,
+  key: string,
+  value: { url: string; quality: string; at: number }
+): void {
+  if (m.size >= URL_CACHE_MAX) {
+    const oldest = m.keys().next().value
+    if (oldest !== undefined) m.delete(oldest)
+  }
+  m.set(key, value)
+}
 
 /** 网易云 level → 中文音质描述 */
 function neteaseLevelText(level: string, type: string): string {
@@ -314,6 +397,8 @@ async function prepareAudioInner(
   signal: AbortSignal
 ): Promise<PreparedAudio> {
   if (song.source === 'LOCAL' && song.localPath && existsSync(song.localPath)) {
+    // 播放即登记:bmedia://local 只放行登记过的本地路径
+    registerLocalPath(song.localPath)
     return {
       url: `bmedia://local/?path=${encodeURIComponent(song.localPath)}`,
       cachePath: song.localPath,
@@ -333,7 +418,7 @@ async function prepareAudioInner(
       const info = await getSongUrl(song.neteaseId, neteaseQuality)
       direct = info.url
       quality = neteaseLevelText(info.level || neteaseQuality, info.type)
-      if (direct) neteaseUrlCache.set(cacheKey, { url: direct, quality, at: Date.now() })
+      if (direct) cachePut(neteaseUrlCache, cacheKey, { url: direct, quality, at: Date.now() })
     }
     if (direct) {
       // 部分链接为 http,统一走代理避免混合内容问题
@@ -356,7 +441,7 @@ async function prepareAudioInner(
     if (!info) {
       if (hit) qqUrlCache.delete(cacheKey)
       info = await getQqSongUrl(song.qqMid)
-      if (info) qqUrlCache.set(cacheKey, { ...info, at: Date.now() })
+      if (info) cachePut(qqUrlCache, cacheKey, { ...info, at: Date.now() })
     }
     if (info) {
       return {
@@ -377,7 +462,7 @@ async function prepareAudioInner(
     if (!info) {
       if (hit) kgUrlCache.delete(cacheKey)
       info = await getKugouSongUrl(song.kugouHash)
-      if (info) kgUrlCache.set(cacheKey, { ...info, at: Date.now() })
+      if (info) cachePut(kgUrlCache, cacheKey, { ...info, at: Date.now() })
     }
     if (info) {
       return {

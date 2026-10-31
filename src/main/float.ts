@@ -8,6 +8,7 @@
  */
 import { BrowserWindow, screen } from 'electron'
 import { join } from 'path'
+import { pathToFileURL } from 'url'
 import { getStore, saveStore } from './store'
 import type { FloatLyricState } from '@shared/types'
 
@@ -97,7 +98,7 @@ export function createFloatWindow(): BrowserWindow | null {
       preload: join(__dirname, '../preload/index.js'),
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: false,
+      sandbox: true,
       webSecurity: true
     }
   })
@@ -106,6 +107,7 @@ export function createFloatWindow(): BrowserWindow | null {
   win.setMenuBarVisibility?.(false)
 
   const devUrl = process.env.ELECTRON_RENDERER_URL
+  const appFileUrl = pathToFileURL(join(__dirname, '../renderer/index.html')).href
   if (devUrl) {
     void win.loadURL(`${devUrl}#float`)
   } else {
@@ -119,9 +121,11 @@ export function createFloatWindow(): BrowserWindow | null {
     if (/^https?:\/\//i.test(url)) void import('electron').then(({ shell }) => shell.openExternal(url))
     return { action: 'deny' }
   })
-  // 禁止导航到远程页面(与主窗口一致)
+  // 禁止导航到远程页面(与主窗口一致:生产仅允许本应用 index.html)
   win.webContents.on('will-navigate', (e, url) => {
-    const allowed = devUrl ? url.startsWith(devUrl) : url.startsWith('file://')
+    const allowed = devUrl
+      ? url.startsWith(devUrl)
+      : url === appFileUrl || url.startsWith(appFileUrl + '#')
     if (!allowed) e.preventDefault()
   })
 
@@ -339,11 +343,23 @@ export function openFloatMenu(): void {
       preload: join(__dirname, '../preload/index.js'),
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: false,
+      sandbox: true,
       webSecurity: true
     }
   })
   win.setAlwaysOnTop(true, 'floating')
+  // 与主窗口/悬浮窗一致的外链与导航防护(此前缺失)
+  win.webContents.setWindowOpenHandler(({ url }) => {
+    if (/^https?:\/\//i.test(url)) void import('electron').then(({ shell }) => shell.openExternal(url))
+    return { action: 'deny' }
+  })
+  const appFileUrl = pathToFileURL(join(__dirname, '../renderer/index.html')).href
+  win.webContents.on('will-navigate', (e, url) => {
+    const allowed = devUrl
+      ? url.startsWith(devUrl)
+      : url === appFileUrl || url.startsWith(appFileUrl + '#')
+    if (!allowed) e.preventDefault()
+  })
   if (devUrl) void win.loadURL(`${devUrl}#floatmenu`)
   else void win.loadFile(join(__dirname, '../renderer/index.html'), { hash: '#floatmenu' })
   win.once('ready-to-show', () => {

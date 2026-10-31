@@ -1,6 +1,7 @@
 /** Electron 主进程入口 */
-import { app, BrowserWindow, shell, nativeTheme, ipcMain, Tray, Menu, nativeImage } from 'electron'
+import { app, BrowserWindow, shell, nativeTheme, ipcMain, Tray, Menu, nativeImage, session } from 'electron'
 import { join } from 'path'
+import { pathToFileURL } from 'url'
 import { readFileSync } from 'fs'
 import { initStore, getStore, saveStore, setSetting } from './store'
 import { initAudio, registerAudioProtocol } from './audio'
@@ -117,7 +118,7 @@ function createWindow(): void {
       preload: join(__dirname, '../preload/index.js'),
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: false,
+      sandbox: true,
       webSecurity: true
     }
   })
@@ -146,10 +147,13 @@ function createWindow(): void {
     return { action: 'deny' }
   })
 
-  // 禁止主窗口导航到远程页面(仅允许本地文件与开发服务器)
+  // 禁止主窗口导航到远程页面(生产仅允许本应用自己的 index.html,开发允许 dev server)
   const devUrl = process.env.ELECTRON_RENDERER_URL
+  const appFileUrl = pathToFileURL(join(__dirname, '../renderer/index.html')).href
   mainWindow.webContents.on('will-navigate', (e, url) => {
-    const allowed = devUrl ? url.startsWith(devUrl) : url.startsWith('file://')
+    const allowed = devUrl
+      ? url.startsWith(devUrl)
+      : url === appFileUrl || url.startsWith(appFileUrl + '#')
     if (!allowed) e.preventDefault()
   })
 
@@ -171,6 +175,21 @@ app.whenReady().then(() => {
   applyTheme()
   initAudio()
   registerAudioProtocol()
+
+  // 权限请求显式收敛:默认会话只放行本应用页面申请的 media(听歌识别的回环音频采集),
+  // 其余(通知/地理位置/剪贴板读取等)一律拒绝;内嵌 B 站登录分区全部拒绝。
+  {
+    const devUrl = process.env.ELECTRON_RENDERER_URL
+    const appFileUrl = pathToFileURL(join(__dirname, '../renderer/index.html')).href
+    session.defaultSession.setPermissionRequestHandler((wc, permission, cb, details) => {
+      const reqUrl = details?.requestingUrl ?? wc.getURL()
+      const ours = devUrl ? reqUrl.startsWith(devUrl) : reqUrl.startsWith('file://')
+      cb(ours && permission === 'media')
+    })
+    session
+      .fromPartition('persist:bili-login')
+      .setPermissionRequestHandler((_wc, _permission, cb) => cb(false))
+  }
 
   // 注入登录态
   const store = getStore()

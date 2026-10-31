@@ -4,7 +4,7 @@ import { readFileSync, writeFileSync, renameSync, mkdirSync, existsSync, unlinkS
 import { join } from 'path'
 import type { Library, Playlist, Settings, Song, DownloadRecord, UserProfile } from '@shared/types'
 
-const defaultSettings: Settings = {
+export const defaultSettings: Settings = {
   theme: 'system',
   accent: '#0f6cbd',
   downloadDir: '',
@@ -84,9 +84,11 @@ interface StoreData extends Library {
  * 环境不支持加密时(部分 Linux 无 keyring)回退为明文,与历史行为一致。 */
 const ENC_PREFIX = 'enc:'
 
-interface StoredCookies {
+interface StoredSecrets {
   biliCookieEnc?: string
   neteaseCookiesEnc?: string
+  /** AudD 识别 token(与 cookie 同样加密落盘) */
+  songRecognizeTokenEnc?: string
 }
 
 function encryptToBlob(text: string): string | null {
@@ -142,7 +144,7 @@ export function initStore(): void {
   filePath = join(dir, 'library.json')
   try {
     if (existsSync(filePath)) {
-      const raw = JSON.parse(readFileSync(filePath, 'utf8')) as Partial<StoreData> & StoredCookies
+      const raw = JSON.parse(readFileSync(filePath, 'utf8')) as Partial<StoreData> & StoredSecrets
       // 加密字段解密回内存(旧存档为明文,直接使用;解密失败则丢弃该登录态)
       const bili = decryptBlob(raw.biliCookieEnc)
       if (bili !== null) raw.biliCookie = bili
@@ -156,6 +158,12 @@ export function initStore(): void {
       }
       delete raw.biliCookieEnc
       delete raw.neteaseCookiesEnc
+      if (raw.settings) {
+        const st = raw.settings as Settings & { songRecognizeTokenEnc?: string }
+        const tk = decryptBlob(st.songRecognizeTokenEnc)
+        if (tk !== null) st.songRecognizeToken = tk
+        delete st.songRecognizeTokenEnc
+      }
       data = { ...emptyData(), ...raw, settings: { ...defaultSettings, ...(raw.settings ?? {}) } }
     }
   } catch (e) {
@@ -229,6 +237,29 @@ export function initStore(): void {
   s.floatFontScale = Math.min(1.6, Math.max(0.7, s.floatFontScale))
   if (typeof s.floatShowTrans !== 'boolean') s.floatShowTrans = true
   if (typeof s.floatShowNextLine !== 'boolean') s.floatShowNextLine = true
+  // 启动时修剪不再被任何列表引用的歌曲元数据,防止 library.json 无限膨胀
+  pruneSongs()
+}
+
+/**
+ * 移除未被 歌单/收藏/最近播放/下载记录 引用的歌曲元数据。
+ * 本地歌曲(source=LOCAL)永远保留:它可能只存在于库中,删了会导致本地文件入口消失。
+ */
+export function pruneSongs(): number {
+  const keep = new Set<string>()
+  for (const p of data.playlists) for (const id of p.songIds) keep.add(id)
+  for (const id of data.favoriteIds ?? []) keep.add(id)
+  for (const r of data.recentPlays) keep.add(r.song.id)
+  for (const d of data.downloads) keep.add(d.song.id)
+  for (const id of data.downloadedIds) keep.add(id)
+  let removed = 0
+  for (const id of Object.keys(data.songs)) {
+    if (keep.has(id) || data.songs[id]?.source === 'LOCAL') continue
+    delete data.songs[id]
+    removed++
+  }
+  if (removed > 0) scheduleSave()
+  return removed
 }
 
 /** 默认下载目录(初始化与恢复出厂共用) */
@@ -272,8 +303,8 @@ export function saveStore(): void {
   if (!filePath) return
   try {
     const tmp = `${filePath}.tmp`
-    // 落盘副本:可用系统加密时,cookie 只写加密字段,不写明文
-    const out: StoreData & StoredCookies = { ...data }
+    // 落盘副本:可用系统加密时,cookie/识别 token 只写加密字段,不写明文
+    const out: StoreData & StoredSecrets = { ...data }
     const biliBlob = encryptToBlob(data.biliCookie)
     const neBlob = encryptToBlob(JSON.stringify(data.neteaseCookies))
     if (biliBlob !== null && neBlob !== null) {
@@ -281,6 +312,14 @@ export function saveStore(): void {
       out.neteaseCookies = {}
       out.biliCookieEnc = biliBlob
       out.neteaseCookiesEnc = neBlob
+    }
+    const token = data.settings.songRecognizeToken
+    if (token) {
+      const tkBlob = encryptToBlob(token)
+      if (tkBlob !== null) {
+        out.settings = { ...out.settings, songRecognizeToken: '' }
+        out.songRecognizeTokenEnc = tkBlob
+      }
     }
     writeFileSync(tmp, JSON.stringify(out), 'utf8')
     renameSync(tmp, filePath)

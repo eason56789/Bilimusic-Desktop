@@ -55,13 +55,11 @@ export async function checkUpdateDetailed(): Promise<UpdateCheckResult> {
     if (!tag) return { status: 'latest', version: current }
     if (compareVersions(tag, current) <= 0) return { status: 'latest', version: current }
     // 下载直连安装包资产(不让用户再去 release 页面里找);
-    // 优先 .exe,其次任意资产,都没有才退回 release 页面
+    // 只认 .exe 安装包,没有(或只有 zip/源码包)就退回 release 页面,避免打开错误资产
     const assets = Array.isArray(json?.assets) ? json.assets : []
     const exe = assets.find((a) => /\.exe$/i.test(a?.name ?? ''))
-    const anyAsset = assets.find((a) => !!a?.browser_download_url)
     const downloadUrl =
       exe?.browser_download_url ??
-      anyAsset?.browser_download_url ??
       String(json?.html_url ?? `https://github.com/${OWNER}/${REPO}/releases`)
     return {
       status: 'update',

@@ -9,7 +9,8 @@ import {
   renameSync,
   unlinkSync
 } from 'fs'
-import { join } from 'path'
+import { join, extname, basename } from 'path'
+import { readdirSync } from 'fs'
 import type { DownloadRecord, Song } from '@shared/types'
 import { resolvePlayUrl, getCidForPage, bvidFromSongId, pageFromSongId, searchVideos } from './api/bilibili'
 import { getSongUrl } from './api/netease'
@@ -75,42 +76,80 @@ function downloadFile(
   onProgress: (received: number, total: number) => void
 ): Promise<void> {
   return new Promise((resolve, reject) => {
+    // 空闲超时:60 秒没有任何新数据(网络停滞)即中止,否则任务永远挂着占并发槽
+    const IDLE_TIMEOUT_MS = 60_000
+    const ac = new AbortController()
+    let idleTimer: ReturnType<typeof setTimeout> | null = null
+    const arm = (): void => {
+      if (idleTimer) clearTimeout(idleTimer)
+      idleTimer = setTimeout(() => ac.abort(), IDLE_TIMEOUT_MS)
+    }
+    const disarm = (): void => {
+      if (idleTimer) clearTimeout(idleTimer)
+      idleTimer = null
+    }
     fetch(url, {
       headers: {
         'User-Agent':
           'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
         ...(referer ? { Referer: referer } : {})
-      }
+      },
+      signal: ac.signal
     })
       .then(async (resp) => {
         if (!resp.ok || !resp.body) {
+          disarm()
           reject(new Error(`HTTP ${resp.status}`))
           return
         }
+        arm()
         const total = parseInt(resp.headers.get('content-length') ?? '0', 10)
         const writer = createWriteStream(dest)
+        // finish/error 先于写入循环挂载,end() 后出错也能 reject
+        writer.on('error', (e) => reject(e))
         const reader = resp.body.getReader()
         let received = 0
         try {
           for (;;) {
             const { done, value } = await reader.read()
             if (done) break
+            arm()
             received += value.byteLength
             if (!writer.write(Buffer.from(value))) {
               await new Promise<void>((r) => writer.once('drain', r))
             }
             onProgress(received, total)
           }
+          disarm()
           writer.end()
           writer.on('finish', () => resolve())
-          writer.on('error', (e) => reject(e))
         } catch (e) {
+          disarm()
           writer.destroy()
           reject(e)
         }
       })
-      .catch(reject)
+      .catch((e) => {
+        disarm()
+        reject(
+          e instanceof Error && e.name === 'AbortError'
+            ? new Error(`下载中断:超过 ${IDLE_TIMEOUT_MS / 1000} 秒没有收到数据`)
+            : e
+        )
+      })
   })
+}
+
+/** 同名冲突时生成不存在的唯一路径:xxx (2).ext */
+function uniquePath(dir: string, name: string): string {
+  let p = join(dir, name)
+  if (!existsSync(p)) return p
+  const ext = extname(name)
+  const base = basename(name, ext)
+  for (let i = 2; ; i++) {
+    p = join(dir, `${base} (${i})${ext}`)
+    if (!existsSync(p)) return p
+  }
 }
 
 /** 解析下载目录(设置缺失时兜底到系统音乐目录,避免相对路径落盘) */
@@ -124,6 +163,15 @@ function downloadDir(): string {
   }
 }
 
+/** 同一首歌重复下载时覆盖自己旧文件;不同歌曲同名冲突时生成唯一文件名 */
+function targetPathFor(song: Song, dir: string, name: string): string {
+  const prev = getStore().downloads.find(
+    (d) => d.status === 'completed' && d.song.id === song.id && d.filePath
+  )
+  if (prev?.filePath && existsSync(prev.filePath)) return prev.filePath
+  return uniquePath(dir, name)
+}
+
 async function processOne(record: DownloadRecord): Promise<void> {
   const dir = downloadDir()
   let tmpPath = ''
@@ -134,14 +182,17 @@ async function processOne(record: DownloadRecord): Promise<void> {
       // 本地歌曲:直接复制到下载目录(不再走网络)
       if (!existsSync(song.localPath)) throw new Error('本地文件不存在')
       const ext = song.localPath.split('.').pop() ?? 'mp3'
-      const finalPath = join(dir, sanitizeFileName(`${song.title} - ${song.artist}.${ext}`))
+      const finalPath = targetPathFor(
+        song,
+        dir,
+        sanitizeFileName(`${song.title} - ${song.artist}.${ext}`)
+      )
       tmpPath = `${finalPath}.part`
       record.received = 0
       record.total = statSync(song.localPath).size
       record.status = 'downloading'
       broadcast({ ...record })
       copyFileSync(song.localPath, tmpPath)
-      if (existsSync(finalPath)) unlinkSync(finalPath)
       renameSync(tmpPath, finalPath)
       record.status = 'completed'
       record.filePath = finalPath
@@ -150,7 +201,7 @@ async function processOne(record: DownloadRecord): Promise<void> {
       const resolved = await resolveDownloadUrl(song)
       if (!resolved) throw new Error('无法获取音频地址')
       const name = sanitizeFileName(`${song.title} - ${song.artist}.${resolved.ext}`)
-      const finalPath = join(dir, name)
+      const finalPath = targetPathFor(song, dir, name)
       tmpPath = `${finalPath}.part`
       let lastEmit = 0
       await downloadFile(resolved.url, resolved.referer, tmpPath, (received, total) => {
@@ -164,7 +215,6 @@ async function processOne(record: DownloadRecord): Promise<void> {
           broadcast({ ...record })
         }
       })
-      if (existsSync(finalPath)) unlinkSync(finalPath)
       renameSync(tmpPath, finalPath)
       record.status = 'completed'
       record.filePath = finalPath
@@ -196,6 +246,8 @@ async function processOne(record: DownloadRecord): Promise<void> {
     record.status = 'error'
     record.error = msg
   }
+  // 无论成功/失败都清掉取消标志:避免对已完成/失败任务点取消时标志残留
+  cancelRequested.delete(record.id)
   addDownloadRecord({ ...record })
   broadcast({ ...record })
 }
@@ -262,7 +314,7 @@ export function enqueueDownload(songs: Song[]): void {
   pump()
 }
 
-/** 恢复上次未完成的任务状态为 error(应用启动时调用) */
+/** 恢复上次未完成的任务状态为 error(应用启动时调用),并清理残留的 .part 临时文件 */
 export function finalizeStaleDownloads(): void {
   const { downloads } = getStore()
   for (const d of downloads) {
@@ -271,5 +323,18 @@ export function finalizeStaleDownloads(): void {
       d.error = '应用重启,任务中断'
       addDownloadRecord({ ...d })
     }
+  }
+  try {
+    const dir = downloadDir()
+    for (const f of readdirSync(dir)) {
+      if (!f.endsWith('.part')) continue
+      try {
+        unlinkSync(join(dir, f))
+      } catch {
+        /* 文件被占用则下次启动再试 */
+      }
+    }
+  } catch {
+    /* 下载目录不存在则跳过 */
   }
 }

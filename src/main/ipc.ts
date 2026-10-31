@@ -1,5 +1,5 @@
 /** 所有 ipcMain.handle 注册 */
-import { ipcMain, dialog, shell, app, BrowserWindow, clipboard, nativeTheme } from 'electron'
+import { ipcMain, dialog, shell, app, BrowserWindow, clipboard, nativeTheme, session } from 'electron'
 import { extname, join, basename } from 'path'
 import { execFile } from 'child_process'
 import { promisify } from 'util'
@@ -56,7 +56,8 @@ import {
   setNeteaseCookieStore,
   setProfile,
   resetStore,
-  getLibraryFilePath
+  getLibraryFilePath,
+  defaultSettings
 } from './store'
 import { setBiliCookie, onBiliCookieChange } from './api/bilibili'
 import { setNeteaseCookies, onNeteaseCookieChange, getNeteaseCookies } from './api/netease'
@@ -102,6 +103,18 @@ function applyThemeNow(theme: string): void {
 
 function ok<T>(data: T): { ok: true; data: T } {
   return { ok: true, data }
+}
+
+/** 清空内嵌 B 站登录网页的持久会话(登出/恢复出厂时调用,防止换人使用时被旧账号秒登录) */
+function clearBiliLoginPartition(): void {
+  try {
+    void session
+      .fromPartition('persist:bili-login')
+      .clearStorageData()
+      .catch((e) => console.warn('[Auth] clear bili-login partition failed', e))
+  } catch (e) {
+    console.warn('[Auth] clear bili-login partition failed', e)
+  }
 }
 
 function err(e: unknown): { ok: false; error: string } {
@@ -841,8 +854,19 @@ export function registerIpc(): void {
   })
   ipcMain.handle(
     'library:setSetting',
-    <K extends keyof Settings>(_e: unknown, key: K, value: Settings[K]) => {
-      setSetting(key, value)
+    (_e: unknown, key: unknown, value: unknown) => {
+      // 白名单 + 类型校验:渲染层(含悬浮菜单转发链路)不能注入任意设置键
+      const defaults = defaultSettings as unknown as Record<string, unknown>
+      if (
+        typeof key !== 'string' ||
+        !(key in defaults) ||
+        value === null ||
+        typeof value !== typeof defaults[key]
+      ) {
+        return getStore().settings
+      }
+      const k = key as keyof Settings
+      setSetting(k, value as Settings[typeof k])
       // 主题即时应用(此前仅在启动时应用,切换后标题栏按钮颜色要等重启才更新)
       if (key === 'theme' && typeof value === 'string') applyThemeNow(value)
       // 悬浮窗锁定即时生效(鼠标穿透/恢复)
@@ -1134,6 +1158,8 @@ export function registerIpc(): void {
     setBiliCookie('')
     setBiliCookieStore('')
     setProfile('bili', null)
+    // 同步清掉内嵌登录窗的持久会话:否则下次"网页登录"会被旧账号自动登录
+    clearBiliLoginPartition()
     return true
   })
 
@@ -1414,7 +1440,18 @@ export function registerIpc(): void {
         if (existsSync(dlDir)) {
           mkdirSync(currentDownloadDir, { recursive: true })
           for (const f of readdirSync(dlDir)) {
-            copyFileSync(join(dlDir, f), join(currentDownloadDir, f))
+            // 同名文件不静默覆盖:追加 (n) 序号
+            let name = f
+            let i = 1
+            while (existsSync(join(currentDownloadDir, name))) {
+              const extIdx = name.lastIndexOf('.')
+              name =
+                extIdx > 0
+                  ? `${name.slice(0, extIdx)} (${i})${name.slice(extIdx)}`
+                  : `${name} (${i})`
+              i++
+            }
+            copyFileSync(join(dlDir, f), join(currentDownloadDir, name))
             restored++
           }
         }
@@ -1446,6 +1483,9 @@ export function registerIpc(): void {
 
   ipcMain.handle('app:factoryReset', () => {
     resetStore()
+    // 恢复出厂同时清掉:音频缓存(缓存的歌曲文件)与内嵌 B 站登录会话
+    clearAudioCache()
+    clearBiliLoginPartition()
     return true
   })
   ipcMain.handle('app:relaunch', () => {
