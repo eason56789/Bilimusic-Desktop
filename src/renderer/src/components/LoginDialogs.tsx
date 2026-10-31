@@ -18,6 +18,7 @@ import {
   tokens
 } from '@fluentui/react-components'
 import { Eye24Regular, EyeOff24Regular } from '@fluentui/react-icons'
+import type { KugouPlatform } from '@shared/types'
 import { useStore } from '../store'
 import { api } from '../lib/api'
 import { toastSuccess, toastError } from '../lib/toast'
@@ -440,6 +441,82 @@ export function NeteaseLoginDialog({ open, onClose }: { open: boolean; onClose: 
                 </Button>
               </div>
             )}
+          </DialogContent>
+        </DialogBody>
+      </DialogSurface>
+    </Dialog>
+  )
+}
+
+/** 酷狗扫码登录(platform 区分普通酷狗 / 酷狗概念版,两版 token 不通用) */
+export function KugouLoginDialog({
+  open,
+  onClose,
+  platform
+}: {
+  open: boolean
+  onClose: () => void
+  platform: KugouPlatform
+}) {
+  const styles = useStyles()
+  const refreshLibrary = useStore((s) => s.refreshLibrary)
+  const [image, setImage] = useState<string | null>(null)
+  const [status, setStatus] = useState<QRStatus>('loading')
+  const [message, setMessage] = useState('')
+  const keyRef = useRef<string | null>(null)
+  const title = platform === 'concept' ? '酷狗概念版登录' : '酷狗音乐登录'
+
+  const startQR = async () => {
+    setStatus('loading')
+    const qr = await api.kugouQRStart(platform)
+    if (!qr) {
+      setStatus('error')
+      setMessage('获取二维码失败')
+      return
+    }
+    setImage(qr.imageDataUrl)
+    keyRef.current = qr.key
+    setStatus('waiting')
+    setMessage('等待扫码...')
+  }
+
+  useEffect(() => {
+    if (!open) return
+    startQR()
+    let stopped = false
+    const timer = setInterval(async () => {
+      if (!keyRef.current || stopped) return
+      const r = await api.kugouQRPoll(platform, keyRef.current)
+      if (stopped) return
+      setMessage(r.message)
+      if (r.status === 'scanned') setStatus('scanned')
+      if (r.status === 'ok') {
+        setStatus('ok')
+        await refreshLibrary()
+        toastSuccess(`${title}成功`)
+        setTimeout(onClose, 800)
+      }
+      if (r.status === 'expired') setStatus('expired')
+    }, 1600)
+    return () => {
+      stopped = true
+      clearInterval(timer)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, platform])
+
+  return (
+    <Dialog open={open} onOpenChange={(_, d) => !d.open && onClose()}>
+      <DialogSurface style={{ minWidth: 400 }}>
+        <DialogBody>
+          <DialogTitle>{title}</DialogTitle>
+          <DialogContent>
+            <div className={styles.qrBox}>
+              <QRPanel imageDataUrl={image} status={status} message={message} onRefresh={startQR} />
+              <Text size={300} style={{ color: tokens.colorNeutralForeground3 }}>
+                {status === 'scanned' ? message : '使用酷狗音乐 App 扫码登录'}
+              </Text>
+            </div>
           </DialogContent>
         </DialogBody>
       </DialogSurface>

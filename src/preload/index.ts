@@ -99,6 +99,13 @@ const api: DesktopApi = {
       data?: { id: number; name: string; coverUrl?: string; count: number }[]
       error?: string
     }>('netease:userPlaylists'),
+  qqUserPlaylists: () =>
+    invoke<{
+      ok: boolean
+      data?: { id: number; name: string; coverUrl?: string; count: number }[]
+      error?: string
+    }>('qq:userPlaylists'),
+  qqImportPlaylist: (id, name) => invoke('qq:importPlaylist', id, name),
   biliImportHistory: () => invoke('bili:importHistory'),
   librarySyncPlaylist: (id) => invoke('library:syncPlaylist', id),
   playlistImportByLink: (url) => invoke('playlist:importByLink', url),
@@ -126,6 +133,11 @@ const api: DesktopApi = {
   neteaseLoginPassword: (phone, password) =>
     invoke<{ ok: boolean; message: string }>('auth:neLoginPassword', phone, password),
   neteaseLogout: () => invoke('auth:neLogout'),
+  qqWebLogin: (kind) => invoke<{ ok: boolean; message: string }>('auth:qqWebLogin', kind),
+  qqLogout: () => invoke('auth:qqLogout'),
+  kugouQRStart: (platform) => invoke('auth:kgQRStart', platform),
+  kugouQRPoll: (platform, key) => invoke('auth:kgQRPoll', platform, key),
+  kugouLogout: (platform) => invoke('auth:kgLogout', platform),
 
   downloadAdd: (songs) => invoke('download:add', songs),
   downloadCancel: (id) => invoke('download:cancel', id),

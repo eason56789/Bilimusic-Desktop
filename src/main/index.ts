@@ -10,6 +10,7 @@ import { finalizeStaleDownloads } from './downloads'
 import { initFloat, showFloat, destroyFloatWindow } from './float'
 import { setBiliCookie } from './api/bilibili'
 import { setNeteaseCookies, onNeteaseCookieChange } from './api/netease'
+import { setQqAuth } from './api/qqmusic'
 import { setNeteaseCookieStore } from './store'
 import { checkUpdateDetailed } from './update'
 
@@ -195,6 +196,7 @@ app.whenReady().then(() => {
   const store = getStore()
   setBiliCookie(store.biliCookie)
   setNeteaseCookies(store.neteaseCookies)
+  setQqAuth(store.qqAuth)
   onNeteaseCookieChange((c) => {
     setNeteaseCookieStore(c)
   })

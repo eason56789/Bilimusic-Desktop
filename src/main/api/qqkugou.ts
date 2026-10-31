@@ -6,6 +6,9 @@
 import type { Song } from '@shared/types'
 import type { LinkedPlaylist } from './linkImport'
 import { normalizeKugouCover, songFromKugouFileItem } from './kugou'
+import { getOrCreateKugouMid } from '../store'
+import { getQqCookie } from './qqmusic'
+import { createHash } from 'crypto'
 
 const UA =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
@@ -22,15 +25,15 @@ function decodeEntities(s: string): string {
     .replace(/&#x2F;/g, '/')
 }
 
-async function getJson(url: string, referer: string): Promise<any> {
-  const resp = await fetch(url, {
-    headers: {
-      'User-Agent': UA,
-      Referer: referer,
-      Accept: 'application/json, text/plain, */*'
-    },
-    signal: AbortSignal.timeout(15_000)
-  })
+async function getJson(url: string, referer: string, cookie?: string): Promise<any> {
+  const headers: Record<string, string> = {
+    'User-Agent': UA,
+    Referer: referer,
+    Accept: 'application/json, text/plain, */*'
+  }
+  // 登录态:自己的/隐私的 QQ 歌单需要 qm_keyst cookie 才能拉到曲目
+  if (cookie) headers.Cookie = cookie
+  const resp = await fetch(url, { headers, signal: AbortSignal.timeout(15_000) })
   if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
   return await resp.json()
 }
@@ -38,11 +41,12 @@ async function getJson(url: string, referer: string): Promise<any> {
 // ============ QQ音乐 ============
 
 export async function fetchQqPlaylist(id: string): Promise<LinkedPlaylist> {
-  // qzone 详情接口(公开歌单无需登录):type=1 返回 songlist
+  // qzone 详情接口(公开歌单无需登录):type=1 返回 songlist;带登录 cookie 可访问自己的/隐私歌单
   const url =
     'https://c.y.qq.com/qzone/fcg-bin/fcg_ucc_getcdinfo_byids_cp.fcg' +
-    `?type=1&json=1&utf8=1&onlysong=0&format=json&disstid=${encodeURIComponent(id)}`
-  const json = await getJson(url, 'https://y.qq.com/')
+    `?type=1&json=1&utf8=1&onlysong=0&format=json&disstid=${encodeURIComponent(id)}` +
+    `&loginUin=${encodeURIComponent(getQqCookie() ? /(?:^|;\s*)uin=(o?\d+)/.exec(getQqCookie())?.[1]?.replace(/^o/, '') ?? '0' : '0')}`
+  const json = await getJson(url, 'https://y.qq.com/', getQqCookie() || undefined)
   const cd = Array.isArray(json?.cdlist) ? json.cdlist[0] : null
   const list: any[] = cd?.songlist ?? []
   if (!cd || list.length === 0) {
@@ -154,16 +158,26 @@ export async function fetchKugouPlaylist(id: string): Promise<LinkedPlaylist> {
  * 酷狗概念版歌单(新版分享链接 t1.kugou.com/xxx 跳转到 activity.kugou.com 分享页,
  * 页面里带 global_specialid=collection_x_y_z 形式的歌单 id)。
  *
- * 这类歌单在旧 v3 special 接口上取不到,必须走 mobiles.kugou.com 的 v5 special/song;
- * filename 形如 "S.H.E - 天灰",拆成歌手/歌名。
+ * 旧 v5 special/song 接口已返回"参数不合法"(2026-10 实测),现走
+ * pubsongs.kugou.com/v2/get_other_list_file_nofilt(android 签名,匿名可用,实测两版盐值均可)。
+ * 曲目 name 形如 "歌手 - 歌名",timelen 为毫秒。
  */
+const KG_SALT = 'OIlwieks28dk2k092lksi2UIkp'
+const KG_SHARE_UA = 'Android9-1070-10597-18-0-Share-wifi'
+
+function kgAndroidSign(params: Record<string, string>): string {
+  const md5 = (s: string): string => createHash('md5').update(s, 'utf8').digest('hex')
+  const joined = Object.keys(params)
+    .sort()
+    .map((k) => `${k}=${params[k]}`)
+    .join('')
+  return md5(KG_SALT + joined + KG_SALT)
+}
+
 export async function fetchKugouCollectionPlaylist(
   globalId: string,
-  specialId?: string
+  _specialId?: string
 ): Promise<LinkedPlaylist> {
-  const UA_KG =
-    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-  const referer = 'https://www.kugou.com/'
   const pageSize = 100
   const maxPages = 50
   const songs: Song[] = []
@@ -171,49 +185,66 @@ export async function fetchKugouCollectionPlaylist(
   let meta: Record<string, unknown> = {}
 
   for (let page = 1; page <= maxPages; page++) {
-    const url =
-      `https://mobiles.kugou.com/api/v5/special/song?specialid=${encodeURIComponent(specialId ?? '')}` +
-      `&global_collection_id=${encodeURIComponent(globalId)}` +
-      `&page=${page}&pagesize=${pageSize}&plat=0&version=8000`
-    const resp = await fetch(url, {
-      headers: { 'User-Agent': UA_KG, Referer: referer },
+    const params: Record<string, string> = {
+      appid: '1005',
+      clientver: '20489',
+      clienttime: String(Math.floor(Date.now() / 1000)),
+      mid: getOrCreateKugouMid(),
+      dfid: '-',
+      uuid: '-',
+      token: '0',
+      userid: '0',
+      global_collection_id: globalId,
+      page: String(page),
+      pagesize: String(pageSize)
+    }
+    params.signature = kgAndroidSign(params)
+    const qs = Object.entries(params)
+      .map(([k, v]) => `${k}=${encodeURIComponent(v)}`)
+      .join('&')
+    const resp = await fetch(`http://pubsongs.kugou.com/v2/get_other_list_file_nofilt?${qs}`, {
+      headers: { 'User-Agent': KG_SHARE_UA },
       signal: AbortSignal.timeout(20_000)
     })
     if (!resp.ok) throw new Error(`酷狗概念版歌单 HTTP ${resp.status}`)
     const json = (await resp.json()) as {
-      data?: { info?: Record<string, unknown>[]; total?: number }
-      errcode?: number
-      error?: string
+      data?: {
+        songs?: Record<string, unknown>[]
+        count?: number
+        list_info?: Record<string, unknown>
+      }
+      error_code?: number
+      errmsg?: string
     }
-    if (json.errcode && json.errcode !== 0) {
-      throw new Error(`酷狗概念版歌单接口错误:${json.error ?? json.errcode}`)
+    if (json.error_code && json.error_code !== 0) {
+      throw new Error(`酷狗概念版歌单接口错误:${json.errmsg ?? json.error_code}`)
     }
-    const list = json?.data?.info ?? []
+    const list = json?.data?.songs ?? []
     if (page === 1) {
-      total = Number(json?.data?.total ?? 0)
-      meta = (json?.data ?? {}) as Record<string, unknown>
+      total = Number(json?.data?.count ?? 0)
+      meta = (json?.data?.list_info ?? {}) as Record<string, unknown>
     }
     for (const it of list) {
-      const filename = String(it.filename ?? '').trim()
-      // filename 通常是 "歌手 - 歌名";没有分隔符时整串当歌名
+      const filename = String(it.name ?? it.filename ?? '').trim()
+      // name 通常是 "歌手 - 歌名";没有分隔符时整串当歌名
       const dash = filename.indexOf(' - ')
       const artist = dash > 0 ? filename.slice(0, dash).trim() : '未知'
       const title = dash > 0 ? filename.slice(dash + 3).trim() : filename
-      const hash = String(it.hash ?? it.sqhash ?? it['320hash'] ?? '').toUpperCase()
+      const hash = String(it.hash ?? '').toUpperCase()
       if (!hash || !title) continue
-      const duration = Math.max(0, Math.round(Number(it.duration ?? 0)))
+      // timelen 为毫秒
+      const duration = Math.max(0, Math.round(Number(it.timelen ?? it.duration ?? 0) / 1000))
       songs.push({
         id: `kg-${hash}`,
         title,
         artist,
-        album: decodeEntities(String(it.album_name ?? '')) || undefined,
-        coverUrl: normalizeKugouCover(String(it.album_image ?? it.imgurl ?? '')) ?? undefined,
+        coverUrl: normalizeKugouCover(String(it.cover ?? it.album_image ?? '')) ?? undefined,
         duration,
         source: 'KUGOU',
         page: 1,
         addedAt: Date.now(),
         kugouHash: hash,
-        kugouMixId: it.album_audio_id ? String(it.album_audio_id) : undefined,
+        kugouMixId: it.audio_id ? String(it.audio_id) : undefined,
         kugouAlbumId: it.album_id ? String(it.album_id) : undefined
       })
     }
@@ -223,40 +254,14 @@ export async function fetchKugouCollectionPlaylist(
   }
   if (songs.length === 0) throw new Error('酷狗概念版歌单为空或不可访问(可能链接失效)')
 
-  // 概念版 song 接口不返回歌单元信息,另取 v5 special/info 补名称/封面/简介
-  let metaInfo: Record<string, unknown> = {}
-  if (specialId) {
-    try {
-      const ir = await fetch(
-        `https://mobiles.kugou.com/api/v5/special/info?specialid=${encodeURIComponent(specialId)}` +
-          `&global_collection_id=${encodeURIComponent(globalId)}&plat=0&version=8000`,
-        { headers: { 'User-Agent': UA_KG, Referer: referer }, signal: AbortSignal.timeout(15_000) }
-      )
-      if (ir.ok) {
-        const ij = (await ir.json()) as { data?: Record<string, unknown> }
-        metaInfo = ij?.data ?? {}
-      }
-    } catch {
-      /* 名称取不到就用兜底名 */
-    }
-  }
-  const merged = { ...meta, ...metaInfo }
-
   return {
     platform: 'kugou',
     playlistId: globalId,
-    name: decodeEntities(String(merged.specialname ?? merged.name ?? `酷狗歌单 ${globalId}`)),
-    coverUrl: normalizeKugouCover(String(merged.imgurl ?? merged.img ?? '')) ?? '',
+    name: decodeEntities(String(meta.name ?? `酷狗歌单 ${globalId}`)),
+    coverUrl: normalizeKugouCover(String(meta.pic ?? meta.imgurl ?? '')) ?? '',
     songs,
-    description: decodeEntities(String(merged.intro ?? merged.desc ?? '')),
-    creator: decodeEntities(String(merged.nickname ?? merged.username ?? '')),
-    playCount:
-      Number(merged.playcount ?? merged.play_count ?? 0) > 0
-        ? Number(merged.playcount ?? merged.play_count)
-        : undefined,
-    favCount:
-      Number(merged.collectcount ?? merged.collect_count ?? 0) > 0
-        ? Number(merged.collectcount ?? merged.collect_count)
-        : undefined
+    description: decodeEntities(String(meta.intro ?? '')),
+    creator: decodeEntities(String(meta.list_create_username ?? '')),
+    favCount: Number(meta.collect_total ?? 0) > 0 ? Number(meta.collect_total) : undefined
   }
 }

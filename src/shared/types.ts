@@ -44,6 +44,8 @@ export interface Playlist {
   updatedAt: number
   songIds: string[]
   favoriteFolderId?: number | null
+  /** QQ 音乐歌单 dissid(导入后可同步) */
+  qqPlaylistId?: number | null
   favoriteFolderName?: string | null
   neteasePlaylistId?: number | null
   /** B站播放记录歌单(可同步) */
@@ -190,6 +192,8 @@ export interface Settings {
   songRecognizeToken?: string
   /** 听歌识别总开关:关闭后搜索页不显示「识曲」按钮(无需清空 Token) */
   songRecognizeEnabled: boolean
+  /** 酷狗设备 MID(登录/签名用;首次启动生成并持久化) */
+  kugouMid?: string
   /** ===== 轻提示(toast)外观 ===== */
   /** 出现位置:顶部居中滑下 / 右下角 / 顶部右侧;off=关闭所有轻提示 */
   toastPosition: 'top-center' | 'bottom-right' | 'top-right' | 'off'
@@ -325,6 +329,17 @@ export interface UserProfile {
   extra?: string
 }
 
+/** 酷狗登录凭据(token+userid 最小可用集;vip 字段登录响应携带时保存) */
+export interface KugouCredential {
+  token: string
+  userid: string
+  vipType?: string
+  vipToken?: string
+}
+
+/** 酷狗身份区分:普通酷狗 与 酷狗概念版(两版 token 不通用,需分别扫码) */
+export type KugouPlatform = 'normal' | 'concept'
+
 export interface Library {
   songs: Record<string, Song>
   playlists: Playlist[]
@@ -335,6 +350,9 @@ export interface Library {
   settings: Settings
   biliProfile?: UserProfile | null
   neteaseProfile?: UserProfile | null
+  qqProfile?: UserProfile | null
+  kugouProfile?: UserProfile | null
+  kugouConceptProfile?: UserProfile | null
   /** 听歌时长统计(date=自然日,跨天加载时 todayMs 清零、累计保留) */
   listenStats?: ListenStats
   /** 收藏的歌曲 id(我的收藏,按收藏时间倒序由 favoriteIds 顺序表达) */
@@ -648,6 +666,9 @@ export interface DesktopApi {
   }>
   importNeteasePlaylist(id: number, name: string): Promise<Playlist | null>
   neteaseUserPlaylists(): Promise<ApiResponse<{ id: number; name: string; coverUrl?: string; count: number }[]>>
+  /** QQ 音乐登录用户的歌单列表(自建+收藏,需登录) */
+  qqUserPlaylists(): Promise<ApiResponse<{ id: number; name: string; coverUrl?: string; count: number }[]>>
+  qqImportPlaylist(id: number, name: string): Promise<Playlist | null>
   /** 导入B站播放记录为歌单 */
   biliImportHistory(): Promise<ApiResponse<{ id: string; count: number }>>
   /**
@@ -679,6 +700,16 @@ export interface DesktopApi {
   neteaseLoginCaptcha(phone: string, captcha: string): Promise<{ ok: boolean; message: string }>
   neteaseLoginPassword(phone: string, password: string): Promise<{ ok: boolean; message: string }>
   neteaseLogout(): Promise<void>
+  /** QQ 音乐:打开内嵌官方授权页(快速登录/扫码),登录后自动 harvest qm_keyst;kind=wx 走微信 OAuth */
+  qqWebLogin(kind?: 'qq' | 'wx'): Promise<{ ok: boolean; message: string }>
+  qqLogout(): Promise<void>
+  /** 酷狗扫码登录:获取二维码(platform 区分普通酷狗/酷狗概念版) */
+  kugouQRStart(platform: KugouPlatform): Promise<{ imageDataUrl: string; key: string } | null>
+  kugouQRPoll(
+    platform: KugouPlatform,
+    key: string
+  ): Promise<{ status: 'waiting' | 'scanned' | 'ok' | 'expired' | 'error'; message: string }>
+  kugouLogout(platform: KugouPlatform): Promise<void>
   // 下载
   downloadAdd(songs: Song[]): Promise<void>
   downloadCancel(id: string): Promise<void>

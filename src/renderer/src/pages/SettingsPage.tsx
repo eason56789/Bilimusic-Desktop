@@ -27,11 +27,11 @@ import { DeleteRegular, ColorRegular, InfoRegular, SettingsRegular, ArrowClockwi
 import { api } from '../lib/api'
 import { useStore, applyEqSettings, getAudioElement, EQ_FREQS } from '../store'
 import { ACCENTS } from '../lib/theme'
-import { BiliLoginDialog, NeteaseLoginDialog } from '../components/LoginDialogs'
+import { BiliLoginDialog, NeteaseLoginDialog, KugouLoginDialog } from '../components/LoginDialogs'
 import { PageLayout } from '../components/PageHeader'
 import { GithubLogo, BiliLogo } from '../components/BrandLogos'
 import { toastSuccess, toastError } from '../lib/toast'
-import type { DisguisePresetInfo, Settings } from '@shared/types'
+import type { DisguisePresetInfo, KugouPlatform, Settings } from '@shared/types'
 
 const useStyles = makeStyles({
   root: {
@@ -72,6 +72,23 @@ export function SettingsPage() {
   const update = useStore((s) => s.updateSetting)
   const [biliLoginOpen, setBiliLoginOpen] = useState(false)
   const [neLoginOpen, setNeLoginOpen] = useState(false)
+  const [kgLoginPlatform, setKgLoginPlatform] = useState<KugouPlatform | null>(null)
+  const [qqBusy, setQqBusy] = useState(false)
+  /** QQ 登录(官方授权页):kind=wx 走微信 OAuth,其余 QQ 快速登录/扫码 */
+  const doQqLogin = async (kind: 'qq' | 'wx'): Promise<void> => {
+    setQqBusy(true)
+    try {
+      const r = await api.qqWebLogin(kind)
+      if (r.ok) {
+        await refresh()
+        toastSuccess('QQ音乐登录成功')
+      } else if (r.message !== '已取消登录') {
+        toastError('登录未完成', r.message)
+      }
+    } finally {
+      setQqBusy(false)
+    }
+  }
   const [version, setVersion] = useState('')
   const [cssDraft, setCssDraft] = useState('')
   const [checking, setChecking] = useState(false)
@@ -257,6 +274,94 @@ export function SettingsPage() {
                 登录
               </Button>
             )}
+          </div>
+
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8, minWidth: 280 }}>
+            <Text size={300} style={{ color: tokens.colorNeutralForeground3 }}>
+              QQ音乐
+            </Text>
+            {library.qqProfile ? (
+              <Persona
+                name={library.qqProfile.nickname}
+                avatar={{
+                  image: { src: library.qqProfile.avatar || undefined },
+                  initials: library.qqProfile.nickname.slice(0, 1)
+                }}
+              />
+            ) : (
+              <Text size={300}>未登录(登录后 VIP 曲目可按会员权限播放)</Text>
+            )}
+            {library.qqProfile ? (
+              <Button
+                onClick={async () => {
+                  await api.qqLogout()
+                  await refresh()
+                  toastSuccess('已退出QQ音乐登录')
+                }}
+              >
+                退出登录
+              </Button>
+            ) : (
+              <div style={{ display: 'flex', gap: 8 }}>
+                <Button
+                  disabled={qqBusy}
+                  onClick={() => void doQqLogin('qq')}
+                >
+                  {qqBusy ? '等待登录…' : '登录'}
+                </Button>
+                <Button
+                  disabled={qqBusy}
+                  onClick={() => void doQqLogin('wx')}
+                >
+                  微信登录
+                </Button>
+              </div>
+            )}
+          </div>
+
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8, minWidth: 280 }}>
+            <Text size={300} style={{ color: tokens.colorNeutralForeground3 }}>
+              酷狗音乐
+            </Text>
+            {[false, true].map((concept) => {
+              const profile = concept ? library.kugouConceptProfile : library.kugouProfile
+              const platform: KugouPlatform = concept ? 'concept' : 'normal'
+              return (
+                <div key={platform} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <Text size={300} style={{ minWidth: 64 }}>
+                    {concept ? '概念版' : '普通版'}
+                  </Text>
+                  {profile ? (
+                    <>
+                      <Persona
+                        name={profile.nickname}
+                        avatar={{
+                          image: { src: profile.avatar || undefined },
+                          initials: profile.nickname.slice(0, 1)
+                        }}
+                      />
+                      <Button
+                        size="small"
+                        onClick={async () => {
+                          await api.kugouLogout(platform)
+                          await refresh()
+                          toastSuccess(`已退出${concept ? '酷狗概念版' : '酷狗'}登录`)
+                        }}
+                      >
+                        退出
+                      </Button>
+                    </>
+                  ) : (
+                    <Button size="small" onClick={() => setKgLoginPlatform(platform)}>
+                      扫码登录
+                    </Button>
+                  )}
+                </div>
+              )
+            })}
+            <Text size={200} style={{ color: tokens.colorNeutralForeground3 }}>
+              普通版与概念版账号不通用,需分别扫码
+            </Text>
           </div>
         </div>
       </div>
@@ -1143,6 +1248,13 @@ export function SettingsPage() {
 
       <BiliLoginDialog open={biliLoginOpen} onClose={() => setBiliLoginOpen(false)} />
       <NeteaseLoginDialog open={neLoginOpen} onClose={() => setNeLoginOpen(false)} />
+      {kgLoginPlatform && (
+        <KugouLoginDialog
+          open
+          platform={kgLoginPlatform}
+          onClose={() => setKgLoginPlatform(null)}
+        />
+      )}
     </PageLayout>
   )
 }

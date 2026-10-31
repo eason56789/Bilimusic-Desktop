@@ -69,9 +69,9 @@ export type RemoteView =
   | { kind: 'history' }
   | { kind: 'fav'; id: number; title: string; coverUrl?: string; count: number }
 
-/** 是否可同步(B站收藏夹 / 网易云歌单 / 播放记录) */
+/** 是否可同步(B站收藏夹 / 网易云歌单 / QQ歌单 / 播放记录) */
 const isSyncable = (pl: Playlist | null | undefined): boolean =>
-  !!(pl && (pl.favoriteFolderId || pl.neteasePlaylistId || pl.biliHistory))
+  !!(pl && (pl.favoriteFolderId || pl.neteasePlaylistId || pl.qqPlaylistId || pl.biliHistory))
 
 /**
  * 歌单详情主体:头部(封面/名称/描述)+ 网易云元信息(播放量/创建时间/创作者/标签)
@@ -455,10 +455,13 @@ export function PlaylistsPage() {
   const [selected, setSelected] = useState<Playlist | null>(null)
   const [createOpen, setCreateOpen] = useState(false)
   const [newName, setNewName] = useState('')
-  const [importOpen, setImportOpen] = useState<'netease' | null>(null)
+  const [importOpen, setImportOpen] = useState<'netease' | 'qq' | null>(null)
   const [biliLoginOpen, setBiliLoginOpen] = useState(false)
   const [neLoginOpen, setNeLoginOpen] = useState(false)
   const [nePlaylists, setNePlaylists] = useState<{ id: number; name: string; count: number }[]>([])
+  const [qqPlaylists, setQqPlaylists] = useState<
+    { id: number; name: string; coverUrl?: string; count: number }[]
+  >([])
   const [importing, setImporting] = useState(false)
   const [renameTarget, setRenameTarget] = useState<Playlist | null>(null)
   const [renameValue, setRenameValue] = useState('')
@@ -543,6 +546,37 @@ export function PlaylistsPage() {
     const list = await api.neteaseUserPlaylists()
     if (list.ok && list.data) setNePlaylists(list.data)
     else toastError('获取歌单失败', list.error)
+  }
+
+  /** 打开 QQ 歌单导入(未登录时提示去设置页登录) */
+  const openQqImport = async () => {
+    if (!library.qqProfile) {
+      toastError('未登录 QQ 音乐', '请到「设置 → 账号」登录 QQ 音乐后重试')
+      return
+    }
+    setImportOpen('qq')
+    setQqPlaylists([])
+    const list = await api.qqUserPlaylists()
+    if (list.ok && list.data) setQqPlaylists(list.data)
+    else toastError('获取歌单失败', list.error ?? '未知错误')
+  }
+
+  const doImportQq = async (id: number, name: string) => {
+    setImporting(true)
+    try {
+      const pl = await api.qqImportPlaylist(id, name)
+      if (pl) {
+        await refresh()
+        toastSuccess('导入成功', `${name} · ${pl.songIds.length} 首`)
+        setImportOpen(null)
+      } else {
+        toastError('导入失败', '内容为空或获取失败')
+      }
+    } catch (e) {
+      toastError('导入失败', String(e))
+    } finally {
+      setImporting(false)
+    }
   }
 
   const doImport = async (id: number, name: string) => {
@@ -748,6 +782,9 @@ export function PlaylistsPage() {
         <>
           <Button icon={<CloudArrowDownRegular />} onClick={openNeteaseImport}>
             导入网易云歌单
+          </Button>
+          <Button icon={<CloudArrowDownRegular />} onClick={openQqImport}>
+            导入QQ歌单
           </Button>
           <Button icon={<OpenRegular />} onClick={() => setLinkOpen(true)}>
             链接导入
@@ -989,6 +1026,47 @@ export function PlaylistsPage() {
                   ))}
                 </div>
               )}
+            </DialogContent>
+            <DialogActions>
+              <Button onClick={() => setImportOpen(null)}>取消</Button>
+            </DialogActions>
+          </DialogBody>
+        </DialogSurface>
+      </Dialog>
+
+      {/* 导入QQ歌单(登录用户的自建+收藏歌单) */}
+      <Dialog open={importOpen === 'qq'} onOpenChange={(_, d) => !d.open && setImportOpen(null)}>
+        <DialogSurface>
+          <DialogBody>
+            <DialogTitle>导入QQ歌单</DialogTitle>
+            <DialogContent>
+              {qqPlaylists.length === 0 ? (
+                <div style={{ display: 'flex', justifyContent: 'center', padding: 16 }}>
+                  <Spinner />
+                </div>
+              ) : (
+                <div style={{ maxHeight: 320, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 4 }}>
+                  {qqPlaylists.map((p) => (
+                    <div
+                      key={p.id}
+                      style={{
+                        display: 'flex',
+                        justifyContent: 'space-between',
+                        padding: '8px 12px',
+                        borderRadius: tokens.borderRadiusMedium,
+                        cursor: 'pointer'
+                      }}
+                      onClick={() => !importing && doImportQq(p.id, p.name)}
+                    >
+                      <span>{p.name}</span>
+                      <span style={{ color: tokens.colorNeutralForeground3 }}>{p.count} 首</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+              <Text size={200} style={{ color: tokens.colorNeutralForeground3, marginTop: 8 }}>
+                导入后支持同步:歌单卡片上的同步按钮会拉取远端最新曲目。
+              </Text>
             </DialogContent>
             <DialogActions>
               <Button onClick={() => setImportOpen(null)}>取消</Button>

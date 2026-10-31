@@ -2,7 +2,16 @@
 import { app, safeStorage } from 'electron'
 import { readFileSync, writeFileSync, renameSync, mkdirSync, existsSync, unlinkSync } from 'fs'
 import { join } from 'path'
-import type { Library, Playlist, Settings, Song, DownloadRecord, UserProfile } from '@shared/types'
+import { createHash } from 'crypto'
+import type {
+  KugouCredential,
+  Library,
+  Playlist,
+  Settings,
+  Song,
+  DownloadRecord,
+  UserProfile
+} from '@shared/types'
 
 export const defaultSettings: Settings = {
   theme: 'system',
@@ -74,9 +83,25 @@ export const defaultSettings: Settings = {
   }
 }
 
+/** 酷狗双身份凭据(normal=普通酷狗 / concept=酷狗概念版) */
+export interface KugouCredentials {
+  normal?: KugouCredential
+  concept?: KugouCredential
+}
+
+/** QQ 音乐登录凭据(cookie 串用于接口请求,refreshKey 留作静默续期) */
+export interface QqAuthData {
+  cookie: string
+  musicid: string
+  musickey: string
+  refreshKey: string
+}
+
 interface StoreData extends Library {
   biliCookie: string
   neteaseCookies: Record<string, string>
+  qqAuth: QqAuthData
+  kugouTokens: KugouCredentials
 }
 
 /** ===== 登录态加密 =====
@@ -89,6 +114,8 @@ interface StoredSecrets {
   neteaseCookiesEnc?: string
   /** AudD 识别 token(与 cookie 同样加密落盘) */
   songRecognizeTokenEnc?: string
+  qqAuthEnc?: string
+  kugouTokensEnc?: string
 }
 
 function encryptToBlob(text: string): string | null {
@@ -122,8 +149,13 @@ const emptyData = (): StoreData => ({
   settings: { ...defaultSettings },
   biliCookie: '',
   neteaseCookies: {},
+  qqAuth: { cookie: '', musicid: '', musickey: '', refreshKey: '' },
+  kugouTokens: {},
   biliProfile: null,
   neteaseProfile: null,
+  qqProfile: null,
+  kugouProfile: null,
+  kugouConceptProfile: null,
   listenStats: { totalMs: 0, todayMs: 0, date: localToday() }
 })
 
@@ -164,6 +196,24 @@ export function initStore(): void {
         if (tk !== null) st.songRecognizeToken = tk
         delete st.songRecognizeTokenEnc
       }
+      const qqBlob = decryptBlob(raw.qqAuthEnc)
+      if (qqBlob !== null) {
+        try {
+          raw.qqAuth = JSON.parse(qqBlob) as StoreData['qqAuth']
+        } catch {
+          /* 忽略损坏的 QQ 凭据 */
+        }
+      }
+      delete raw.qqAuthEnc
+      const kgBlob = decryptBlob(raw.kugouTokensEnc)
+      if (kgBlob !== null) {
+        try {
+          raw.kugouTokens = JSON.parse(kgBlob) as KugouCredentials
+        } catch {
+          /* 忽略损坏的酷狗凭据 */
+        }
+      }
+      delete raw.kugouTokensEnc
       data = { ...emptyData(), ...raw, settings: { ...defaultSettings, ...(raw.settings ?? {}) } }
     }
   } catch (e) {
@@ -321,6 +371,14 @@ export function saveStore(): void {
         out.songRecognizeTokenEnc = tkBlob
       }
     }
+    const qqBlob = encryptToBlob(JSON.stringify(data.qqAuth))
+    const kgBlob = encryptToBlob(JSON.stringify(data.kugouTokens ?? {}))
+    if (qqBlob !== null && kgBlob !== null) {
+      out.qqAuth = { cookie: '', musicid: '', musickey: '', refreshKey: '' }
+      out.kugouTokens = {}
+      out.qqAuthEnc = qqBlob
+      out.kugouTokensEnc = kgBlob
+    }
     writeFileSync(tmp, JSON.stringify(out), 'utf8')
     renameSync(tmp, filePath)
   } catch (e) {
@@ -447,10 +505,47 @@ export function removeDownloadRecord(id: string): void {
   scheduleSave()
 }
 
-export function setProfile(kind: 'bili' | 'netease', profile: UserProfile | null): void {
+export function setProfile(
+  kind: 'bili' | 'netease' | 'qq' | 'kugou' | 'kugouConcept',
+  profile: UserProfile | null
+): void {
   if (kind === 'bili') data.biliProfile = profile
-  else data.neteaseProfile = profile
+  else if (kind === 'netease') data.neteaseProfile = profile
+  else if (kind === 'qq') data.qqProfile = profile
+  else if (kind === 'kugou') data.kugouProfile = profile
+  else data.kugouConceptProfile = profile
   scheduleSave()
+}
+
+export function setQqAuthStore(auth: QqAuthData | null): void {
+  data.qqAuth = auth ?? { cookie: '', musicid: '', musickey: '', refreshKey: '' }
+  scheduleSave()
+}
+
+export function setKugouTokenStore(
+  platform: 'normal' | 'concept',
+  cred: KugouCredential | null
+): void {
+  data.kugouTokens = { ...data.kugouTokens }
+  if (cred) data.kugouTokens[platform] = cred
+  else delete data.kugouTokens[platform]
+  scheduleSave()
+}
+
+export function getKugouCredentials(): KugouCredentials {
+  return data.kugouTokens ?? {}
+}
+
+/** 酷狗设备 MID:首次生成随机 guid → md5 → hex 视为大整数转十进制,持久化复用 */
+export function getOrCreateKugouMid(): string {
+  const existing = data.settings.kugouMid
+  if (existing) return existing
+  const guid = `${Date.now().toString(16)}${Math.random().toString(16).slice(2, 10)}`.padEnd(32, '0')
+  const hex = createHash('md5').update(guid).digest('hex')
+  const mid = BigInt('0x' + hex).toString(10)
+  data.settings.kugouMid = mid
+  scheduleSave()
+  return mid
 }
 
 export function setBiliCookieStore(cookie: string): void {

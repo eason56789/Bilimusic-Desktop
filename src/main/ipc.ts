@@ -15,6 +15,8 @@ import {
 } from 'fs'
 import { tmpdir } from 'os'
 import type {
+  KugouCredential,
+  KugouPlatform,
   Library,
   Playlist,
   PreparedAudio,
@@ -29,7 +31,9 @@ import type {
 import * as bilibili from './api/bilibili'
 import * as netease from './api/netease'
 import * as qqmusic from './api/qqmusic'
+import { getQqUserPlaylists } from './api/qqmusic'
 import * as kugou from './api/kugou'
+import { createKugouQr, pollKugouQr } from './api/kugouLogin'
 import { getSongHot } from './api/songHot'
 import { fetchPlaylistByLink } from './api/linkImport'
 import { fetchQqPlaylist, fetchKugouPlaylist } from './api/qqkugou'
@@ -54,6 +58,8 @@ import {
   removeSearchHistory,
   setBiliCookieStore,
   setNeteaseCookieStore,
+  setQqAuthStore,
+  setKugouTokenStore,
   setProfile,
   resetStore,
   getLibraryFilePath,
@@ -61,6 +67,7 @@ import {
 } from './store'
 import { setBiliCookie, onBiliCookieChange } from './api/bilibili'
 import { setNeteaseCookies, onNeteaseCookieChange, getNeteaseCookies } from './api/netease'
+import { setQqAuth, getQqProfile } from './api/qqmusic'
 import {
   showFloat,
   getFloatWindow,
@@ -105,15 +112,17 @@ function ok<T>(data: T): { ok: true; data: T } {
   return { ok: true, data }
 }
 
-/** 清空内嵌 B 站登录网页的持久会话(登出/恢复出厂时调用,防止换人使用时被旧账号秒登录) */
+/** 清空内嵌登录网页的持久会话(B站/QQ;登出/恢复出厂时调用,防止换人使用时被旧账号秒登录) */
 function clearBiliLoginPartition(): void {
-  try {
-    void session
-      .fromPartition('persist:bili-login')
-      .clearStorageData()
-      .catch((e) => console.warn('[Auth] clear bili-login partition failed', e))
-  } catch (e) {
-    console.warn('[Auth] clear bili-login partition failed', e)
+  for (const name of ['persist:bili-login', 'persist:qq-login']) {
+    try {
+      void session
+        .fromPartition(name)
+        .clearStorageData()
+        .catch((e) => console.warn('[Auth] clear partition failed', name, e))
+    } catch (e) {
+      console.warn('[Auth] clear partition failed', name, e)
+    }
   }
 }
 
@@ -133,6 +142,9 @@ function librarySnapshot(): Library {
     settings: d.settings,
     biliProfile: d.biliProfile,
     neteaseProfile: d.neteaseProfile,
+    qqProfile: d.qqProfile,
+    kugouProfile: d.kugouProfile,
+    kugouConceptProfile: d.kugouConceptProfile,
     listenStats: d.listenStats,
     // 收藏 id 列表必须随快照下发:渲染层的行内心形/播放条/全屏页都读它判断收藏态,
     // 之前漏了这一项,导致「已收藏」永远显示成未收藏
@@ -929,6 +941,10 @@ export function registerIpc(): void {
       complete = r.complete
     } else if (pl.neteasePlaylistId) {
       remote = await netease.getPlaylistDetail(pl.neteasePlaylistId)
+    } else if (pl.qqPlaylistId) {
+      const linked = await fetchQqPlaylist(String(pl.qqPlaylistId))
+      remote = linked.songs
+      complete = true
     } else if (pl.biliHistory) {
       const r = await bilibili.getWatchHistory()
       if (r.notLoggedIn) return { ok: false, error: '请先在「设置 → 账号」中登录哔哩哔哩' }
@@ -1023,6 +1039,28 @@ export function registerIpc(): void {
     pl.songIds = songs.map((s) => s.id)
     pl.syncedIds = [...pl.songIds]
     if (songs[0].coverUrl) pl.coverUrl = songs[0].coverUrl
+    saveStore()
+    return pl
+  })
+
+  // ===== QQ 音乐用户歌单(需登录) =====
+  ipcMain.handle('qq:userPlaylists', async () => {
+    try {
+      return ok(await getQqUserPlaylists())
+    } catch (e) {
+      return err(e)
+    }
+  })
+  ipcMain.handle('qq:importPlaylist', async (_e, id: number, name: string) => {
+    // 失败直接抛出(与 netease:importPlaylist 一致,渲染层 catch 显示)
+    const linked = await fetchQqPlaylist(String(id))
+    if (linked.songs.length === 0) return null
+    upsertSongs(linked.songs)
+    const pl = createPlaylist(name, 'QQ音乐歌单导入')
+    pl.qqPlaylistId = id
+    pl.songIds = linked.songs.map((s) => s.id)
+    pl.syncedIds = [...pl.songIds]
+    if (linked.coverUrl) pl.coverUrl = linked.coverUrl
     saveStore()
     return pl
   })
@@ -1245,6 +1283,150 @@ export function registerIpc(): void {
     setNeteaseCookies({})
     setNeteaseCookieStore({})
     setProfile('netease', null)
+    return true
+  })
+
+  // ===== QQ 音乐登录(内嵌官方授权页:QQ 互联 / 微信 OAuth 二选一,
+  //      登录后 wx_redirect.html 在页面内完成 code 兑换并种下 qm_keyst,轮询 harvest 即可) =====
+  let qqLoginWin: BrowserWindow | null = null
+  const QQ_LOGIN_URL =
+    'https://graph.qq.com/oauth2.0/show?which=Login&display=pc&client_id=100497308&response_type=code' +
+    '&redirect_uri=' + encodeURIComponent('https://y.qq.com/portal/wx_redirect.html?login_type=1&surl=https://y.qq.com/') +
+    '&scope=get_user_info,get_app_friends&state=state'
+  // 微信登录(QQ音乐微信 appid + snsapi_login),与 QQ 流程同回跳页(login_type=2)
+  const QQ_WX_LOGIN_URL =
+    'https://open.weixin.qq.com/connect/qrconnect?appid=wx48db31d50e334801&response_type=code&scope=snsapi_login&state=STATE' +
+    '&redirect_uri=' + encodeURIComponent('https://y.qq.com/portal/wx_redirect.html?login_type=2&surl=https://y.qq.com/')
+  /** 窗口会话里 qq.com 域的全部 cookie(全量拉取后按域过滤,规避 get({domain}) 匹配语义差异) */
+  async function qqDomainCookies(win: BrowserWindow): Promise<Electron.Cookie[]> {
+    try {
+      const all = await win.webContents.session.cookies.get({})
+      return all.filter((c) => !!c.domain && /qq\.com$/.test(c.domain.replace(/^\./, '')))
+    } catch {
+      return []
+    }
+  }
+  /** 读取当前窗口 qq.com 域 cookie 并检测登录态;返回 cookie 串或 null(未检测到登录态) */
+  async function harvestQqCookies(win: BrowserWindow): Promise<string | null> {
+    const cookies = await qqDomainCookies(win)
+    // 登录态核心是 qm_keyst(QQ/微信登录都会种);uin 字段微信账号可能不同名,不再强求
+    const has = (n: string) => cookies.some((c) => c.name === n && c.value)
+    if (!has('qm_keyst')) return null
+    const merged = new Map<string, string>()
+    for (const c of cookies) if (!merged.has(c.name)) merged.set(c.name, c.value)
+    return [...merged].map(([n, v]) => `${n}=${v}`).join('; ')
+  }
+  /** 列出窗口 qq.com 域的全部 cookie 名(诊断用) */
+  async function qqCookieNames(win: BrowserWindow): Promise<string> {
+    const cookies = await qqDomainCookies(win)
+    return cookies.map((c) => c.name).join(',') || '无'
+  }
+  ipcMain.handle('auth:qqWebLogin', async (_e, kind: 'qq' | 'wx' = 'qq') => {
+    if (qqLoginWin && !qqLoginWin.isDestroyed()) {
+      qqLoginWin.focus()
+      return { ok: false, message: '登录窗口已打开' }
+    }
+    // 关键:开窗前清掉分区里残留的旧登录会话,否则 harvest 会在窗口打开瞬间
+    // 把上次的 qm_keyst 当成本次登录成功(表现为"点了微信登录却登上了QQ号")
+    try {
+      await session.fromPartition('persist:qq-login').clearStorageData()
+    } catch (e) {
+      console.warn('[Auth] clear qq-login session failed', e)
+    }
+    return await new Promise<{ ok: boolean; message: string }>((resolve) => {
+      const wx = kind === 'wx'
+      const win = new BrowserWindow({
+        width: wx ? 500 : 640,
+        height: 620,
+        title: wx ? 'QQ音乐登录(微信)' : 'QQ音乐登录',
+        autoHideMenuBar: true,
+        backgroundColor: '#ffffff',
+        webPreferences: {
+          // 独立持久分区:保留网页登录会话,下次免重登
+          partition: 'persist:qq-login',
+          contextIsolation: true,
+          nodeIntegration: false
+        }
+      })
+      qqLoginWin = win
+      let settled = false
+      let poll: ReturnType<typeof setInterval> | null = null
+      const finish = async (cancelMessage: string) => {
+        if (settled) return
+        settled = true
+        if (poll) clearInterval(poll)
+        // 页面可能已自行关闭(closed 后 cookie 仍可读),关闭前做最后一次 harvest
+        const cookieStr = win.isDestroyed() ? null : await harvestQqCookies(win)
+        const cookieDiag = await qqCookieNames(win)
+        if (!win.isDestroyed()) win.destroy()
+        qqLoginWin = null
+        if (cookieStr) {
+          try {
+            setQqAuth({ cookie: cookieStr })
+            setQqAuthStore({ cookie: cookieStr, musicid: '', musickey: '', refreshKey: '' })
+            const p = await getQqProfile().catch(() => null)
+            setProfile('qq', {
+              uid: Number(/uin=(o?\d+)/.exec(cookieStr)?.[1]?.replace(/^o/, '') ?? 0),
+              nickname: p?.nickname ?? 'QQ音乐用户',
+              avatar: p?.avatar ?? ''
+            })
+          } catch (e) {
+            console.warn('[Auth] finish qq login failed', e)
+          }
+          resolve({ ok: true, message: '登录成功' })
+        } else {
+          // 诊断:带上窗口里实际存在的 cookie 名,便于定位微信登录的 cookie 字段差异
+          resolve({ ok: false, message: `${cancelMessage}(cookie: ${cookieDiag})` })
+        }
+      }
+      poll = setInterval(async () => {
+        if (!settled && (await harvestQqCookies(win))) void finish('已取消登录')
+      }, 600)
+      win.on('closed', () => void finish('已取消登录'))
+      win.loadURL(wx ? QQ_WX_LOGIN_URL : QQ_LOGIN_URL)
+    })
+  })
+  ipcMain.handle('auth:qqLogout', () => {
+    setQqAuth({ cookie: '' })
+    setQqAuthStore(null)
+    setProfile('qq', null)
+    return true
+  })
+
+  // ===== 酷狗登录(普通版 / 概念版,QR 两步流程) =====
+  ipcMain.handle('auth:kgQRStart', async (_e, platform: KugouPlatform) => {
+    try {
+      const qr = await createKugouQr(platform === 'concept' ? 'concept' : 'normal')
+      if (!qr) return null
+      const imageDataUrl = await QRCode.toDataURL(qr.content, { width: 220, margin: 1 })
+      return { imageDataUrl, key: qr.key }
+    } catch (e) {
+      console.error('[Auth] kugou QR start', e)
+      return null
+    }
+  })
+  ipcMain.handle('auth:kgQRPoll', async (_e, platform: KugouPlatform, key: string) => {
+    try {
+      const state = await pollKugouQr(platform === 'concept' ? 'concept' : 'normal', key)
+      if (state.status === 'ok') {
+        const cred: KugouCredential = { token: state.token, userid: state.userid }
+        if (state.vipType) cred.vipType = state.vipType
+        if (state.vipToken) cred.vipToken = state.vipToken
+        setKugouTokenStore(platform, cred)
+        setProfile(platform === 'concept' ? 'kugouConcept' : 'kugou', {
+          uid: Number(state.userid) || 0,
+          nickname: state.vipType ? `酷狗用户 ${state.userid}(VIP)` : `酷狗用户 ${state.userid}`,
+          avatar: ''
+        })
+      }
+      return { status: state.status, message: state.message }
+    } catch (e) {
+      return { status: 'error' as const, message: e instanceof Error ? e.message : String(e) }
+    }
+  })
+  ipcMain.handle('auth:kgLogout', (_e, platform: KugouPlatform) => {
+    setKugouTokenStore(platform, null)
+    setProfile(platform === 'concept' ? 'kugouConcept' : 'kugou', null)
     return true
   })
 
