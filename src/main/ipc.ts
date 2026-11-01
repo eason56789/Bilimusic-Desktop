@@ -320,6 +320,90 @@ async function findQqMatch(song: Song): Promise<Song | null> {
   return pickBestMatch(song, pool)
 }
 
+/** 设置分区 → 该分区包含的设置键(供"按分区恢复默认"使用;名称与设置页侧栏一致) */
+const SECTION_SETTING_KEYS: Record<string, (keyof Settings)[]> = {
+  外观: [
+    'theme',
+    'accent',
+    'windowEffect',
+    'glassAlpha',
+    'pageAnimation',
+    'uiScale',
+    'density',
+    'customCss',
+    'uiModules',
+    'toastPosition',
+    'toastDuration',
+    'toastStyle',
+    'toastShowIcon'
+  ],
+  播放: [
+    'eqEnabled',
+    'eqGains',
+    'playbackRate',
+    'pitchSemitones',
+    'volume',
+    'preservePitch',
+    'sleepTimerMinutes',
+    'sleepFadeOut'
+  ],
+  歌词: [
+    'lyricStyle',
+    'pvArrange',
+    'pvAnim',
+    'pvLayout',
+    'pvAccent',
+    'pvScale',
+    'pvDecor',
+    'pvMotion',
+    'pvBlockScenes',
+    'pvFrame',
+    'pvInvertText',
+    'pvTransition',
+    'pvTexture',
+    'pvCameraMotion',
+    'pvCharMotion',
+    'pvCharTiming',
+    'pvPan',
+    'pvZoom',
+    'pvColorMode',
+    'pvPost',
+    'pvGrain',
+    'pvContrast',
+    'pvRgbShift',
+    'pvVignette',
+    'pvLens',
+    'pvWholeLine',
+    'pvTailEmphasis',
+    'pvOffsetX',
+    'pvOffsetY',
+    'lyricOffsetMs',
+    'lyricAlign',
+    'lyricBlurEnabled',
+    'lyricBlurAmount',
+    'lyricBlurCurrent',
+    'lyricBlurNear',
+    'lyricBlurMid',
+    'lyricBlurFar',
+    'lyricTransMode',
+    'lyricTransScale',
+    'lyricTransAlpha',
+    'lyricTransLayout',
+    'lyricSize'
+  ],
+  搜索: [
+    'defaultSearchSource',
+    'neteaseFallback',
+    'filterLongVideo',
+    'longVideoMinutes',
+    'filterLoopTitles',
+    'filterKeywords',
+    'searchOrder'
+  ],
+  听歌识别: ['songRecognizeEnabled', 'songRecognizeToken'],
+  下载: ['downloadDir']
+}
+
 export function registerIpc(): void {
   // B站设备 cookie 合并后持久化(收藏夹/播放记录等接口需要 buvid3)
   onBiliCookieChange(setBiliCookieStore)
@@ -469,10 +553,44 @@ export function registerIpc(): void {
     }
   )
   // 平台歌单 → 本地歌单(QQ/酷狗搜索结果「导入为歌单」)
+  /**
+   * 来源歌单查重:按(来源 platform + 来源 id)找已导入的本地歌单。
+   * 匹配顺序:通用 sourcePlatform/sourceId 标记 → 旧版专用 id 字段
+   * (neteasePlaylistId/qqPlaylistId/kugouPlaylistId/favoriteFolderId)
+   * → 回退「sourcePlatform 相同 + 名称完全相同」(旧存档没有通用标记时的兜底)。
+   */
+  function findImportedPlaylist(platform: string, sourceId: string, name?: string): Playlist | undefined {
+    const pls = getStore().playlists
+    const sid = String(sourceId)
+    const isKugou =
+      platform === 'kugou' || platform === 'kugou-concept' || platform === 'normal' || platform === 'concept'
+    const byGeneric = (p: Playlist): boolean =>
+      p.sourcePlatform === platform && p.sourceId != null && String(p.sourceId) === sid
+    const byLegacy = (p: Playlist): boolean =>
+      platform === 'netease'
+        ? p.neteasePlaylistId != null && String(p.neteasePlaylistId) === sid
+        : platform === 'qq'
+          ? p.qqPlaylistId != null && String(p.qqPlaylistId) === sid
+          : isKugou
+            ? p.kugouPlaylistId != null && p.kugouPlaylistId === sid
+            : platform === 'bili'
+              ? p.favoriteFolderId != null && String(p.favoriteFolderId) === sid
+              : false
+    return (
+      pls.find(byGeneric) ??
+      pls.find(byLegacy) ??
+      (name ? pls.find((p) => p.sourcePlatform === platform && p.name === name) : undefined)
+    )
+  }
   ipcMain.handle(
     'library:importSourcePlaylist',
     async (_e, platform: 'qq' | 'kugou', id: string, name?: string) => {
       try {
+        // 查重兜底:同一来源歌单只导入一次,已导入过直接返回已有歌单,不再新建
+        const existing = findImportedPlaylist(platform, id, name?.trim() || undefined)
+        if (existing) {
+          return ok({ id: existing.id, name: existing.name, count: existing.songIds.length })
+        }
         const pl = platform === 'qq' ? await fetchQqPlaylist(id) : await fetchKugouPlaylist(id)
         if (pl.songs.length === 0) return { ok: false as const, error: '歌单内容为空或不可访问' }
         upsertSongs(pl.songs)
@@ -481,6 +599,8 @@ export function registerIpc(): void {
         if (pl.coverUrl) created.coverUrl = pl.coverUrl
         created.songIds = pl.songs.map((s) => s.id)
         created.syncedIds = [...created.songIds]
+        created.sourcePlatform = platform
+        created.sourceId = id
         saveStore()
         return ok({ id: created.id, name: created.name, count: created.songIds.length })
       } catch (e) {
@@ -911,6 +1031,35 @@ export function registerIpc(): void {
     }
   )
 
+  // 恢复默认设置:只重置 Settings 对象;登录态、曲库、已下载歌曲均不受影响。
+  // 传入分区名数组时,只重置这些分区包含的设置键;不传 = 全部恢复默认。
+  ipcMain.handle('library:resetSettings', (_e: unknown, sections?: unknown) => {
+    const st = getStore()
+    const sel = Array.isArray(sections)
+      ? (sections as unknown[]).filter((s): s is string => typeof s === 'string')
+      : null
+    if (!sel || sel.length === 0) {
+      // 保留"已完成引导"标记,避免重置后重新弹首启引导
+      st.settings = { ...defaultSettings, onboarded: true }
+    } else {
+      const defs = defaultSettings as unknown as Record<string, unknown>
+      const next = { ...st.settings } as unknown as Record<string, unknown>
+      for (const name of sel) {
+        for (const k of SECTION_SETTING_KEYS[name] ?? []) {
+          const v = defs[k]
+          // 数组/对象字段拷贝一份,避免与出厂默认共享引用
+          next[k] = Array.isArray(v) ? [...v] : v && typeof v === 'object' ? { ...(v as object) } : v
+        }
+      }
+      st.settings = { ...(next as unknown as Settings), onboarded: true }
+    }
+    saveStore()
+    applyThemeNow(st.settings.theme)
+    setFloatLocked(!!st.settings.floatLyricLocked)
+    notifyFloatMenuState()
+    return st.settings
+  })
+
   // ===== 导入 =====
   ipcMain.handle('library:addListenTime', (_e, ms: number) => {
     const v = Number(ms)
@@ -929,12 +1078,17 @@ export function registerIpc(): void {
     bilibili.getWatchHistoryPage(max, viewAt, 20)
   )
   ipcMain.handle('bili:importFav', async (_e, folderId: number, folderName: string) => {
+    // 查重兜底:同一收藏夹只导入一次,已导入过直接返回已有歌单
+    const existing = findImportedPlaylist('bili', String(folderId), folderName)
+    if (existing) return existing
     const { songs } = await bilibili.getFavoriteResources(folderId)
     if (songs.length === 0) return null
     upsertSongs(songs)
     const pl = createPlaylist(folderName, `B站收藏夹导入 · ${songs.length}首`)
     pl.favoriteFolderId = folderId
     pl.favoriteFolderName = folderName
+    pl.sourcePlatform = 'bili'
+    pl.sourceId = String(folderId)
     pl.songIds = songs.map((s) => s.id)
     pl.syncedIds = [...pl.songIds]
     if (songs[0].coverUrl) pl.coverUrl = songs[0].coverUrl
@@ -1027,6 +1181,9 @@ export function registerIpc(): void {
   ipcMain.handle('playlist:importByLink', async (_e, link: string) => {
     try {
       const linked = await fetchPlaylistByLink(link)
+      // 查重兜底:同一来源歌单只导入一次,已导入过直接返回已有歌单
+      const existing = findImportedPlaylist(linked.platform, linked.playlistId, linked.name)
+      if (existing) return ok({ id: existing.id, name: existing.name, count: existing.songIds.length })
       upsertSongs(linked.songs)
       const platformText =
         linked.platform === 'netease' ? '网易云' : linked.platform === 'qq' ? 'QQ音乐' : '酷狗'
@@ -1036,6 +1193,8 @@ export function registerIpc(): void {
       if (linked.platform === 'netease') pl.neteasePlaylistId = Number(linked.playlistId)
       else if (linked.platform === 'qq') pl.qqPlaylistId = Number(linked.playlistId)
       else if (linked.platform === 'kugou') pl.kugouPlaylistId = linked.playlistId
+      pl.sourcePlatform = linked.platform
+      pl.sourceId = linked.playlistId
       pl.songIds = linked.songs.map((s) => s.id)
       pl.syncedIds = [...pl.songIds]
       if (linked.songs[0]?.coverUrl) pl.coverUrl = linked.songs[0].coverUrl
@@ -1055,11 +1214,16 @@ export function registerIpc(): void {
     }
   })
   ipcMain.handle('netease:importPlaylist', async (_e, id: number, name: string) => {
+    // 查重兜底:已导入过(按来源 id)直接返回已有歌单,不再新建
+    const existing = findImportedPlaylist('netease', String(id), name)
+    if (existing) return existing
     const songs = await netease.getPlaylistDetail(id)
     if (songs.length === 0) return null
     upsertSongs(songs)
     const pl = createPlaylist(name, '网易云歌单导入')
     pl.neteasePlaylistId = id
+    pl.sourcePlatform = 'netease'
+    pl.sourceId = String(id)
     pl.songIds = songs.map((s) => s.id)
     pl.syncedIds = [...pl.songIds]
     if (songs[0].coverUrl) pl.coverUrl = songs[0].coverUrl
@@ -1076,12 +1240,17 @@ export function registerIpc(): void {
     }
   })
   ipcMain.handle('qq:importPlaylist', async (_e, id: number, name: string) => {
+    // 查重兜底:已导入过(按来源 id)直接返回已有歌单,不再新建
+    const existing = findImportedPlaylist('qq', String(id), name)
+    if (existing) return existing
     // 失败直接抛出(与 netease:importPlaylist 一致,渲染层 catch 显示)
     const linked = await fetchQqPlaylist(String(id))
     if (linked.songs.length === 0) return null
     upsertSongs(linked.songs)
     const pl = createPlaylist(name, 'QQ音乐歌单导入')
     pl.qqPlaylistId = id
+    pl.sourcePlatform = 'qq'
+    pl.sourceId = String(id)
     pl.songIds = linked.songs.map((s) => s.id)
     pl.syncedIds = [...pl.songIds]
     if (linked.coverUrl) pl.coverUrl = linked.coverUrl
@@ -1463,6 +1632,9 @@ export function registerIpc(): void {
   })
   // 导入酷狗歌单(collection_ 前缀走概念版收藏接口,其余按老版 specialid)
   ipcMain.handle('kugou:importPlaylist', async (_e, platform: KugouPlatform, id: string, name: string) => {
+    // 查重兜底:已导入过(按来源 id)直接返回已有歌单,不再新建(normal/concept 归同一酷狗家族)
+    const existing = findImportedPlaylist(platform === 'concept' ? 'kugou-concept' : 'kugou', id, name)
+    if (existing) return existing
     const linked = /^collection_/.test(id)
       ? await fetchKugouCollectionPlaylist(id)
       : await fetchKugouPlaylist(id)
@@ -1470,6 +1642,8 @@ export function registerIpc(): void {
     upsertSongs(linked.songs)
     const pl = createPlaylist(name, platform === 'concept' ? '酷狗概念版歌单导入' : '酷狗歌单导入')
     pl.kugouPlaylistId = linked.playlistId
+    pl.sourcePlatform = platform === 'concept' ? 'kugou-concept' : 'kugou'
+    pl.sourceId = linked.playlistId
     pl.songIds = linked.songs.map((s) => s.id)
     pl.syncedIds = [...pl.songIds]
     if (linked.coverUrl) pl.coverUrl = linked.coverUrl

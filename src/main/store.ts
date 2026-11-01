@@ -69,6 +69,31 @@ export const defaultSettings: Settings = {
   pvScale: 1,
   pvDecor: true,
   pvMotion: 1,
+  pvBlockScenes: true,
+  pvFrame: true,
+  pvInvertText: true,
+  pvTransition: true,
+  pvTexture: 1,
+  pvCameraMotion: 1,
+  pvCharMotion: 1,
+  pvCharTiming: 1,
+  pvPan: 1,
+  pvZoom: 1,
+  pvColorMode: 'mono',
+  pvPost: true,
+  pvGrain: 0.15,
+  pvContrast: 0,
+  pvRgbShift: 0,
+  pvVignette: 0.4,
+  pvLens: 0.15,
+  pvWholeLine: false,
+  pvTailEmphasis: 0.38,
+  pvOffsetX: 0,
+  /** 纵移存的是内部实际值;滑杆显示值 = 实际值 - 0.11(0.11 才是构图正常位) */
+  pvOffsetY: 0.11,
+  pvTemperaEnter: 'classic',
+  pvJizuraMood: 'auto',
+  pvJizuraStyle: 'auto',
   defaultSearchSource: 'netease',
   neteaseFallback: true,
   songRecognizeEnabled: true,
@@ -285,6 +310,10 @@ export function initStore(): void {
   }
   // 界面样式已统一为经典 Fluent:清掉历史存档里的 uiStyle 字段(MD3 风格已移除)
   delete (s as unknown as Record<string, unknown>).uiStyle
+  // 凝彩纵移基准调整:正常位 0.25 → 0.11(整幅构图再上移 14%),旧存档的旧基准值一并迁移
+  if (Math.abs((typeof s.pvOffsetY === 'number' ? s.pvOffsetY : 0.25) - 0.25) < 1e-6) {
+    s.pvOffsetY = 0.11
+  }
   if (typeof s.showChorusMarks !== 'boolean') s.showChorusMarks = defaultSettings.showChorusMarks
   // 悬浮窗布局升级:旧存档记的是旧式窄条位置,统一换成 QQ 音乐式底部居中默认布局
   if (s.floatLyricBoundsVersion !== 2) {

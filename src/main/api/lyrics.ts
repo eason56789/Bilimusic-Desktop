@@ -8,6 +8,7 @@ import {
   fetchSubtitleContent
 } from './bilibili'
 import { getLyricNew, searchSongs } from './netease'
+import { getQqRichLyrics, findQqRichLyrics } from './qqLyrics'
 
 /** 解析 LRC 文本 */
 export function parseLrc(lrc: string): LyricLine[] {
@@ -211,14 +212,54 @@ export function hasRichTiming(lines: LyricLine[]): boolean {
 }
 
 /**
- * 逐字补齐:如果当前歌词没有逐字数据,去网易云再找一遍。
+ * 逐字补齐:如果当前歌词没有逐字数据,按「QQ 原生 QRC → 网易云 yrc」找带逐字的版本。
  *
  * 用户的诉求是"任一平台拿不到逐字就去别的平台找,三家都没有才强制逐字"。
- * 目前只有网易云提供 yrc(逐字),所以这里把它作为唯一的逐字来源:
- * 已经拿到逐字就直接返回;否则按「标题 + 歌手」搜索并按行数/时间接近度挑最匹配的一首。
+ * QQ 歌曲且 qqMid 已知时优先走 QQ 原生 QRC(逐字精度与原生一致,免去搜索匹配的错配风险),
+ * 拿不到再按「标题 + 歌手」到网易云搜索并按行数/时间接近度挑最匹配的一首。
  */
 async function enrichWithRichTiming(song: Song, lines: LyricLine[]): Promise<LyricLine[] | null> {
   if (hasRichTiming(lines)) return null
+
+  // 来源 0:跨平台去 QQ 音乐找最匹配的一首(QQ 逐字覆盖最全,任何来源的歌都先试)
+  if (!song.qqMid) {
+    try {
+      const cross = await findQqRichLyrics(song.title, song.artist, song.duration)
+      if (
+        cross &&
+        cross.length > 0 &&
+        hasRichTiming(cross) &&
+        (lines.length === 0 || cross.length >= Math.max(4, lines.length * 0.5)) &&
+        (lines.length === 0 || Math.abs(cross[0].timeMs - lines[0].timeMs) <= 20_000)
+      ) {
+        return stripLines(cross)
+      }
+    } catch (e) {
+      console.warn('[Lyrics] qq cross-platform enrichment failed', e)
+    }
+  }
+
+  // 来源 1:QQ 原生 QRC
+  if (song.qqMid) {
+    try {
+      const qq = await getQqRichLyrics(song.qqMid, song.qqId)
+      const rich = qq?.lines ?? []
+      if (
+        rich.length > 0 &&
+        hasRichTiming(rich) &&
+        // 行数太少说明 QRC 不完整,不值得替换
+        (lines.length === 0 || rich.length >= Math.max(4, lines.length * 0.5)) &&
+        // 首行时间差太大说明不是同一版本(现场版/remix)
+        (lines.length === 0 || Math.abs(rich[0].timeMs - lines[0].timeMs) <= 20_000)
+      ) {
+        return stripLines(rich)
+      }
+    } catch (e) {
+      console.warn('[Lyrics] qq qrc enrichment failed', e)
+    }
+  }
+
+  // 来源 2:网易云 yrc
   try {
     const r = await searchSongs(`${song.title} ${song.artist}`, 8, 0)
     if (!r.songs.length) return null
@@ -252,8 +293,27 @@ export async function getLyrics(song: Song): Promise<LyricsResult> {
   if (cached) return cached
   let result: LyricsResult = { lines: [], provider: 'none' }
   try {
+    // QQ 原生 QRC 逐字歌词:QQMUSIC 源且 mid 已知时最优先(逐字精度最好),
+    // 失败/无 QRC 再走下方网易云兜底
+    if (song.source === 'QQMUSIC' && song.qqMid) {
+      const qq = await getQqRichLyrics(song.qqMid, song.qqId)
+      if (qq && qq.lines.length > 0 && hasRichTiming(qq.lines)) {
+        result = { lines: stripLines(qq.lines), provider: 'qq', title: song.title }
+      }
+    }
+    // 其它来源:同样先到 QQ 找一份匹配的逐字歌词(用户要求"无论从哪里播放,默认先从 QQ 拿逐字")
+    if (result.lines.length === 0) {
+      try {
+        const cross = await findQqRichLyrics(song.title, song.artist, song.duration)
+        if (cross && cross.length > 0 && hasRichTiming(cross)) {
+          result = { lines: stripLines(cross), provider: 'qq', title: song.title }
+        }
+      } catch (e) {
+        console.warn('[Lyrics] qq first-choice lookup failed', e)
+      }
+    }
     // 有 neteaseId 优先取网易云歌词(垫底/换源后的 B站流歌曲,标题元数据仍是原曲)
-    if (song.neteaseId) {
+    if (result.lines.length === 0 && song.neteaseId) {
       const ly = await getLyricNew(song.neteaseId)
       let lines = pickLines(ly)
       if (lines.length > 0) {
@@ -261,7 +321,7 @@ export async function getLyrics(song: Song): Promise<LyricsResult> {
         if (ly.tlyric) lines = mergeTranslation(lines, ly.tlyric)
         result = { lines, provider: 'netease', title: song.title }
       }
-    } else if (song.source === 'QQMUSIC' || song.source === 'KUGOU') {
+    } else if (result.lines.length === 0 && (song.source === 'QQMUSIC' || song.source === 'KUGOU')) {
       // QQ/酷狗无自建歌词:按「标题 歌手」到网易云搜索,取最接近的一首的歌词
       try {
         const r = await searchSongs(`${song.title} ${song.artist}`, 5, 0)

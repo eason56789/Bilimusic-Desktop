@@ -54,6 +54,13 @@ export interface Playlist {
   biliHistory?: boolean
   /** 上次同步拉到的歌曲 id 快照:下次同步据此算增删,并保护手动加入的歌曲 */
   syncedIds?: string[]
+  /**
+   * 通用来源标记(可选、向后兼容):导入入口统一写入,按(来源 platform + 来源 id)查重防重复导入。
+   * platform 取 'netease' | 'qq' | 'kugou' | 'kugou-concept' | 'bili' 等;
+   * 旧歌单无此字段,查重回退到上面各平台专用 id 字段或「名称完全相同 + 来源相同」。
+   */
+  sourcePlatform?: string | null
+  sourceId?: string | null
 }
 
 export interface RecentPlay {
@@ -198,7 +205,7 @@ export interface Settings {
    * - 'claddagh' 回环:整行沿圆弧排布,字随切线旋转
    * - 'still'    时计:静态三行(上一句/当前句/下一句)
    */
-  pvArrange: 'pv' | 'partita' | 'claddagh' | 'still' | 'tempera'
+  pvArrange: 'pv' | 'partita' | 'claddagh' | 'still' | 'tempera' | 'jizura'
   /** PV 逐字入场动效 */
   pvAnim: 'pop' | 'rise' | 'slam' | 'wave' | 'typewriter'
   /** PV 版式:自动(按句语义/种子轮转)或指定某套排版 */
@@ -211,6 +218,55 @@ export interface Settings {
   pvDecor: boolean
   /** PV 运动强度 0~2(0=静止,1=正常) */
   pvMotion: number
+  /** ===== 凝彩舞台细化选项(对齐听屿设置面板) ===== */
+  /** 色块场景:关闭后不渲染构图色块(只留纸面与文字) */
+  pvBlockScenes: boolean
+  /** 边角线框:四角 L 形角标 */
+  pvFrame: boolean
+  /** 文字动态反色(差分反相);关闭后文字用固定墨色 */
+  pvInvertText: boolean
+  /** 场景转场(句间交接运镜);关闭后直接切换 */
+  pvTransition: boolean
+  /** 纹理分辨率 0.5~4(纸面网点密度,越高越细、越吃 GPU) */
+  pvTexture: number
+  /** 镜头运动强度 0~2 */
+  pvCameraMotion: number
+  /** 逐字动势 0~2(单字入场位移/旋转幅度) */
+  pvCharMotion: number
+  /** 逐字入场时序 0.25~2(1=默认;越大入场窗口越长、越舒缓) */
+  pvCharTiming: number
+  /** 镜头平移 0~2 */
+  pvPan: number
+  /** 歌词远近 0.25~2(1=默认;>1 更近/放大) */
+  pvZoom: number
+  /** 色彩模式:主题双色 / 黑白灰 / 封面渐变 */
+  pvColorMode: 'theme' | 'mono' | 'cover'
+  /** 整体后处理滤镜总开关 */
+  pvPost: boolean
+  /** 胶片颗粒 0~1 */
+  pvGrain: number
+  /** 对比度增强 0~1 */
+  pvContrast: number
+  /** RGB 色差 0~1 */
+  pvRgbShift: number
+  /** 暗角 0~1 */
+  pvVignette: number
+  /** 透镜扭曲 0~1 */
+  pvLens: number
+  /** 整句显示歌词(整句同时入场,不做逐字卡拉OK时序) */
+  pvWholeLine: boolean
+  /** 尾字强调概率 0~1(句尾 1~2 字/词甩到新行放大;0=关闭) */
+  pvTailEmphasis: number
+  /** 凝彩画面横向平移 -0.5~0.5(占宽度比例;正=向右) */
+  pvOffsetX: number
+  /** 凝彩画面纵向平移 -0.25~0.5(内部实际值,占高度比例;正=向下;0.11=构图正常位,UI 显示值=此值-0.11) */
+  pvOffsetY: number
+  /** 凝彩逐字入场:classic=原版7种(默认) / jizura=JIZURA9种 / mixed=全部 / 或某个具体样式名 */
+  pvTemperaEnter: string
+  /** JIZURA 舞台 mood(glitch/calm/pop/graphic/editorial/emotional…;'auto'=按种子自动) */
+  pvJizuraMood: string
+  /** JIZURA 舞台 style(如 'noir';'auto'=自动) */
+  pvJizuraStyle: string
   /** 搜索默认音源 */
   defaultSearchSource: 'netease' | 'bili' | 'qq' | 'kugou'
   /** 网易云无音源时自动到 B站/QQ/酷狗搜索垫底 */
@@ -440,7 +496,8 @@ export interface LyricLine {
 
 export interface LyricsResult {
   lines: LyricLine[]
-  provider: 'bilibili' | 'netease' | 'none'
+  /** 歌词来源:qq = QQ 音乐原生 QRC(逐字) */
+  provider: 'bilibili' | 'netease' | 'qq' | 'none'
   title?: string
 }
 
@@ -702,6 +759,8 @@ export interface DesktopApi {
   libraryRemoveSearchHistory(q: string): Promise<void>
   libraryClearSearchHistory(): Promise<void>
   librarySetSetting<K extends keyof Settings>(key: K, value: Settings[K]): Promise<Settings>
+  /** 恢复默认设置(保留登录态/曲库/引导标记),返回重置后的 Settings;传入分区名数组时只重置这些分区 */
+  libraryResetSettings(sections?: string[]): Promise<Settings>
   /** 累加听歌时长(渲染层播放中每10s/暂停时冲刷),返回最新统计 */
   libraryAddListenTime(ms: number): Promise<ListenStats>
   // 导入

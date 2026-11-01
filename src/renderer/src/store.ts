@@ -212,6 +212,8 @@ interface PlayerState {
   /** 打开针对某首歌的弹窗(右键详情/换源等);song 为 null 时回退当前播放 */
   openSongDialog(d: DialogKey, song: Song | null): void
   updateSetting<K extends keyof Settings>(key: K, value: Settings[K]): Promise<void>
+  /** 恢复默认设置(保留登录态/曲库),返回重置后的 Settings;传分区名则只重置这些分区 */
+  resetSettings(sections?: string[]): Promise<Settings>
   setPlaybackRate(rate: number): void
   /** 设置音调(半音,-12~+12);0=原调 */
   setPitch(semitones: number): void
@@ -1066,6 +1068,13 @@ export const useStore = create<PlayerState>((set, get) => {
       const settings = await api.librarySetSetting(key, value)
       const lib = get().library
       if (lib) set({ library: { ...lib, settings } })
+    },
+
+    async resetSettings(sections?: string[]) {
+      const settings = await api.libraryResetSettings(sections)
+      const lib = get().library
+      if (lib) set({ library: { ...lib, settings } })
+      return settings
     },
 
     playAt(index) {

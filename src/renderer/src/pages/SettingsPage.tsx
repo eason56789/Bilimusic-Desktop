@@ -1,7 +1,8 @@
 /** 设置页:账号/外观/播放/搜索/下载/缓存/关于 */
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import {
   Button,
+  Checkbox,
   Dialog,
   DialogActions,
   DialogBody,
@@ -23,7 +24,7 @@ import {
   makeStyles,
   tokens
 } from '@fluentui/react-components'
-import { DeleteRegular, ColorRegular, InfoRegular, SettingsRegular, ArrowClockwiseRegular, SaveRegular } from '@fluentui/react-icons'
+import { DeleteRegular, ColorRegular, InfoRegular, SettingsRegular, ArrowClockwiseRegular, SaveRegular, SearchRegular } from '@fluentui/react-icons'
 import { api } from '../lib/api'
 import { useStore, applyEqSettings, getAudioElement, EQ_FREQS } from '../store'
 import { ACCENTS } from '../lib/theme'
@@ -31,6 +32,7 @@ import { BiliLoginDialog, NeteaseLoginDialog, KugouLoginDialog } from '../compon
 import { PageLayout } from '../components/PageHeader'
 import { GithubLogo, BiliLogo } from '../components/BrandLogos'
 import { toastSuccess, toastError } from '../lib/toast'
+import { TEMPERA_ENTER_OPTIONS } from '../lib/tempera'
 import type { DisguisePresetInfo, KugouPlatform, Settings } from '@shared/types'
 
 /** 文字PV 入场动效显示名(设置页与全屏页菜单共用文案) */
@@ -63,6 +65,51 @@ const useStyles = makeStyles({
     overflowY: 'auto'
   },
   section: { display: 'flex', flexDirection: 'column', gap: '12px' },
+  searchBox: { display: 'flex', flexDirection: 'column', gap: '6px', maxWidth: '600px' },
+  searchRow: { display: 'flex', gap: '10px', alignItems: 'center' },
+  /** 左侧分类侧栏(样式与排行榜页目录栏完全一致:216px + 右分隔线 + 独立滚动) */
+  bodyRow: { display: 'flex', minHeight: 0, height: '100%' },
+  catNav: {
+    width: '216px',
+    flexShrink: 0,
+    display: 'flex',
+    flexDirection: 'column',
+    borderRight: `1px solid ${tokens.colorNeutralStroke2}`,
+    minHeight: 0,
+    minWidth: 0
+  },
+  catHead: { padding: '12px 12px 8px' },
+  catBody: { flex: 1, overflowY: 'auto', padding: '0 6px 12px', minHeight: 0 },
+  catFooter: { padding: '8px 12px 10px' },
+  catItem: {
+    display: 'flex',
+    alignItems: 'center',
+    width: '100%',
+    padding: '6px 8px',
+    border: 'none',
+    background: 'transparent',
+    borderRadius: tokens.borderRadiusMedium,
+    color: tokens.colorNeutralForeground1,
+    fontSize: tokens.fontSizeBase300,
+    textAlign: 'left',
+    cursor: 'default',
+    ':hover': { background: tokens.colorNeutralBackground3 }
+  },
+  catItemActive: {
+    background: tokens.colorBrandBackground2,
+    color: tokens.colorBrandForeground2,
+    fontWeight: 600
+  },
+  bodyMain: {
+    flex: 1,
+    minWidth: 0,
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '16px',
+    overflowY: 'auto',
+    padding: '0 4px 20px 20px'
+  },
+  noHit: { color: tokens.colorNeutralForeground3, paddingLeft: '2px' },
   row: { display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' },
   swatch: {
     width: '28px',
@@ -84,6 +131,57 @@ function SectionTitle({ children }: { children: React.ReactNode }) {
     </Text>
   )
 }
+
+/** 设置分区索引(供设置页顶部搜索过滤用) */
+const SETTING_SECTIONS: { name: string; keywords: string }[] = [
+  { name: '账号', keywords: '账号 登录 退出 b站 哔哩哔哩 bilibili 网易云 qq音乐 qq 酷狗 概念版 扫码 cookie 授权' },
+  { name: '外观', keywords: '主题 深色 浅色 强调色 窗口材质 云母 亚克力 玻璃 不透明度 界面大小 密度 css 自定义样式 模块显隐 页面切换 动画 toast 轻提示' },
+  { name: '播放', keywords: 'eq 均衡器 音质 倍速 音调 变调 变速 音量 渐弱 保留音调 睡眠定时 定时 停止 播放记忆 续播' },
+  {
+    name: '歌词',
+    keywords:
+      '歌词 样式 文字pv 排布 凝彩 云阶 回环 时计 入场 动效 版式 字号 大小 运动强度 镜头 逐字 时序 尾字 强调 色块 装饰 线框 反色 转场 整句 色彩模式 主题双色 黑白 封面渐变 后处理 颗粒 对比度 色差 暗角 透镜 模糊 对齐 翻译 译文 偏移 offset'
+  },
+  { name: '搜索', keywords: '默认音源 垫底 搜索 历史 过滤 长视频 循环 关键词' },
+  { name: '快捷方式伪装', keywords: '伪装 快捷方式 图标 桌面 伪装成' },
+  { name: '听歌识别', keywords: '识别 听歌 audD token 密钥 识曲' },
+  { name: '下载', keywords: '下载 目录 路径 音质 保存' },
+  { name: '缓存', keywords: '缓存 清理 空间' },
+  { name: '备份与恢复', keywords: '备份 恢复 出厂 重置 导入 导出' },
+  { name: '关于', keywords: '关于 版本 更新 检查更新 github 源码' }
+]
+
+/** 含可重置设置键的分区(与主进程 SECTION_SETTING_KEYS 的键一致;其余分区无可重置项) */
+const RESETTABLE_SECTIONS = ['外观', '播放', '歌词', '搜索', '听歌识别', '下载']
+
+/** JIZURA 舞台的情绪(对应引擎 J.MOODS) */
+const JIZURA_MOODS: { value: string; label: string }[] = [
+  { value: 'auto', label: '自动(按种子)' },
+  { value: 'glitch', label: '故障 Glitch' },
+  { value: 'calm', label: '静谧 Calm' },
+  { value: 'pop', label: '流行 Pop' },
+  { value: 'graphic', label: '图形 Graphic' },
+  { value: 'editorial', label: '编辑 Editorial' },
+  { value: 'emotional', label: '情绪 Emotional' },
+  { value: 'chaos', label: '全混 Chaos' }
+]
+
+/** JIZURA 舞台的风格(对应引擎 J.STYLES) */
+const JIZURA_STYLES: { value: string; label: string }[] = [
+  { value: 'auto', label: '自动(按种子)' },
+  { value: 'noir', label: 'Noir 黑白' },
+  { value: 'crimson', label: 'Crimson 绯红' },
+  { value: 'caution', label: 'Caution 警示黄' },
+  { value: 'magenta', label: 'Magenta 洋红' },
+  { value: 'paper', label: 'Paper 纸感' },
+  { value: 'hud', label: 'HUD 仪表' },
+  { value: 'mint', label: 'Mint 薄荷' },
+  { value: 'specimen', label: 'Specimen 标本' },
+  { value: 'transit', label: 'Transit 交通' },
+  { value: 'blueprint', label: 'Blueprint 蓝图' },
+  { value: 'rouge', label: 'Rouge 胭脂' },
+  { value: 'mono', label: 'Mono 单色' }
+]
 
 export function SettingsPage() {  const styles = useStyles()
   const library = useStore((s) => s.library)
@@ -118,6 +216,14 @@ export function SettingsPage() {  const styles = useStyles()
   const [presetIcons, setPresetIcons] = useState<Record<string, string>>({})
   const [disguiseId, setDisguiseId] = useState('wechat')
   const [disguiseBusy, setDisguiseBusy] = useState(false)
+  /** 设置搜索关键词(过滤分区用) */
+  const [query, setQuery] = useState('')
+  /** 侧栏当前选中的分类 */
+  const [activeSec, setActiveSec] = useState('账号')
+  /** 恢复默认设置确认框 */
+  const [resetOpen, setResetOpen] = useState(false)
+  /** 恢复默认:勾选的分区(打开确认框时全部勾上) */
+  const [resetSel, setResetSel] = useState<Record<string, boolean>>({})
 
   useEffect(() => {
     api.appVersion().then((v) => setVersion(`${v.version} (Electron ${v.electron})`))
@@ -225,11 +331,85 @@ export function SettingsPage() {  const styles = useStyles()
   if (!library) return null
   const s = library.settings
 
+  // ===== 设置搜索:按关键词过滤分区 =====
+  const q = query.trim().toLowerCase()
+  const sectionRefs = useRef<Record<string, HTMLDivElement | null>>({})
+  const secVisible = (name: string): boolean => {
+    if (!q) return true
+    const meta = SETTING_SECTIONS.find((x) => x.name === name)
+    return !!meta && (meta.name.toLowerCase().includes(q) || meta.keywords.includes(q))
+  }
+  const sec = (name: string): React.HTMLAttributes<HTMLDivElement> & {
+    ref: (el: HTMLDivElement | null) => void
+  } => ({
+    ref: (el: HTMLDivElement | null) => {
+      sectionRefs.current[name] = el
+    },
+    className: styles.section,
+    style: secVisible(name) ? undefined : { display: 'none' }
+  })
+  const visibleSections = q ? SETTING_SECTIONS.filter((x) => secVisible(x.name)).length : SETTING_SECTIONS.length
+  /** 侧栏点击:滚动到对应分区 */
+  const jumpTo = (name: string): void => {
+    setActiveSec(name)
+    sectionRefs.current[name]?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  }
+
+  /** 恢复默认设置:主进程重置所选分区的设置键,再即时回位 EQ 节点与窗口材质 */
+  const doResetSettings = async (): Promise<void> => {
+    const selNames = RESETTABLE_SECTIONS.filter((n) => resetSel[n] !== false)
+    const next = await useStore.getState().resetSettings(selNames)
+    try {
+      applyEqSettings(next)
+      void api.windowSetEffect(next.windowEffect)
+    } catch {
+      /* 个别即时应用失败不影响重置结果 */
+    }
+    const names = selNames.join('、')
+    toastSuccess('已恢复默认设置', `分区:${names} · 登录状态与曲库不受影响`)
+  }
+
   return (
     <PageLayout icon={<SettingsRegular />} title="设置" subtitle="账号 · 外观 · 播放 · 下载">
-      {/* 账号 */}
-      <div className={styles.section}>
-        <SectionTitle>账号</SectionTitle>
+      {/* 左:分类侧栏(对齐排行榜页的目录栏)+ 右:设置分区 */}
+      <div className={styles.bodyRow}>
+        <div className={styles.catNav}>
+          <div className={styles.catHead}>
+            <Input
+              size="small"
+              contentBefore={<SearchRegular style={{ fontSize: 14, color: tokens.colorNeutralForeground3 }} />}
+              placeholder="搜索设置…"
+              value={query}
+              onChange={(_, d) => setQuery(d.value)}
+              style={{ width: '100%', minWidth: 0 }}
+            />
+          </div>
+          <div className={styles.catBody}>
+            {SETTING_SECTIONS.filter((x) => secVisible(x.name)).map((x) => (
+              <button
+                key={x.name}
+                className={`${styles.catItem} ${activeSec === x.name ? styles.catItemActive : ''}`}
+                onClick={() => jumpTo(x.name)}
+              >
+                {x.name}
+              </button>
+            ))}
+            {q && visibleSections === 0 ? (
+              <Text size={200} className={styles.noHit} style={{ padding: 10, display: 'block' }}>
+                没有匹配「{query.trim()}」的设置
+              </Text>
+            ) : null}
+          </div>
+          <div className={styles.catFooter}>
+            <Button size="small" icon={<ArrowClockwiseRegular />} style={{ width: '100%' }} onClick={() => setResetOpen(true)}>
+              恢复默认设置
+            </Button>
+          </div>
+        </div>
+        <div className={styles.bodyMain}>
+          {/* 账号 */}
+          <div {...sec('账号')}>
+            <SectionTitle>账号</SectionTitle>
         <div style={{ display: 'flex', gap: '48px', flexWrap: 'wrap' }}>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8, minWidth: 280 }}>
             <Text size={300} style={{ color: tokens.colorNeutralForeground3 }}>
@@ -388,7 +568,7 @@ export function SettingsPage() {  const styles = useStyles()
       <Divider />
 
       {/* 外观 */}
-      <div className={styles.section}>
+      <div {...sec("外观")}>
         <SectionTitle>外观</SectionTitle>
         <RadioGroup
           layout="horizontal"
@@ -692,7 +872,7 @@ export function SettingsPage() {  const styles = useStyles()
       <Divider />
 
       {/* 播放 */}
-      <div className={styles.section}>
+      <div {...sec("播放")}>
         <SectionTitle>播放</SectionTitle>
         <div className={styles.row}>
           <Field label="网易云音质">
@@ -838,7 +1018,7 @@ export function SettingsPage() {  const styles = useStyles()
       <Divider />
 
       {/* 歌词(分层模糊 + 对齐,对齐手机端) */}
-      <div className={styles.section}>
+      <div {...sec("歌词")}>
         <SectionTitle>歌词</SectionTitle>
         {/* ===== 歌词视觉样式:经典滚动 / 文字PV ===== */}
         <div className={styles.row}>
@@ -871,8 +1051,50 @@ export function SettingsPage() {  const styles = useStyles()
                 <Radio value="claddagh" label="回环" />
                 <Radio value="still" label="时计" />
                 <Radio value="tempera" label="凝彩" />
+                <Radio value="jizura" label="印刷分镜" />
               </RadioGroup>
             </div>
+            {/* ===== JIZURA 舞台参数(引擎自带风格系统) ===== */}
+            {(s.pvArrange ?? 'pv') === 'jizura' && (
+              <>
+                <div className={styles.row}>
+                  <Text size={300} style={{ minWidth: 96 }}>
+                    情绪:
+                  </Text>
+                  <Dropdown
+                    value={JIZURA_MOODS.find((o) => o.value === (s.pvJizuraMood ?? 'auto'))?.label ?? '自动'}
+                    selectedOptions={[s.pvJizuraMood ?? 'auto']}
+                    onOptionSelect={(_, d) => update('pvJizuraMood', String(d.optionValue))}
+                  >
+                    {JIZURA_MOODS.map((o) => (
+                      <Option key={o.value} value={o.value}>
+                        {o.label}
+                      </Option>
+                    ))}
+                  </Dropdown>
+                </div>
+                <div className={styles.row}>
+                  <Text size={300} style={{ minWidth: 96 }}>
+                    风格:
+                  </Text>
+                  <Dropdown
+                    value={JIZURA_STYLES.find((o) => o.value === (s.pvJizuraStyle ?? 'auto'))?.label ?? '自动'}
+                    selectedOptions={[s.pvJizuraStyle ?? 'auto']}
+                    onOptionSelect={(_, d) => update('pvJizuraStyle', String(d.optionValue))}
+                  >
+                    {JIZURA_STYLES.map((o) => (
+                      <Option key={o.value} value={o.value}>
+                        {o.label}
+                      </Option>
+                    ))}
+                  </Dropdown>
+                </div>
+                <Text size={200} style={{ color: tokens.colorNeutralForeground3 }}>
+                  自带 REC 取景框、时间码、分栏色块、票券/对话框版式与 RGB 错位字等印刷分镜效果。
+                  切到本样式后由它接管整块歌词区域。
+                </Text>
+              </>
+            )}
             <div className={styles.row}>
               <Text size={300} style={{ minWidth: 96 }}>
                 入场动效:
@@ -948,6 +1170,262 @@ export function SettingsPage() {  const styles = useStyles()
               checked={s.pvDecor !== false}
               onChange={(_, d) => update('pvDecor', d.checked)}
             />
+            {/* ===== 凝彩舞台细化选项(对齐听屿设置面板;仅凝彩排布显示) ===== */}
+            {(s.pvArrange ?? 'pv') === 'tempera' && (
+              <>
+                <Divider />
+                <Text size={300} weight="semibold">
+                  凝彩舞台 · 显示内容
+                </Text>
+                <Switch
+                  label="色块场景"
+                  checked={s.pvBlockScenes !== false}
+                  onChange={(_, d) => update('pvBlockScenes', d.checked)}
+                />
+                <Switch
+                  label="边角线框"
+                  checked={s.pvFrame !== false}
+                  onChange={(_, d) => update('pvFrame', d.checked)}
+                />
+                <Switch
+                  label="文字动态反色"
+                  checked={s.pvInvertText !== false}
+                  onChange={(_, d) => update('pvInvertText', d.checked)}
+                />
+                <Switch
+                  label="场景转场"
+                  checked={s.pvTransition !== false}
+                  onChange={(_, d) => update('pvTransition', d.checked)}
+                />
+                <Switch
+                  label="整句显示歌词"
+                  checked={s.pvWholeLine === true}
+                  onChange={(_, d) => update('pvWholeLine', d.checked)}
+                />
+                <Text size={300} weight="semibold">
+                  凝彩舞台 · 动效与色调
+                </Text>
+                <div className={styles.row}>
+                  <Text size={300} style={{ minWidth: 140 }}>
+                    纹理分辨率 {(s.pvTexture ?? 1).toFixed(1)}x
+                  </Text>
+                  <Slider
+                    min={0.5}
+                    max={4}
+                    step={0.1}
+                    value={s.pvTexture ?? 1}
+                    onChange={(_, d) => update('pvTexture', d.value)}
+                  />
+                </div>
+                <div className={styles.row}>
+                  <Text size={300} style={{ minWidth: 140 }}>
+                    镜头运动强度 {(s.pvCameraMotion ?? 1).toFixed(2)}x
+                  </Text>
+                  <Slider
+                    min={0}
+                    max={2}
+                    step={0.05}
+                    value={s.pvCameraMotion ?? 1}
+                    onChange={(_, d) => update('pvCameraMotion', d.value)}
+                  />
+                </div>
+                <div className={styles.row}>
+                  <Text size={300} style={{ minWidth: 140 }}>
+                    逐字动势 {(s.pvCharMotion ?? 1).toFixed(2)}x
+                  </Text>
+                  <Slider
+                    min={0}
+                    max={2}
+                    step={0.05}
+                    value={s.pvCharMotion ?? 1}
+                    onChange={(_, d) => update('pvCharMotion', d.value)}
+                  />
+                </div>
+                <div className={styles.row}>
+                  <Text size={300} style={{ minWidth: 140 }}>
+                    逐字入场时序 {(s.pvCharTiming ?? 1).toFixed(2)}x
+                  </Text>
+                  <Slider
+                    min={0.25}
+                    max={2}
+                    step={0.05}
+                    value={s.pvCharTiming ?? 1}
+                    onChange={(_, d) => update('pvCharTiming', d.value)}
+                  />
+                </div>
+                <div className={styles.row}>
+                  <Text size={300} style={{ minWidth: 140 }}>
+                    逐字入场:
+                  </Text>
+                  <Dropdown
+                    value={
+                      TEMPERA_ENTER_OPTIONS.find((o) => o.value === (s.pvTemperaEnter ?? 'auto'))?.label ??
+                      TEMPERA_ENTER_OPTIONS[0].label
+                    }
+                    selectedOptions={[s.pvTemperaEnter ?? 'auto']}
+                    onOptionSelect={(_, d) => update('pvTemperaEnter', String(d.optionValue))}
+                  >
+                    {TEMPERA_ENTER_OPTIONS.map((o) => (
+                      <Option key={o.value} value={o.value}>
+                        {o.label}
+                      </Option>
+                    ))}
+                  </Dropdown>
+                </div>
+                <div className={styles.row}>
+                  <Text size={300} style={{ minWidth: 140 }}>
+                    尾字强调概率 {Math.round((s.pvTailEmphasis ?? 0.38) * 100)}%
+                  </Text>
+                  <Slider
+                    min={0}
+                    max={1}
+                    step={0.05}
+                    value={s.pvTailEmphasis ?? 0.38}
+                    onChange={(_, d) => update('pvTailEmphasis', d.value)}
+                  />
+                </div>
+                <div className={styles.row}>
+                  <Text size={300} style={{ minWidth: 140 }}>
+                    镜头平移 {(s.pvPan ?? 1).toFixed(2)}x
+                  </Text>
+                  <Slider
+                    min={0}
+                    max={2}
+                    step={0.05}
+                    value={s.pvPan ?? 1}
+                    onChange={(_, d) => update('pvPan', d.value)}
+                  />
+                </div>
+                <div className={styles.row}>
+                  <Text size={300} style={{ minWidth: 140 }}>
+                    歌词远近 {(s.pvZoom ?? 1).toFixed(2)}x
+                  </Text>
+                  <Slider
+                    min={0.25}
+                    max={2}
+                    step={0.05}
+                    value={s.pvZoom ?? 1}
+                    onChange={(_, d) => update('pvZoom', d.value)}
+                  />
+                </div>
+                <div className={styles.row}>
+                  <Text size={300} style={{ minWidth: 140 }}>
+                    画面横移 {((s.pvOffsetX ?? 0) >= 0 ? '+' : '') + Math.round((s.pvOffsetX ?? 0) * 100)}%
+                  </Text>
+                  <Slider
+                    min={-0.5}
+                    max={0.5}
+                    step={0.01}
+                    value={s.pvOffsetX ?? 0}
+                    onChange={(_, d) => update('pvOffsetX', d.value)}
+                  />
+                </div>
+                <div className={styles.row}>
+                  <Text size={300} style={{ minWidth: 140 }}>
+                    画面纵移{' '}
+                    {((s.pvOffsetY ?? 0.11) - 0.11 >= 0 ? '+' : '') + Math.round(((s.pvOffsetY ?? 0.11) - 0.11) * 100)}%
+                  </Text>
+                  {/* 显示值 = 实际值 - 0.11(0.11 是构图正常位);拖动结果换算回实际值再落盘 */}
+                  <Slider
+                    min={-0.5}
+                    max={0.25}
+                    step={0.01}
+                    value={(s.pvOffsetY ?? 0.11) - 0.11}
+                    onChange={(_, d) => update('pvOffsetY', d.value + 0.11)}
+                  />
+                </div>
+                <div className={styles.row}>
+                  <Text size={300}>色彩模式:</Text>
+                  <RadioGroup
+                    layout="horizontal"
+                    value={s.pvColorMode ?? 'mono'}
+                    onChange={(_, d) => update('pvColorMode', d.value as typeof s.pvColorMode)}
+                  >
+                    <Radio value="theme" label="主题双色" />
+                    <Radio value="mono" label="黑白灰" />
+                    <Radio value="cover" label="封面渐变" />
+                  </RadioGroup>
+                </div>
+                <Text size={200} style={{ color: tokens.colorNeutralForeground3 }}>
+                  「封面渐变」从当前歌曲封面提取主色,提取失败自动回退主题双色。
+                </Text>
+                <Text size={300} weight="semibold">
+                  后处理
+                </Text>
+                <Switch
+                  label="整体后处理滤镜"
+                  checked={s.pvPost !== false}
+                  onChange={(_, d) => update('pvPost', d.checked)}
+                />
+                {s.pvPost !== false && (
+                  <>
+                    <div className={styles.row}>
+                      <Text size={300} style={{ minWidth: 140 }}>
+                        胶片颗粒 {(s.pvGrain ?? 0.15).toFixed(2)}x
+                      </Text>
+                      <Slider
+                        min={0}
+                        max={1}
+                        step={0.05}
+                        value={s.pvGrain ?? 0.15}
+                        onChange={(_, d) => update('pvGrain', d.value)}
+                      />
+                    </div>
+                    <div className={styles.row}>
+                      <Text size={300} style={{ minWidth: 140 }}>
+                        对比度增强 {(s.pvContrast ?? 0).toFixed(2)}x
+                      </Text>
+                      <Slider
+                        min={0}
+                        max={1}
+                        step={0.05}
+                        value={s.pvContrast ?? 0}
+                        onChange={(_, d) => update('pvContrast', d.value)}
+                      />
+                    </div>
+                    <div className={styles.row}>
+                      <Text size={300} style={{ minWidth: 140 }}>
+                        RGB 色差 {(s.pvRgbShift ?? 0).toFixed(2)}x
+                      </Text>
+                      <Slider
+                        min={0}
+                        max={1}
+                        step={0.05}
+                        value={s.pvRgbShift ?? 0}
+                        onChange={(_, d) => update('pvRgbShift', d.value)}
+                      />
+                    </div>
+                    <div className={styles.row}>
+                      <Text size={300} style={{ minWidth: 140 }}>
+                        暗角 {(s.pvVignette ?? 0.4).toFixed(2)}x
+                      </Text>
+                      <Slider
+                        min={0}
+                        max={1}
+                        step={0.05}
+                        value={s.pvVignette ?? 0.4}
+                        onChange={(_, d) => update('pvVignette', d.value)}
+                      />
+                    </div>
+                    <div className={styles.row}>
+                      <Text size={300} style={{ minWidth: 140 }}>
+                        透镜扭曲 {(s.pvLens ?? 0.15).toFixed(2)}x
+                      </Text>
+                      <Slider
+                        min={0}
+                        max={1}
+                        step={0.05}
+                        value={s.pvLens ?? 0.15}
+                        onChange={(_, d) => update('pvLens', d.value)}
+                      />
+                    </div>
+                  </>
+                )}
+                <Text size={200} style={{ color: tokens.colorNeutralForeground3 }}>
+                  提高纹理分辨率会增加 GPU 显存占用和渲染负载,可能影响性能。
+                </Text>
+              </>
+            )}
             <Text size={200} style={{ color: tokens.colorNeutralForeground3 }}>
               文字PV 使用逐字卡拉OK上色(与经典样式同一套时间轴);全屏页控制条上的「PV」按钮可随时切换样式与动效。
             </Text>
@@ -1101,7 +1579,7 @@ export function SettingsPage() {  const styles = useStyles()
       <Divider />
 
       {/* 搜索 */}
-      <div className={styles.section}>
+      <div {...sec("搜索")}>
         <SectionTitle>搜索</SectionTitle>
         <div className={styles.row}>
           <Text size={300}>默认音源:</Text>
@@ -1152,7 +1630,7 @@ export function SettingsPage() {  const styles = useStyles()
       <Divider />
 
       {/* 快捷方式伪装 */}
-      <div className={styles.section}>
+      <div {...sec("快捷方式伪装")}>
         <SectionTitle>快捷方式伪装</SectionTitle>
         <Text size={200} style={{ color: tokens.colorNeutralForeground3, maxWidth: 720 }}>
           在桌面生成一个看起来像所选软件的快捷方式,双击后打开的仍是本应用。
@@ -1182,7 +1660,7 @@ export function SettingsPage() {  const styles = useStyles()
       <Divider />
 
       {/* 听歌识别 */}
-      <div className={styles.section}>
+      <div {...sec("听歌识别")}>
         <SectionTitle>听歌识别</SectionTitle>
         <div className={styles.row}>
           <Switch
@@ -1232,7 +1710,7 @@ export function SettingsPage() {  const styles = useStyles()
       <Divider />
 
       {/* 下载 */}
-      <div className={styles.section}>
+      <div {...sec("下载")}>
         <SectionTitle>下载</SectionTitle>
         <div className={styles.row}>
           <Text size={300}>保存目录:{s.downloadDir}</Text>
@@ -1254,7 +1732,7 @@ export function SettingsPage() {  const styles = useStyles()
       <Divider />
 
       {/* 缓存 */}
-      <div className={styles.section}>
+      <div {...sec("缓存")}>
         <SectionTitle>缓存</SectionTitle>
         <div className={styles.row}>
           <Text size={300}>播放缓存存放在应用数据目录,清理后不影响已下载歌曲。</Text>
@@ -1277,7 +1755,7 @@ export function SettingsPage() {  const styles = useStyles()
       <Divider />
 
       {/* 备份与恢复 */}
-      <div className={styles.section}>
+      <div {...sec("备份与恢复")}>
         <SectionTitle>备份与恢复</SectionTitle>
         <div className={styles.row}>
           <Button
@@ -1303,7 +1781,7 @@ export function SettingsPage() {  const styles = useStyles()
       <Divider />
 
       {/* 关于 */}
-      <div className={styles.section}>
+      <div {...sec("关于")}>
         <SectionTitle>关于</SectionTitle>
         <div className={styles.row}>
           <InfoRegular />
@@ -1352,6 +1830,8 @@ export function SettingsPage() {  const styles = useStyles()
           本应用仅供学习交流,音频资源来自各平台公开接口,请支持正版。
         </Text>
       </div>
+        </div>
+      </div>
 
       {/* 恢复出厂确认 */}
       <Dialog open={resetConfirm} onOpenChange={(_, d) => !d.open && setResetConfirm(false)}>
@@ -1387,6 +1867,51 @@ export function SettingsPage() {  const styles = useStyles()
           onClose={() => setKgLoginPlatform(null)}
         />
       )}
+
+      {/* 恢复默认设置确认:勾选要重置的分区 */}
+      <Dialog
+        open={resetOpen}
+        onOpenChange={(_, d) => {
+          setResetOpen(d.open)
+          if (d.open) setResetSel({})
+        }}
+      >
+        <DialogSurface>
+          <DialogBody>
+            <DialogTitle>恢复默认设置</DialogTitle>
+            <DialogContent>
+              <Text size={200} style={{ color: tokens.colorNeutralForeground3, display: 'block', marginBottom: 12 }}>
+                勾选要恢复默认的分区(登录状态、歌单与已下载歌曲不受影响):
+              </Text>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                {RESETTABLE_SECTIONS.map((name) => (
+                  <Checkbox
+                    key={name}
+                    label={name}
+                    checked={resetSel[name] !== false}
+                    onChange={(_, d) => setResetSel((p) => ({ ...p, [name]: d.checked === true }))}
+                  />
+                ))}
+              </div>
+            </DialogContent>
+            <DialogActions>
+              <Button appearance="secondary" onClick={() => setResetOpen(false)}>
+                取消
+              </Button>
+              <Button
+                appearance="primary"
+                disabled={RESETTABLE_SECTIONS.every((n) => resetSel[n] === false)}
+                onClick={() => {
+                  setResetOpen(false)
+                  void doResetSettings()
+                }}
+              >
+                恢复所选
+              </Button>
+            </DialogActions>
+          </DialogBody>
+        </DialogSurface>
+      </Dialog>
     </PageLayout>
   )
 }

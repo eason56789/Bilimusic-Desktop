@@ -12,7 +12,7 @@
  *
  * 每帧只写 opacity / transform(translate + scale),不触发布局,不重建 DOM。
  */
-import { Component, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { Component, memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { makeStyles } from '@fluentui/react-components'
 import type { LyricLine } from '@shared/types'
 import { useStore, getAudioElement } from '../store'
@@ -23,7 +23,9 @@ import { layoutLyrics, pickLayoutKind, normalizeKind, type PvPlacement } from '.
 import { buildGlyphs, type PvGlyph } from '../lib/pvGlyph'
 import { breathAt, cameraAt, glyphProgress, clamp01 } from '../lib/pvMotion'
 import { layoutCladdagh, layoutPartita, layoutStill, type ArcGlyph, type PartitaWordBox } from '../lib/pvArrange'
+import { hash01, hashSeed } from '../lib/temperaPrims'
 import { TemperaLyrics } from './TemperaLyrics'
+import { JizuraLyrics } from './JizuraLyrics'
 
 const useStyles = makeStyles({
   root: {
@@ -167,6 +169,182 @@ const LIT = '#ffffff'
 /** 未唱:比之前的 0.22 略提亮,避免整屏只有几个字在亮、观感发闷 */
 const DIM = 'rgba(255,255,255,0.26)'
 
+/* ===================== shot 交接缓动(对齐 temperaShotFrame) ===================== */
+
+/** 长尾减速(对齐 easeTemperaEnter) */
+function easeEnter(v: number): number {
+  const t = Math.min(1, Math.max(0, v))
+  let low = 0
+  let high = 1
+  let p = t
+  for (let i = 0; i < 12; i++) {
+    const inv = 1 - p
+    const x = 3 * inv * inv * p * 0.22 + 3 * inv * p * p * 1 + p * p * p
+    if (x < t) low = p
+    else high = p
+    p = (low + high) / 2
+  }
+  const inv = 1 - p
+  return 3 * inv * inv * p + 3 * inv * p * p + p * p * p
+}
+
+/** 中段匀速(对齐 easeTemperaInOut) */
+function easeInOutPv(v: number): number {
+  const t = Math.min(1, Math.max(0, v))
+  let low = 0
+  let high = 1
+  let p = t
+  for (let i = 0; i < 12; i++) {
+    const inv = 1 - p
+    const x = 3 * inv * inv * p * 0.62 + 3 * inv * p * p * 0.32 + p * p * p
+    if (x < t) low = p
+    else high = p
+    p = (low + high) / 2
+  }
+  const inv = 1 - p
+  return 3 * inv * p * p + p * p * p
+}
+
+/** 一句编译后的场景(key 稳定,供持久场景子组件使用) */
+interface PvCompiled {
+  key: string
+  kind: ReturnType<typeof normalizeKind>
+  glyphs: PvGlyph[]
+  dur: number
+  baseFont: number
+  partitaBoxes: PartitaWordBox[]
+  arcGlyphs: ArcGlyph[]
+  stillLines: { text: string; offset: number }[]
+  /** 本句开始的绝对时刻 */
+  startMs: number
+  /** 本句被卸载的时刻(下一句开始) */
+  unloadMs: number
+  /** shot 交接的推进方向(每句确定性) */
+  flowAngle: number
+}
+
+/**
+ * 逐字 PV 的持久场景子组件(与凝彩的 TemperaSceneView 同构,对齐 folia
+ * createTemperaPixiRuntime:shot 是持久显示对象,只切可见性、永不重建)。
+ * 换句时旧场景不卸载,按自己的 unloadMs 起算 exit,沿自己的 flow 向量
+ * 推出去并淡出;新场景从上游推进来 —— 相机与字形姿态全程连续。
+ */
+const PvSceneView = memo(function PvSceneView({
+  scene,
+  sizeW,
+  sizeH,
+  motion,
+  accent,
+  offset,
+  onExited
+}: {
+  scene: PvCompiled
+  sizeW: number
+  sizeH: number
+  motion: number
+  accent: string
+  offset: number
+  onExited: (key: string) => void
+}): JSX.Element {
+  const styles = useStyles()
+  const propsRef = useRef({ scene, sizeW, sizeH, motion, accent, offset, onExited })
+  propsRef.current = { scene, sizeW, sizeH, motion, accent, offset, onExited }
+  const stageRef = useRef<HTMLDivElement>(null)
+  const glyphRefs = useRef<(HTMLSpanElement | null)[]>([])
+  const exitedRef = useRef(false)
+
+  useEffect(() => {
+    let raf = 0
+    const paint = (): void => {
+      const { scene: c, sizeW: w, sizeH: h, motion: mo, offset: off, onExited: done } = propsRef.current
+      const now = getAudioElement().currentTime * 1000 + 200 - off
+      const span = Math.max(w, h)
+      const visMs = Math.max(400, c.unloadMs - c.startMs)
+      const handoffMs = Math.min(1100, Math.max(400, visMs * 0.3))
+      const exitP = clamp01((now - c.unloadMs) / handoffMs)
+      if (exitP >= 1 && !exitedRef.current) {
+        exitedRef.current = true
+        done(c.key)
+      }
+      const exit = easeInOutPv(exitP)
+      const enter = easeEnter(clamp01((now - c.startMs) / (handoffMs * 0.8)))
+      // 同一 flow 向量:旧句沿它推出去,新句从上游沿它推进来(对齐 travel 公式,幅度收敛些)
+      const travel = exit * span * 0.35 - (1 - enter) * span * 0.22
+      const p = clamp01((now - c.startMs) / c.dur)
+      const cam = cameraAt(c.kind as Parameters<typeof cameraAt>[0], p, mo)
+      const br = breathAt(now / 1000, mo)
+      const flowX = Math.cos(c.flowAngle)
+      const flowY = Math.sin(c.flowAngle)
+      const camX = (cam.x + br.x) * w + flowX * travel
+      const camY = (cam.y + br.y) * h + flowY * travel
+      const camScale = (cam.scale + br.scale) * (1 - exit * 0.06)
+      const camRot = (cam.rotation + br.rotation) * 57.2958
+      const stageEl = stageRef.current
+      if (stageEl) {
+        stageEl.style.transform = `translate3d(${camX.toFixed(1)}px, ${camY.toFixed(1)}px, 0) scale(${camScale.toFixed(
+          4
+        )}) rotate(${camRot.toFixed(2)}deg)`
+        stageEl.style.opacity = (1 - exit).toFixed(3)
+        stageEl.style.visibility = exitP >= 1 ? 'hidden' : 'visible'
+      }
+      // 逐字:位置 = 绝对坐标 + 入场残余位移(纯加法;旧句字形保持落定态继续活着)
+      const glyphs = c.glyphs
+      for (let i = 0; i < glyphs.length; i++) {
+        const g = glyphs[i]
+        const node = glyphRefs.current[i]
+        if (!node) continue
+        const gp = glyphProgress(now, g.startTime, g.settleTime)
+        const waiting = now < g.startTime
+        const remain = 1 - gp
+        const x = g.baseX + g.enterX * remain
+        const y = g.baseY + g.enterY * remain
+        const rot = g.entryRotation * remain
+        const from = g.isHero && c.kind === 'type-impact' ? 0.52 : 0.86
+        const sc = from + (1 - from) * gp
+        const alpha = waiting ? 0 : 0.16 + gp * 0.84
+        node.style.transform = `translate3d(calc(-50% + ${x.toFixed(2)}px), calc(-50% + ${y.toFixed(
+          2
+        )}px), 0) rotate(${rot.toFixed(4)}rad) scale(${sc.toFixed(3)})`
+        node.style.opacity = alpha.toFixed(3)
+        if (!g.isDecoration) {
+          node.style.color = waiting ? DIM : LIT
+        }
+      }
+      raf = requestAnimationFrame(paint)
+    }
+    raf = requestAnimationFrame(paint)
+    return () => cancelAnimationFrame(raf)
+  }, [])
+
+  return (
+    <div className={styles.stage} ref={stageRef}>
+      {scene.glyphs.map((g: PvGlyph, i) => (
+        <span
+          key={`${i}-${g.char}-${g.startTime}`}
+          ref={(el) => {
+            glyphRefs.current[i] = el
+          }}
+          className={`${styles.glyph} ${g.isDecoration ? styles.glyphDecor : ''}`}
+          style={{
+            fontSize: `${g.fontSize}px`,
+            transform: `translate3d(calc(-50% + ${g.baseX}px), calc(-50% + ${g.baseY}px), 0)`,
+            opacity: 0,
+            color: g.isDecoration ? 'transparent' : DIM,
+            WebkitTextStroke: g.isDecoration ? `1.5px ${accent}3d` : undefined,
+            textShadow: g.isDecoration
+              ? 'none'
+              : g.isHero
+                ? `0 0 30px ${accent}44, 0 2px 10px rgba(0,0,0,0.45)`
+                : '0 1px 8px rgba(0,0,0,0.35)'
+          }}
+        >
+          {g.char === ' ' ? '\u00a0' : g.char}
+        </span>
+      ))}
+    </div>
+  )
+})
+
 export function PvLyrics({ lines, activeIdx, smoothMs }: PvLyricsProps): JSX.Element {
   const styles = useStyles()
   const settings = useStore((s) => s.library?.settings)
@@ -202,7 +380,8 @@ export function PvLyrics({ lines, activeIdx, smoothMs }: PvLyricsProps): JSX.Ele
 
   // ===== 编译:分词 → 选版式 → 排版 → 字形绝对坐标(按句缓存) =====
   const arrange = settings?.pvArrange ?? 'pv'
-  const compiled = useMemo(() => {
+  const transitionOn = settings?.pvTransition !== false
+  const compiled = useMemo<PvCompiled | null>(() => {
     if (!display) return null
     const segs = segmentLine(display, endMs)
     if (segs.length === 0) return null
@@ -224,88 +403,59 @@ export function PvLyrics({ lines, activeIdx, smoothMs }: PvLyricsProps): JSX.Ele
     const glyphs = buildGlyphs(placements, dur)
     /** 云阶/回环/时计:整行换一种摆法(与 PV 的镜头版式并存) */
     const baseFont = Math.max(28, Math.min(96, (size.w / Math.max(7, wordCount * 2.15)) * scale))
+    const seedKey = `${display.timeMs}:${display.text}`
     const partitaBoxes =
       arrange === 'partita'
-        ? layoutPartita(display.text, size.w, size.h, baseFont, `${display.timeMs}:${display.text}`)
+        ? layoutPartita(display.text, size.w, size.h, baseFont, seedKey)
         : []
     const arcGlyphs =
       arrange === 'claddagh' ? layoutCladdagh(display.text, size.w, size.h, baseFont * 0.92) : []
     const stillLines = arrange === 'still' ? layoutStill(lines, activeIdx) : []
-    return { kind, placements, glyphs, dur, baseFont, partitaBoxes, arcGlyphs, stillLines }
+    return {
+      key: seedKey,
+      kind,
+      glyphs,
+      dur,
+      baseFont,
+      partitaBoxes,
+      arcGlyphs,
+      stillLines,
+      startMs: display.timeMs,
+      unloadMs: lines[activeIdx + 1]?.timeMs ?? endMs,
+      flowAngle: hash01(hashSeed(seedKey), 3, 197) * Math.PI * 2
+    }
   }, [display, endMs, size.w, size.h, scale, settings?.pvLayout, arrange, lines, activeIdx])
 
-  // ===== 渲染:rAF 直接写 style =====
-  const stageRef = useRef<HTMLDivElement>(null)
-  const glyphRefs = useRef<(HTMLSpanElement | null)[]>([])
-
-  useEffect(() => {
-    const stageEl = stageRef.current
-    // 只有逐字 PV 需要每帧驱动;云阶/回环/时计是静态排版(不跑 rAF,省电且绝对不抖)
-    if (arrange !== 'pv') return
-    if (!display || !compiled || !stageEl) return
-    const glyphs = compiled.glyphs
-    let raf = 0
-    /** 上一帧的镜头值:用于检测是否需要写 transform(静止时省掉无意义写入) */
-    let lastCam = ''
-    const startMs = display.timeMs
-    const dur = compiled.dur
-
-    const paint = (): void => {
-      const el = getAudioElement()
-      const now = el.currentTime * 1000 + 200 - offset
-      const p = clamp01((now - startMs) / dur)
-
-      // ---- 镜头:轨迹 + 极轻呼吸(整曲时间,句子之间不断档) ----
-      const cam = cameraAt(compiled.kind as Parameters<typeof cameraAt>[0], p, motion)
-      const br = breathAt(now / 1000, motion)
-      const camX = (cam.x + br.x) * size.w
-      const camY = (cam.y + br.y) * size.h
-      const camScale = cam.scale + br.scale
-      const camRot = (cam.rotation + br.rotation) * 57.2958
-      const camKey = `${camX.toFixed(1)}|${camY.toFixed(1)}|${camScale.toFixed(4)}|${camRot.toFixed(2)}`
-      if (camKey !== lastCam) {
-        lastCam = camKey
-        stageEl.style.transform = `translate3d(${camX.toFixed(1)}px, ${camY.toFixed(1)}px, 0) scale(${camScale.toFixed(
-          4
-        )}) rotate(${camRot.toFixed(2)}deg)`
-      }
-
-      // ---- 逐字:位置 = 绝对坐标 + 入场残余位移(纯加法,无嵌套) ----
-      for (let i = 0; i < glyphs.length; i++) {
-        const g = glyphs[i]
-        const node = glyphRefs.current[i]
-        if (!node) continue
-        const gp = glyphProgress(now, g.startTime, g.settleTime)
-        const waiting = now < g.startTime
-        // 1-p 线性衰减:落定后严格归零,不会持续"抖"
-        const remain = 1 - gp
-        const x = g.baseX + g.enterX * remain
-        const y = g.baseY + g.enterY * remain
-        const rot = g.entryRotation * remain
-        // 缩放:hero 在 type-impact 下从 0.52 起,其余 0.86 起(对齐 folia)
-        const from = g.isHero && compiled.kind === 'type-impact' ? 0.52 : 0.86
-        const sc = from + (1 - from) * gp
-        // 透明度:0.16 起(不是 0),入场即有实体感
-        const alpha = waiting ? 0 : 0.16 + gp * 0.84
-        node.style.transform = `translate3d(calc(-50% + ${x.toFixed(2)}px), calc(-50% + ${y.toFixed(
-          2
-        )}px), 0) rotate(${rot.toFixed(4)}rad) scale(${sc.toFixed(3)})`
-        node.style.opacity = alpha.toFixed(3)
-        // 逐字卡拉OK上色:已唱=白,未唱=暗
-        if (!g.isDecoration) {
-          node.style.color = waiting ? DIM : LIT
-        }
-      }
-      raf = requestAnimationFrame(paint)
+  /**
+   * 场景列表(对齐 Pixi runtime 的 shot 容器):换句不删旧场景,旧场景子组件
+   * 保持挂载(同 key),在交接窗口内继续退场,退完回报 prune。转场关闭时
+   * 只保留当前句(硬切)。
+   */
+  const [scenesState, setScenesState] = useState<PvCompiled[]>([])
+  const scenesRef = useRef<PvCompiled[]>([])
+  if (compiled && arrange === 'pv') {
+    const list = scenesRef.current
+    const cur = list[list.length - 1]
+    if (!cur || cur.key !== compiled.key) {
+      const kept = transitionOn ? list.slice(-2) : []
+      scenesRef.current = [...kept, compiled]
+      setScenesState(scenesRef.current)
+    } else if (cur !== compiled) {
+      // 同一句重编译(改设置/窗口尺寸):原位替换,子组件不重挂载
+      scenesRef.current = [...list.slice(0, -1), compiled]
+      setScenesState(scenesRef.current)
     }
-    raf = requestAnimationFrame(paint)
-    return () => cancelAnimationFrame(raf)
-  }, [arrange, display, compiled, offset, motion, size.w, size.h])
-
-  // 换句:清空 refs(字形数组会整体重建)
-  useEffect(() => {
-    glyphRefs.current = []
-  }, [compiled])
+  } else if (arrange !== 'pv' && scenesRef.current.length > 0) {
+    scenesRef.current = []
+    setScenesState([])
+  }
+  const pruneScene = useCallback((key: string) => {
+    const next = scenesRef.current.filter((s) => s.key !== key)
+    if (next.length !== scenesRef.current.length) {
+      scenesRef.current = next
+      setScenesState(next)
+    }
+  }, [])
 
   if (!display) {
     return (
@@ -349,35 +499,21 @@ export function PvLyrics({ lines, activeIdx, smoothMs }: PvLyricsProps): JSX.Ele
         </>
       ) : null}
 
-      {/* ===== 舞台:每个字绝对定位(逐字 PV) ===== */}
-      {arrange === 'pv' ? (
-        <div className={styles.stage} ref={stageRef}>
-          {(compiled?.glyphs ?? []).map((g: PvGlyph, i) => (
-            <span
-              key={`${i}-${g.char}-${g.startTime}`}
-              ref={(el) => {
-                glyphRefs.current[i] = el
-              }}
-              className={`${styles.glyph} ${g.isDecoration ? styles.glyphDecor : ''}`}
-              style={{
-                fontSize: `${g.fontSize}px`,
-                // 初始位置先写好,避免首帧跳到 (0,0)
-                transform: `translate3d(calc(-50% + ${g.baseX}px), calc(-50% + ${g.baseY}px), 0)`,
-                opacity: 0,
-                color: g.isDecoration ? 'transparent' : DIM,
-                WebkitTextStroke: g.isDecoration ? `1.5px ${accent}3d` : undefined,
-                textShadow: g.isDecoration
-                  ? 'none'
-                  : g.isHero
-                    ? `0 0 30px ${accent}44, 0 2px 10px rgba(0,0,0,0.45)`
-                    : '0 1px 8px rgba(0,0,0,0.35)'
-              }}
-            >
-              {g.char === ' ' ? '\u00a0' : g.char}
-            </span>
-          ))}
-        </div>
-      ) : null}
+      {/* ===== 舞台:每句一个持久场景(逐字 PV),换句旧场景推出去、新场景推进来 ===== */}
+      {arrange === 'pv'
+        ? scenesState.map((sc) => (
+            <PvSceneView
+              key={sc.key}
+              scene={sc}
+              sizeW={size.w}
+              sizeH={size.h}
+              motion={motion}
+              accent={accent}
+              offset={offset}
+              onExited={pruneScene}
+            />
+          ))
+        : null}
 
       {/* ===== 云阶:整行切词,按字数分栏竖直排布(对齐 folia partita) ===== */}
       {arrange === 'partita' ? (
@@ -500,6 +636,9 @@ export function PvLyricsSafe(props: PvLyricsProps): JSX.Element {
       {arrange === 'tempera' ? (
         // 凝彩自己铺满(无需额外定位上下文)
         <TemperaLyrics lines={props.lines} activeIdx={props.activeIdx} />
+      ) : arrange === 'jizura' ? (
+        // JIZURA 独立引擎(Canvas2D 逐帧),与凝彩互不相干
+        <JizuraLyrics lines={props.lines} activeIdx={props.activeIdx} />
       ) : (
         <PvLyrics {...props} />
       )}

@@ -1,5 +1,6 @@
 ﻿/** 歌单页:本地歌单管理 + B站收藏夹/网易云歌单导入 + 最近播放 */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import type { MouseEvent as ReactMouseEvent } from 'react'
 import {
   Button,
   Card,
@@ -10,6 +11,10 @@ import {
   DialogSurface,
   DialogTitle,
   Input,
+  Menu,
+  MenuItem,
+  MenuPopover,
+  MenuTrigger,
   Text,
   makeStyles,
   tokens,
@@ -25,6 +30,7 @@ import {
   CloudArrowDownRegular,
   DeleteRegular,
   EditRegular,
+  FolderAddRegular,
   HeartFilled,
   HeartRegular,
   HistoryRegular,
@@ -32,6 +38,7 @@ import {
   OpenRegular,
   PlayRegular,
   QrCodeRegular,
+  SubtractRegular,
   SaveRegular,
   SearchRegular
 } from '@fluentui/react-icons'
@@ -503,6 +510,14 @@ export function PlaylistsPage() {
   const [favDeduping, setFavDeduping] = useState(false)
   /** 歌单分类筛选(all=全部) */
   const [category, setCategory] = useState<'all' | PlaylistCategory>('all')
+  /** 歌单卡片右键菜单:目标歌单 + 跟随鼠标的定位锚点 */
+  const [menuTarget, setMenuTarget] = useState<Playlist | null>(null)
+  const ctxAnchorRef = useRef<HTMLSpanElement | null>(null)
+  /** 重命名对话框的描述输入(与名称一起经 libraryUpdatePlaylist 保存) */
+  const [descValue, setDescValue] = useState('')
+  /** 歌单间移动歌曲对话框(add=把本歌单歌曲加到其他歌单 / remove=从其他歌单移除这些歌) */
+  const [moveTarget, setMoveTarget] = useState<{ pl: Playlist; mode: 'add' | 'remove' } | null>(null)
+  const [moveBusy, setMoveBusy] = useState(false)
 
   /** 登录B站后进入歌单页即拉收藏夹列表(仅元数据;内容点开才取) */
   useEffect(() => {
@@ -563,7 +578,15 @@ export function PlaylistsPage() {
     }
   }, [library?.neteaseProfile, library?.qqProfile, library?.kugouProfile, library?.kugouConceptProfile])
 
-  /** 已导入的来源 id(避免在线卡片重复导入) */
+  /**
+   * 在线卡片 platform → 查重键前缀。
+   * 酷狗双身份(normal/concept)统一归入 kugou 家族:此前卡片用 `concept:<id>` 查重,
+   * 而集合里存的是 `kugou:<id>`,永远查不中,导致每点一次来源卡片就重复导入一个歌单。
+   */
+  const sourceKeyPrefix = (platform: OnlineBrief['platform']): string =>
+    platform === 'netease' ? 'netease' : platform === 'qq' ? 'qq' : 'kugou'
+
+  /** 已导入的来源 id(避免在线卡片重复导入;key = 前缀:来源id) */
   const importedSourceIds = useMemo(() => {
     const s = new Set<string>()
     for (const pl of library?.playlists ?? []) {
@@ -575,7 +598,7 @@ export function PlaylistsPage() {
   }, [library?.playlists])
 
   const importOnline = async (b: OnlineBrief): Promise<void> => {
-    const key = `${b.platform}:${b.id}`
+    const key = `${sourceKeyPrefix(b.platform)}:${b.id}`
     if (onlineImporting) return
     setOnlineImporting(key)
     try {
@@ -616,7 +639,7 @@ export function PlaylistsPage() {
     concept: { label: '酷狗概念版', color: '#7c6cff', bg: 'rgba(124,108,255,0.15)' }
   }
   const renderOnlineCard = (b: OnlineBrief) => {
-    const key = `${b.platform}:${b.id}`
+    const key = `${sourceKeyPrefix(b.platform)}:${b.id}`
     const m = onlineMeta[b.platform]
     const localPl = importedSourceIds.has(key)
       ? library.playlists.find(
@@ -788,7 +811,11 @@ export function PlaylistsPage() {
 
   const renamePlaylist = async () => {
     if (!renameTarget) return
-    await api.libraryUpdatePlaylist({ id: renameTarget.id, name: renameValue.trim() || renameTarget.name })
+    await api.libraryUpdatePlaylist({
+      id: renameTarget.id,
+      name: renameValue.trim() || renameTarget.name,
+      description: descValue
+    })
     setRenameTarget(null)
     await refresh()
   }
@@ -806,6 +833,260 @@ export function PlaylistsPage() {
       setFavDeduping(false)
     }
   }
+
+  // ===== 歌单卡片右键菜单 =====
+  /** 右键歌单卡片:记录目标并把隐藏锚点移到鼠标处(菜单定位用,与歌曲列表右键同款交互) */
+  const onCardContextMenu = (e: ReactMouseEvent<HTMLDivElement>, pl: Playlist): void => {
+    e.preventDefault()
+    const anchor = ctxAnchorRef.current
+    if (anchor) {
+      anchor.style.left = `${e.clientX}px`
+      anchor.style.top = `${e.clientY}px`
+    }
+    setMenuTarget(pl)
+  }
+
+  /** 打开重命名/描述对话框(详情页按钮与右键菜单共用) */
+  const openRenameDialog = (p: Playlist): void => {
+    setRenameValue(p.name)
+    setDescValue(p.description ?? '')
+    setRenameTarget(p)
+  }
+
+  /** 把某歌单的歌曲批量 添加到 / 从 其他歌单移动 */
+  const moveSongs = async (target: Playlist): Promise<void> => {
+    if (!moveTarget || moveBusy || !library) return
+    const songs = moveTarget.pl.songIds.map((id) => library.songs[id]).filter((s): s is Song => !!s)
+    if (songs.length === 0) return
+    setMoveBusy(true)
+    try {
+      if (moveTarget.mode === 'add') {
+        await api.libraryAddToPlaylist(target.id, songs)
+        toastSuccess('已添加到歌单', `「${target.name}」新增 ${songs.length} 首`)
+      } else {
+        const inTarget = new Set(target.songIds)
+        const hit = songs.filter((s) => inTarget.has(s.id))
+        for (const s of hit) await api.libraryRemoveFromPlaylist(target.id, s.id)
+        toastSuccess(
+          '已从歌单移除',
+          hit.length > 0 ? `「${target.name}」移除 ${hit.length} 首` : `「${target.name}」中没有这些歌曲`
+        )
+      }
+      await refresh()
+      setMoveTarget(null)
+    } catch (e) {
+      toastError('操作失败', String(e))
+    } finally {
+      setMoveBusy(false)
+    }
+  }
+
+  /** 重命名/描述 + 删除确认 + 歌单间移动歌曲:详情页与列表页(右键菜单)共用 */
+  const editDialogs = (
+    <>
+      <Dialog open={!!deleteTarget} onOpenChange={(_, d) => !d.open && setDeleteTarget(null)}>
+        <DialogSurface>
+          <DialogBody>
+            <DialogTitle>删除歌单</DialogTitle>
+            <DialogContent>
+              <Text>
+                确定删除歌单「{deleteTarget?.name}」吗?
+                {deleteTarget && deleteTarget.songIds.length > 0
+                  ? `歌单内 ${deleteTarget.songIds.length} 首歌曲将一并移除引用,`
+                  : ''}
+                该操作不可撤销(歌曲本身不会从曲库移除)。
+              </Text>
+            </DialogContent>
+            <DialogActions>
+              <Button onClick={() => setDeleteTarget(null)}>取消</Button>
+              <Button
+                appearance="primary"
+                onClick={() => deleteTarget && void deletePlaylist(deleteTarget)}
+              >
+                删除
+              </Button>
+            </DialogActions>
+          </DialogBody>
+        </DialogSurface>
+      </Dialog>
+
+      <Dialog open={!!renameTarget} onOpenChange={(_, d) => !d.open && setRenameTarget(null)}>
+        <DialogSurface>
+          <DialogBody>
+            <DialogTitle>重命名 / 编辑描述</DialogTitle>
+            <DialogContent>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                <Input
+                  placeholder="歌单名称"
+                  value={renameValue}
+                  onChange={(_, d) => setRenameValue(d.value)}
+                  onKeyDown={(e) => e.key === 'Enter' && void renamePlaylist()}
+                  style={{ width: '100%' }}
+                />
+                <Input
+                  placeholder="描述(可选)"
+                  value={descValue}
+                  onChange={(_, d) => setDescValue(d.value)}
+                  style={{ width: '100%' }}
+                />
+              </div>
+            </DialogContent>
+            <DialogActions>
+              <Button onClick={() => setRenameTarget(null)}>取消</Button>
+              <Button appearance="primary" onClick={() => void renamePlaylist()}>
+                确定
+              </Button>
+            </DialogActions>
+          </DialogBody>
+        </DialogSurface>
+      </Dialog>
+
+      <Dialog open={!!moveTarget} onOpenChange={(_, d) => !d.open && setMoveTarget(null)}>
+        <DialogSurface>
+          <DialogBody>
+            <DialogTitle>
+              {moveTarget?.mode === 'add' ? '添加歌曲到其他歌单' : '从其他歌单移除歌曲'}
+            </DialogTitle>
+            <DialogContent>
+              <Text size={200} style={{ color: tokens.colorNeutralForeground3 }}>
+                对「{moveTarget?.pl.name}」的 {moveTarget?.pl.songIds.length ?? 0} 首歌曲执行
+                {moveTarget?.mode === 'add' ? '添加' : '移除'},点击目标歌单即执行:
+              </Text>
+              <div
+                style={{
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: 4,
+                  maxHeight: 320,
+                  overflowY: 'auto',
+                  marginTop: 8
+                }}
+              >
+                {(library?.playlists ?? [])
+                  .filter((p) => p.id !== moveTarget?.pl.id)
+                  .map((p) => (
+                    <div
+                      key={p.id}
+                      style={{
+                        display: 'flex',
+                        justifyContent: 'space-between',
+                        padding: '8px 12px',
+                        borderRadius: tokens.borderRadiusMedium,
+                        cursor: 'pointer'
+                      }}
+                      onClick={() => !moveBusy && void moveSongs(p)}
+                    >
+                      <span>{p.name}</span>
+                      <span style={{ color: tokens.colorNeutralForeground3 }}>{p.songIds.length} 首</span>
+                    </div>
+                  ))}
+                {moveTarget &&
+                  (library?.playlists ?? []).filter((p) => p.id !== moveTarget.pl.id).length === 0 && (
+                    <Text size={200} style={{ color: tokens.colorNeutralForeground3, padding: '8px 12px' }}>
+                      没有其他歌单
+                    </Text>
+                  )}
+              </div>
+            </DialogContent>
+            <DialogActions>
+              <Button onClick={() => setMoveTarget(null)}>关闭</Button>
+            </DialogActions>
+          </DialogBody>
+        </DialogSurface>
+      </Dialog>
+    </>
+  )
+
+  /** 歌单卡片右键菜单(受控,锚点跟随鼠标;菜单项见 onCardContextMenu / menuTarget) */
+  const playlistContextMenu = (
+    <>
+      <span
+        ref={ctxAnchorRef}
+        style={{ position: 'fixed', width: 0, height: 0, pointerEvents: 'none' }}
+        aria-hidden
+      />
+      <Menu
+        open={!!menuTarget}
+        onOpenChange={(_, d) => {
+          if (!d.open) setMenuTarget(null)
+        }}
+        positioning={{ target: menuTarget ? ctxAnchorRef.current : undefined }}
+      >
+        <MenuTrigger disableButtonEnhancement>
+          <span style={{ display: 'none' }} />
+        </MenuTrigger>
+        <MenuPopover>
+          {menuTarget && (
+            <>
+              <MenuItem
+                icon={<OpenRegular />}
+                onClick={() => {
+                  setMenuTarget(null)
+                  setSelected(menuTarget)
+                }}
+              >
+                打开歌单
+              </MenuItem>
+              <MenuItem
+                icon={<EditRegular />}
+                onClick={() => {
+                  setMenuTarget(null)
+                  openRenameDialog(menuTarget)
+                }}
+              >
+                重命名 / 编辑描述
+              </MenuItem>
+              {isSyncable(menuTarget) && (
+                <MenuItem
+                  icon={
+                    syncingId === menuTarget.id ? <Spinner size="tiny" /> : <ArrowClockwiseRegular />
+                  }
+                  disabled={syncingId !== null}
+                  onClick={() => {
+                    setMenuTarget(null)
+                    void syncOne(menuTarget)
+                  }}
+                >
+                  同步来源歌单
+                </MenuItem>
+              )}
+              {menuTarget.songIds.length > 0 && (
+                <MenuItem
+                  icon={<FolderAddRegular />}
+                  onClick={() => {
+                    setMenuTarget(null)
+                    setMoveTarget({ pl: menuTarget, mode: 'add' })
+                  }}
+                >
+                  添加歌曲到其他歌单
+                </MenuItem>
+              )}
+              {menuTarget.songIds.length > 0 && (
+                <MenuItem
+                  icon={<SubtractRegular />}
+                  onClick={() => {
+                    setMenuTarget(null)
+                    setMoveTarget({ pl: menuTarget, mode: 'remove' })
+                  }}
+                >
+                  从其他歌单移除
+                </MenuItem>
+              )}
+              <MenuItem
+                icon={<DeleteRegular />}
+                onClick={() => {
+                  setMenuTarget(null)
+                  setDeleteTarget(menuTarget)
+                }}
+              >
+                删除歌单
+              </MenuItem>
+            </>
+          )}
+        </MenuPopover>
+      </Menu>
+    </>
+  )
 
   // ===== B站在线视图(登录即出现,打开才拉数据) =====
   if (remoteView) {
@@ -882,56 +1163,14 @@ export function PlaylistsPage() {
         onBack={() => setSelected(null)}
         syncingId={syncingId}
         onSync={(p) => void syncOne(p)}
-        onRename={(p) => {
-          setRenameValue(p.name)
-          setRenameTarget(p)
-        }}
+        onRename={(p) => openRenameDialog(p)}
         onDelete={(p) => setDeleteTarget(p)}
         onRemoveSong={async (song) => {
           await api.libraryRemoveFromPlaylist(current!.id, song.id)
           await refresh()
         }}
       />
-      <div style={{ display: 'none' }}>
-        <Dialog open={!!deleteTarget} onOpenChange={(_, d) => !d.open && setDeleteTarget(null)}>
-          <DialogSurface>
-            <DialogBody>
-              <DialogTitle>删除歌单</DialogTitle>
-              <DialogContent>
-                <Text>
-                  确定删除歌单「{deleteTarget?.name}」吗?该操作不可撤销(歌曲本身不会从曲库移除)。
-                </Text>
-              </DialogContent>
-              <DialogActions>
-                <Button onClick={() => setDeleteTarget(null)}>取消</Button>
-                <Button
-                  appearance="primary"
-                  onClick={() => deleteTarget && void deletePlaylist(deleteTarget)}
-                >
-                  删除
-                </Button>
-              </DialogActions>
-            </DialogBody>
-          </DialogSurface>
-        </Dialog>
-
-        <Dialog open={!!renameTarget} onOpenChange={(_, d) => !d.open && setRenameTarget(null)}>
-          <DialogSurface>
-            <DialogBody>
-              <DialogTitle>重命名歌单</DialogTitle>
-              <DialogContent>
-                <Input value={renameValue} onChange={(_, d) => setRenameValue(d.value)} style={{ width: '100%' }} />
-              </DialogContent>
-              <DialogActions>
-                <Button onClick={() => setRenameTarget(null)}>取消</Button>
-                <Button appearance="primary" onClick={renamePlaylist}>
-                  确定
-                </Button>
-              </DialogActions>
-            </DialogBody>
-          </DialogSurface>
-        </Dialog>
-      </div>
+      {editDialogs}
       <BiliLoginDialog open={biliLoginOpen} onClose={() => setBiliLoginOpen(false)} />
       <NeteaseLoginDialog open={neLoginOpen} onClose={() => setNeLoginOpen(false)} />
       </div>
@@ -1034,7 +1273,12 @@ export function PlaylistsPage() {
         </Card>
         )}
         {visiblePlaylists.map((pl) => (
-          <Card key={pl.id} className={styles.card} onClick={() => setSelected(pl)}>
+          <Card
+            key={pl.id}
+            className={styles.card}
+            onClick={() => setSelected(pl)}
+            onContextMenu={(e) => onCardContextMenu(e, pl)}
+          >
             <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
               <Cover url={pl.coverUrl} size={56} radius={8} iconSize={24} />
               <div style={{ minWidth: 0 }}>
@@ -1315,6 +1559,9 @@ export function PlaylistsPage() {
 
       <BiliLoginDialog open={biliLoginOpen} onClose={() => setBiliLoginOpen(false)} />
       <NeteaseLoginDialog open={neLoginOpen} onClose={() => setNeLoginOpen(false)} />
+      {/* 歌单卡片右键菜单 + 重命名/删除/移动歌曲对话框 */}
+      {playlistContextMenu}
+      {editDialogs}
     </PageLayout>
     </div>
   )

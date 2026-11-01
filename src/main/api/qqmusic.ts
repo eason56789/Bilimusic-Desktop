@@ -130,7 +130,11 @@ export async function searchQqSongs(keyword: string, page = 1, pageSize = 30): P
         num_per_page: String(Math.min(60, Math.max(1, pageSize))),
         page_num: String(Math.max(1, page)),
         query: keyword,
-        search_type: 0
+        /**
+         * 7 = 只搜歌曲(听屿源码实测记录)。历史上 0 也表示歌曲,但 QQ 现在对 0 会稳定
+         * 返回空列表(code 2001,表现为偶发/持续空结果),7 才正常出数据 —— 不要改回 0。
+         */
+        search_type: 7
       }
     },
     { ct: '19', cv: '1859', uin: '0', format: 'json' }

@@ -83,6 +83,7 @@ const api: DesktopApi = {
   libraryRemoveSearchHistory: (q) => invoke('library:removeSearchHistory', q),
   libraryClearSearchHistory: () => invoke('library:clearSearchHistory'),
   librarySetSetting: (key, value) => invoke<Settings>('library:setSetting', key, value),
+  libraryResetSettings: (sections?: string[]) => invoke<Settings>('library:resetSettings', sections),
   libraryAddListenTime: (ms) => invoke('library:addListenTime', ms),
 
   importBiliFavorites: (folderId, folderName) =>
