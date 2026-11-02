@@ -919,7 +919,11 @@ export function NowPlaying() {
                               ['partita', '云阶(分栏词块)'],
                               ['claddagh', '回环(圆弧排布)'],
                               ['still', '时计(静态三行)'],
-                              ['tempera', '凝彩(构图色块 + 反相大字)']
+                              ['tempera', '凝彩(构图色块 + 反相大字)'],
+                              ['classic', '经典(逐词高亮滚动)'],
+                              ['tilt', '倾斜(随机断行倾斜)'],
+                              ['cadenza', '商籁(逐字飞入)'],
+                              ['fume', '雾里(活字印刷)']
                             ] as const
                           ).map(([k, label]) => (
                             <MenuItem

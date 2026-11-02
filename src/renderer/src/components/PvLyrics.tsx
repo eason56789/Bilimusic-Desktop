@@ -26,6 +26,8 @@ import { layoutCladdagh, layoutPartita, layoutStill, type ArcGlyph, type Partita
 import { hash01, hashSeed } from '../lib/temperaPrims'
 import { TemperaLyrics } from './TemperaLyrics'
 import { JizuraLyrics } from './JizuraLyrics'
+import { FoliaLyrics } from './FoliaLyrics'
+import { FOLIA_STYLE_IDS } from './FoliaStage'
 
 const useStyles = makeStyles({
   root: {
@@ -639,6 +641,9 @@ export function PvLyricsSafe(props: PvLyricsProps): JSX.Element {
       ) : arrange === 'jizura' ? (
         // JIZURA 独立引擎(Canvas2D 逐帧),与凝彩互不相干
         <JizuraLyrics lines={props.lines} activeIdx={props.activeIdx} />
+      ) : FOLIA_STYLE_IDS.has(arrange) ? (
+        // folia 移植样式(每个样式自带宿主与渲染器)
+        <FoliaLyrics lines={props.lines} styleId={arrange} />
       ) : (
         <PvLyrics {...props} />
       )}

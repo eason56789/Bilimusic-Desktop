@@ -4,7 +4,11 @@
     "target": "ES2022",
     "module": "ESNext",
     "moduleResolution": "bundler",
-    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "lib": [
+      "ES2023",
+      "DOM",
+      "DOM.Iterable"
+    ],
     "jsx": "react-jsx",
     "strict": true,
     "noEmit": false,
@@ -13,9 +17,19 @@
     "useDefineForClassFields": true,
     "outDir": "./out/tsbuild/web",
     "paths": {
-      "@shared/*": ["./src/shared/*"],
-      "@renderer/*": ["./src/renderer/src/*"]
+      "@shared/*": [
+        "./src/shared/*"
+      ],
+      "@renderer/*": [
+        "./src/renderer/src/*"
+      ],
+      "@folia-upstream/*": [
+        "./src/renderer/src/lib/folia/_upstream/*"
+      ]
     }
   },
-  "include": ["src/renderer/src/**/*", "src/shared/**/*"]
+  "include": [
+    "src/renderer/src/**/*",
+    "src/shared/**/*"
+  ]
 }

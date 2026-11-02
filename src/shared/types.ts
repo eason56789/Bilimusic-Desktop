@@ -205,7 +205,7 @@ export interface Settings {
    * - 'claddagh' 回环:整行沿圆弧排布,字随切线旋转
    * - 'still'    时计:静态三行(上一句/当前句/下一句)
    */
-  pvArrange: 'pv' | 'partita' | 'claddagh' | 'still' | 'tempera' | 'jizura'
+  pvArrange: 'pv' | 'partita' | 'claddagh' | 'still' | 'tempera' | 'jizura' | string
   /** PV 逐字入场动效 */
   pvAnim: 'pop' | 'rise' | 'slam' | 'wave' | 'typewriter'
   /** PV 版式:自动(按句语义/种子轮转)或指定某套排版 */

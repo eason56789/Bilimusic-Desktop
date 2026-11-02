@@ -109,6 +109,65 @@ const useStyles = makeStyles({
     overflowY: 'auto',
     padding: '0 4px 20px 20px'
   },
+  /* ===== 排布样式缩略图网格(对齐 folia 歌词样式面板) ===== */
+  styleGrid: {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(auto-fill, minmax(96px, 1fr))',
+    gap: '10px',
+    maxWidth: '660px'
+  },
+  styleTile: {
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'stretch',
+    gap: '6px',
+    padding: 0,
+    border: 'none',
+    background: 'transparent',
+    cursor: 'default'
+  },
+  styleThumb: {
+    position: 'relative',
+    display: 'block',
+    width: '100%',
+    aspectRatio: '16 / 10' as never,
+    borderRadius: '8px',
+    border: '2px solid transparent',
+    overflow: 'hidden'
+  },
+  styleTileActive: {
+    color: tokens.colorBrandForeground1,
+    fontWeight: '600'
+  },
+  styleThumbActive: {},
+  styleCheck: {
+    position: 'absolute',
+    right: '5px',
+    top: '5px',
+    width: '16px',
+    height: '16px',
+    borderRadius: '50%',
+    background: tokens.colorBrandBackground,
+    color: '#fff',
+    fontSize: '11px',
+    lineHeight: '16px',
+    textAlign: 'center'
+  },
+  styleSoon: {
+    position: 'absolute',
+    inset: 0,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    fontSize: '10px',
+    color: 'rgba(255,255,255,0.42)',
+    background: 'rgba(0,0,0,0.34)'
+  },
+  styleLabel: {
+    fontSize: tokens.fontSizeBase200,
+    color: tokens.colorNeutralForeground2,
+    textAlign: 'center'
+  },
   noHit: { color: tokens.colorNeutralForeground3, paddingLeft: '2px' },
   row: { display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' },
   swatch: {
@@ -153,6 +212,20 @@ const SETTING_SECTIONS: { name: string; keywords: string }[] = [
 
 /** 含可重置设置键的分区(与主进程 SECTION_SETTING_KEYS 的键一致;其余分区无可重置项) */
 const RESETTABLE_SECTIONS = ['外观', '播放', '歌词', '搜索', '听歌识别', '下载']
+
+/** 排布样式的缩略图网格(与 folia「歌词样式」面板同构;ready=false 的显示"敬请期待") */
+const STYLE_TILES: { id: string; label: string; ready: boolean; grad: string }[] = [
+  { id: 'pv', label: '逐字PV', ready: true, grad: 'linear-gradient(135deg,#2a2f3a,#141821)' },
+  { id: 'partita', label: '云阶', ready: true, grad: 'linear-gradient(135deg,#1e3a5f,#0d1b2a)' },
+  { id: 'claddagh', label: '回环', ready: true, grad: 'linear-gradient(135deg,#3a1e3a,#1a0d1a)' },
+  { id: 'still', label: '时计', ready: true, grad: 'linear-gradient(135deg,#241f1a,#100e0c)' },
+  { id: 'tempera', label: '凝彩', ready: true, grad: 'linear-gradient(135deg,#c9c9c7,#5a5a58)' },
+  { id: 'jizura', label: '印刷分镜', ready: true, grad: 'linear-gradient(135deg,#0f0f12,#2a1620)' },
+  { id: 'classic', label: '经典', ready: true, grad: 'linear-gradient(135deg,#1a1a1f,#0b0b0e)' },
+  { id: 'tilt', label: '倾斜', ready: true, grad: 'linear-gradient(135deg,#1f2a1f,#0b100b)' },
+  { id: 'cadenza', label: '商籁', ready: true, grad: 'linear-gradient(135deg,#2a1f14,#120d08)' },
+  { id: 'fume', label: '雾里', ready: true, grad: 'linear-gradient(135deg,#2f2f35,#121215)' }
+]
 
 /** JIZURA 舞台的情绪(对应引擎 J.MOODS) */
 const JIZURA_MOODS: { value: string; label: string }[] = [
@@ -1041,18 +1114,22 @@ export function SettingsPage() {  const styles = useStyles()
               <Text size={300} style={{ minWidth: 96 }}>
                 排布样式:
               </Text>
-              <RadioGroup
-                layout="horizontal"
-                value={s.pvArrange ?? 'pv'}
-                onChange={(_, d) => update('pvArrange', d.value as typeof s.pvArrange)}
-              >
-                <Radio value="pv" label="逐字PV" />
-                <Radio value="partita" label="云阶" />
-                <Radio value="claddagh" label="回环" />
-                <Radio value="still" label="时计" />
-                <Radio value="tempera" label="凝彩" />
-                <Radio value="jizura" label="印刷分镜" />
-              </RadioGroup>
+              <div className={styles.styleGrid}>
+                {STYLE_TILES.map((t) => (
+                  <button
+                    key={t.id}
+                    className={`${styles.styleTile} ${(s.pvArrange ?? 'pv') === t.id ? styles.styleTileActive : ''}`}
+                    onClick={() => update('pvArrange', t.id)}
+                    title={t.label}
+                  >
+                    <span className={styles.styleThumb} style={{ background: t.grad, borderColor: (s.pvArrange ?? "pv") === t.id ? "#4f8cff" : "transparent" }}>
+                      {t.id === (s.pvArrange ?? 'pv') ? <span className={styles.styleCheck}>✓</span> : null}
+                      {!t.ready ? <span className={styles.styleSoon}>敬请期待</span> : null}
+                    </span>
+                    <span className={styles.styleLabel}>{t.label}</span>
+                  </button>
+                ))}
+              </div>
             </div>
             {/* ===== JIZURA 舞台参数(引擎自带风格系统) ===== */}
             {(s.pvArrange ?? 'pv') === 'jizura' && (

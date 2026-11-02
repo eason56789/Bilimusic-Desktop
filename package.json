@@ -1,7 +1,7 @@
 {
   "name": "bilimusic-desktop",
   "productName": "BiliMusic",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "基于哔哩哔哩与网易云音乐的音乐播放器 - 桌面版 (Fluent UI)",
   "main": "out/main/index.js",
   "author": "BiliMusic",
@@ -15,7 +15,14 @@
     "dist": "electron-vite build && electron-builder --win"
   },
   "dependencies": {
+    "@chenglou/pretext": "^1.0.0",
+    "@tailwindcss/vite": "^4.3.3",
+    "framer-motion": "^13.5.1",
+    "lucide-react": "^1.66.0",
+    "pixi.js": "^8.22.0",
     "qrcode": "^1.5.4",
+    "tailwindcss": "^4.3.3",
+    "three": "^0.185.1",
     "zustand": "^5.0.3"
   },
   "devDependencies": {
