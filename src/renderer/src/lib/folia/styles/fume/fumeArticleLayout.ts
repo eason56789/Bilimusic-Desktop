@@ -296,10 +296,11 @@ function* buildArticleLayoutAttempt(
         if (timing) {
             timing.prepareLayoutMs += nowMs() - prepareLayoutStart;
         }
-        const lineHeight = Math.round(fontPx * (variant === 'hero' ? 1.02 : 1.06));
+        // 排得比上游更紧凑:行高系数与块间距都收一档,同屏可容纳更多歌词块
+        const lineHeight = Math.round(fontPx * (variant === 'hero' ? 0.98 : 1.0));
         const blockGap = variant === 'hero'
-            ? Math.max(Math.round(lineHeight * 0.2), 6)
-            : Math.max(Math.round(lineHeight * 0.08), 2);
+            ? Math.max(Math.round(lineHeight * 0.13), 5)
+            : Math.max(Math.round(lineHeight * 0.05), 2);
         const blockHeight = paddingY * 2 + lineCount * lineHeight;
         let x = 0;
         let y = 0;

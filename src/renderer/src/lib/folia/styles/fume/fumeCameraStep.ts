@@ -117,7 +117,7 @@ export const stepFumeCamera = (state: FumeCameraState, input: FumeCameraStepInpu
             state.retarget = {
                 sourceLineIndex: OVERVIEW_CAMERA_SOURCE,
                 startedAt: time,
-                duration: clamp(resolveOverviewRetargetDuration(viewport) / cameraSpeed, 0.12, 1.2),
+                duration: clamp((resolveOverviewRetargetDuration(viewport) * 1.5) / cameraSpeed, 0.4, 1.35),
                 fromX: state.camera.x,
                 fromY: state.camera.y,
                 fromScale: state.camera.scale,
@@ -158,7 +158,7 @@ export const stepFumeCamera = (state: FumeCameraState, input: FumeCameraStepInpu
             state.retarget = {
                 sourceLineIndex: focusBlock.sourceLineIndex,
                 startedAt: time,
-                duration: clamp(resolveCameraRetargetDuration(focusBlock.line) / cameraSpeed, 0.03, 0.3),
+                duration: clamp((resolveCameraRetargetDuration(focusBlock.line) * 1.8) / cameraSpeed, 0.07, 0.5),
                 fromX: state.camera.x,
                 fromY: state.camera.y,
                 fromScale: state.camera.scale,
@@ -174,7 +174,7 @@ export const stepFumeCamera = (state: FumeCameraState, input: FumeCameraStepInpu
         state.retarget = {
             sourceLineIndex: -1,
             startedAt: time,
-            duration: clamp(0.18 / cameraSpeed, 0.05, 0.4),
+            duration: clamp(0.32 / cameraSpeed, 0.08, 0.6),
             fromX: state.camera.x,
             fromY: state.camera.y,
             fromScale: state.camera.scale,
@@ -237,7 +237,7 @@ export const stepFumeCamera = (state: FumeCameraState, input: FumeCameraStepInpu
         const screenDeltaX = Math.abs(targetCameraX - state.retarget.fromX) * bridgeScale;
         const screenDeltaY = Math.abs(targetCameraY - state.retarget.fromY) * bridgeScale;
         const screenDistance = Math.hypot(screenDeltaX, screenDeltaY);
-        state.retarget.bridgeMode = screenDistance >= Math.min(viewport.width, viewport.height) * 0.42
+        state.retarget.bridgeMode = screenDistance >= Math.min(viewport.width, viewport.height) * 0.32
             ? 'direct'
             : 'none';
         state.retarget.bridgeWaypointX = targetCameraX;
@@ -338,13 +338,13 @@ export const stepFumeCamera = (state: FumeCameraState, input: FumeCameraStepInpu
             * (1 - Math.exp(-dt * mix(5.4, 12.8, retargetBoost)));
 
         const springStrength = mix(
-            208,
-            clamp(15.8 / Math.max(state.retarget.duration * state.retarget.duration, 0.0064), 260, 780),
+            148,
+            clamp(15.8 / Math.max(state.retarget.duration * state.retarget.duration, 0.0064), 220, 640),
             retargetBoost,
         );
         const damping = mix(
-            24,
-            clamp(Math.sqrt(springStrength) * 1.36, 24, 40),
+            22,
+            clamp(Math.sqrt(springStrength) * 1.42, 22, 40),
             retargetBoost,
         );
         const accelX = (state.camera.focusX - state.camera.x) * springStrength - state.camera.velocityX * damping;
@@ -352,8 +352,8 @@ export const stepFumeCamera = (state: FumeCameraState, input: FumeCameraStepInpu
         state.camera.velocityX += accelX * dt;
         state.camera.velocityY += accelY * dt;
         const maxVelocity = mix(
-            1320,
-            clamp(cameraDistance / Math.max(state.retarget.duration * 0.28, 0.028), 2600, 8800),
+            980,
+            clamp(cameraDistance / Math.max(state.retarget.duration * 0.28, 0.028), 2200, 7600),
             retargetBoost,
         );
         state.camera.velocityX = clamp(state.camera.velocityX, -maxVelocity, maxVelocity);

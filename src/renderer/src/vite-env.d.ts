@@ -8,3 +8,8 @@ declare module '*.svg' {
   const src: string
   export default src
 }
+
+/** Vite 的 import.meta.glob(cappella 头像/表情包目录扫描用) */
+interface ImportMeta {
+  glob<T = unknown>(pattern: string, options?: { eager?: boolean; query?: string }): Record<string, T>
+}

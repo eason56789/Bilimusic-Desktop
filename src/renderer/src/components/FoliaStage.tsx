@@ -12,6 +12,8 @@ import { motionValue as fmMotionValue, type MotionValue } from 'framer-motion'
 import type { LyricLine } from '@shared/types'
 import { useStore, getAudioElement } from '../store'
 import { findLineIndex, toFoliaLines, toFoliaTheme, type FoliaLine, type FoliaTheme } from '../lib/folia/bridge'
+import { applyCoverTheme, loadCoverColors, peekCoverColors } from '../lib/folia/coverTheme'
+import { coverSrc } from './Cover'
 
 /* ===================== 样式清单 ===================== */
 
@@ -34,7 +36,16 @@ export const FOLIA_STYLES: FoliaStyleDef[] = [
   { id: 'partita', label: '云阶', ready: true },
   { id: 'claddagh', label: '回环', ready: true },
   { id: 'cadenza', label: '商籁', ready: true },
-  { id: 'fume', label: '雾里', ready: true }
+  { id: 'fume', label: '雾里', ready: true },
+  { id: 'cappella', label: '群唱', ready: true },
+  { id: 'monet', label: '莫奈', ready: true },
+  { id: 'pendolo', label: '钟摆', ready: true },
+  { id: 'lumiere', label: '绘光', ready: true },
+  { id: 'hanabi', label: '花火', ready: true },
+  { id: 'nebbia', label: '雾笺', ready: true },
+  { id: 'sonnet', label: '诗节', ready: true },
+  { id: 'diorama', label: '镜台', ready: true },
+  { id: 'machi', label: '町景', ready: true }
 ]
 
 /** 已移植完成的 folia 样式 id 集合(供 PvLyricsSafe 分派用) */
@@ -64,6 +75,33 @@ const STYLE_COMPONENTS: Record<string, React.LazyExoticComponent<React.Component
   ),
   fume: lazy(() =>
     import('../lib/folia/styles/fume/VisualizerFume').then((m) => ({ default: (m as any).VisualizerFume ?? (m as any).default }))
+  ),
+  cappella: lazy(() =>
+    import('../lib/folia/styles/cappella/VisualizerCappella').then((m) => ({ default: (m as any).VisualizerCappella ?? (m as any).default }))
+  ),
+  monet: lazy(() =>
+    import('../lib/folia/styles/monet/VisualizerMonet').then((m) => ({ default: (m as any).VisualizerMonet ?? (m as any).default }))
+  ),
+  pendolo: lazy(() =>
+    import('../lib/folia/styles/pendolo/VisualizerPendolo').then((m) => ({ default: (m as any).VisualizerPendolo ?? (m as any).default }))
+  ),
+  lumiere: lazy(() =>
+    import('../lib/folia/styles/lumiere/VisualizerLumiere').then((m) => ({ default: (m as any).VisualizerLumiere ?? (m as any).default }))
+  ),
+  hanabi: lazy(() =>
+    import('../lib/folia/styles/hanabi/VisualizerHanabi').then((m) => ({ default: (m as any).VisualizerHanabi ?? (m as any).default }))
+  ),
+  nebbia: lazy(() =>
+    import('../lib/folia/styles/nebbia/VisualizerNebbia').then((m) => ({ default: (m as any).VisualizerNebbia ?? (m as any).default }))
+  ),
+  sonnet: lazy(() =>
+    import('../lib/folia/styles/sonnet/VisualizerSonnet').then((m) => ({ default: (m as any).VisualizerSonnet ?? (m as any).default }))
+  ),
+  diorama: lazy(() =>
+    import('../lib/folia/styles/diorama/VisualizerDiorama').then((m) => ({ default: (m as any).VisualizerDiorama ?? (m as any).default }))
+  ),
+  machi: lazy(() =>
+    import('../lib/folia/styles/machi/VisualizerMachi').then((m) => ({ default: (m as any).VisualizerMachi ?? (m as any).default }))
   )
 }
 
@@ -250,9 +288,10 @@ export function FoliaStage({ lines, theme, styleId }: FoliaStageProps): JSX.Elem
   )
 }
 
-/** 从项目歌词 + 设置一次性生成样式所需数据 */
+/** 从项目歌词 + 设置一次性生成样式所需数据(背景色随专辑封面取色) */
 export function useFoliaData(lyrics: LyricLine[]): { lines: FoliaLine[]; theme: FoliaTheme } {
   const settings = useStore((s) => s.library?.settings)
+  const coverUrl = useStore((s) => s.current?.coverUrl)
   const themeMode = settings?.theme ?? 'system'
   const isDark = useMemo(() => {
     if (themeMode === 'dark') return true
@@ -260,6 +299,36 @@ export function useFoliaData(lyrics: LyricLine[]): { lines: FoliaLine[]; theme: 
     return window.matchMedia?.('(prefers-color-scheme: dark)').matches ?? true
   }, [themeMode])
   const lines = useMemo(() => toFoliaLines(lyrics), [lyrics])
-  const theme = useMemo(() => toFoliaTheme(settings, isDark), [settings, isDark])
+  const baseTheme = useMemo(() => toFoliaTheme(settings, isDark), [settings, isDark])
+
+  // 封面主色 → 主题色(异步加载,取不到就保持基础主题;模块级缓存按 URL 去重)
+  const coverSrcUrl = useMemo(() => coverSrc(coverUrl, 480), [coverUrl])
+  const [coverColors, setCoverColors] = useState<string[] | null>(() =>
+    coverSrcUrl ? (peekCoverColors(coverSrcUrl) ?? null) : null
+  )
+  useEffect(() => {
+    let alive = true
+    if (!coverSrcUrl) {
+      setCoverColors(null)
+      return undefined
+    }
+    const cached = peekCoverColors(coverSrcUrl)
+    if (cached) {
+      setCoverColors(cached)
+      return undefined
+    }
+    setCoverColors(null)
+    loadCoverColors(coverSrcUrl).then((colors) => {
+      if (alive && colors) setCoverColors(colors)
+    })
+    return () => {
+      alive = false
+    }
+  }, [coverSrcUrl])
+
+  const theme = useMemo(
+    () => applyCoverTheme(baseTheme, coverColors),
+    [baseTheme, coverColors]
+  )
   return { lines, theme }
 }

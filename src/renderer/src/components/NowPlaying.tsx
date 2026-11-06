@@ -68,7 +68,21 @@ const PV_ARRANGE_LABEL: Record<string, string> = {
   partita: '云阶',
   claddagh: '回环',
   still: '时计',
-  tempera: '凝彩'
+  tempera: '凝彩',
+  jizura: '印刷分镜',
+  classic: '经典',
+  tilt: '倾斜',
+  cadenza: '商籁',
+  fume: '雾里',
+  cappella: '群唱',
+  monet: '莫奈',
+  pendolo: '钟摆',
+  lumiere: '绘光',
+  hanabi: '花火',
+  nebbia: '雾笺',
+  sonnet: '诗节',
+  diorama: '镜台',
+  machi: '町景'
 }
 
 const PV_LAYOUT_LABEL: Record<string, string> = {
@@ -923,7 +937,16 @@ export function NowPlaying() {
                               ['classic', '经典(逐词高亮滚动)'],
                               ['tilt', '倾斜(随机断行倾斜)'],
                               ['cadenza', '商籁(逐字飞入)'],
-                              ['fume', '雾里(活字印刷)']
+                              ['fume', '雾里(活字印刷)'],
+                              ['cappella', '群唱(聊天气泡)'],
+                              ['monet', '莫奈(海报版面)'],
+                              ['pendolo', '钟摆(钟盘弧线)'],
+                              ['lumiere', '绘光(体积光刻字)'],
+                              ['hanabi', '花火(烟花PV)'],
+                              ['nebbia', '雾笺(起雾车窗)'],
+                              ['sonnet', '诗节(翻页诗稿)'],
+                              ['diorama', '镜台(3D点阵)'],
+                              ['machi', '町景(微缩街景)']
                             ] as const
                           ).map(([k, label]) => (
                             <MenuItem

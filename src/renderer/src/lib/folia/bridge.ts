@@ -42,6 +42,8 @@ export interface FoliaLine {
   songPart?: string
   blockIndex?: number
   alternateTexts?: { text: string; kind?: string }[]
+  /** cappella 用:同一时间轴多角色(本项目恒缺省,样式自动回退默认发送者) */
+  agentId?: string
 }
 
 /** 上游命名别名(部分模块按 Word / Line / Theme 导入) */
@@ -201,7 +203,14 @@ export const DEFAULT_CLADDAGH_TUNING: CladdaghTuning = {
   letterSpacingOffset: 0
 }
 
-export { DEFAULT_CLASSIC_TUNING, DEFAULT_PARTITA_TUNING, DEFAULT_TILT_TUNING, DEFAULT_CADENZA_TUNING, DEFAULT_FUME_TUNING } from './motion'
-export type { ClassicTuning, PartitaTuning, TiltTuning, CadenzaTuning, FumeTuning, LyricRenderOverride, LyricRenderScale } from './motion'
+export { DEFAULT_CLASSIC_TUNING, DEFAULT_PARTITA_TUNING, DEFAULT_TILT_TUNING, DEFAULT_CADENZA_TUNING, DEFAULT_FUME_TUNING, DEFAULT_LUMIERE_TUNING, DEFAULT_MONET_TUNING, DEFAULT_MONET_BACKGROUND_TUNING, DEFAULT_PENDOLO_TUNING } from './motion'
+export type { ClassicTuning, PartitaTuning, TiltTuning, CadenzaTuning, FumeTuning, LumiereTuning, LumiereRenderQuality, MonetTuning, MonetBackgroundTuning, MonetBackgroundSource, MonetBackgroundLayout, MonetBackgroundWashColorMode, MonetAudioStyle, MonetPortraitSource, MonetBackgroundImage, StoredMonetBackgroundImage, MonetPortraitImage, StoredMonetPortraitImage, PendoloTuning, LyricRenderOverride, LyricRenderScale } from './motion'
 
 export type TiltColorScheme = 'default' | 'swap' | 'accentAll' | 'primaryAll'
+
+export { DEFAULT_NEBBIA_TUNING, DEFAULT_SONNET_TUNING } from './motion'
+export type { NebbiaTuning, SonnetTuning, SonnetOuterFrameMode } from './motion'
+
+// diorama tuning(追加;见 PORTING.md——向后兼容,只增不改)
+export { DEFAULT_DIORAMA_TUNING, DEFAULT_DIORAMA_GEOMETRY_VISIBILITY, DIORAMA_PARTICLE_DENSITY_MIN, DIORAMA_PARTICLE_DENSITY_MAX, DIORAMA_PARTICLE_DENSITY_STEP, DIORAMA_MOTE_CIRCUMFERENCE_MIN, DIORAMA_MOTE_CIRCUMFERENCE_MAX, DIORAMA_MOTE_CIRCUMFERENCE_STEP, DIORAMA_MOTE_RADIAL_MIN, DIORAMA_MOTE_RADIAL_MAX, DIORAMA_MOTE_RADIAL_STEP, DIORAMA_PARTICLE_SCALE_MIN, DIORAMA_PARTICLE_SCALE_MAX, DIORAMA_PARTICLE_SCALE_STEP, DIORAMA_PARTICLE_SIZE_MIN, DIORAMA_PARTICLE_SIZE_MAX, DIORAMA_PARTICLE_SIZE_STEP, DIORAMA_PARTICLE_GLOW_INTENSITY_MIN, DIORAMA_PARTICLE_GLOW_INTENSITY_MAX, DIORAMA_PARTICLE_GLOW_INTENSITY_STEP } from './motion'
+export type { DioramaTuning, DioramaGeometryMode, DioramaGeometryVisibility } from './motion'

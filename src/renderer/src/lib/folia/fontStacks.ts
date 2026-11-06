@@ -53,3 +53,17 @@ export function resolveThemeTranslationFontStack(theme: ThemeFontLike): string {
 export function resolveThemeFontWeight(theme: ThemeFontLike, fallback = 700): number {
   return theme.fontWeight ?? fallback
 }
+
+/* ---------- 字重归一化(上游 utils/fontStacks 同名导出,sonnet 用) ---------- */
+
+const MIN_FONT_WEIGHT = 100
+const MAX_FONT_WEIGHT = 900
+const FONT_WEIGHT_STEP = 10
+
+/** 把任意输入收成 100–900、按 10 取整的合法字重;不是有限数字就 null。 */
+export const normalizeFontWeight = (fontWeight: unknown): number | null => {
+  if (typeof fontWeight !== 'number' || !Number.isFinite(fontWeight)) return null
+
+  const clamped = Math.min(MAX_FONT_WEIGHT, Math.max(MIN_FONT_WEIGHT, fontWeight))
+  return Math.round(clamped / FONT_WEIGHT_STEP) * FONT_WEIGHT_STEP
+}

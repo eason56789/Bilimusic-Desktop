@@ -13,13 +13,17 @@ const ZH: Record<string, string> = {
   'ui.visualizerTilt': '倾斜'
 }
 
-export function useTranslation(): { t: (key: string, opts?: Record<string, unknown>) => string } {
-  return {
-    t: (key: string, opts?: Record<string, unknown>) => {
-      if (opts && typeof opts.defaultValue === 'string') return opts.defaultValue
-      return ZH[key] ?? key
-    }
-  }
+type Translate = (key: string, opts?: Record<string, unknown>) => string
+
+const translate: Translate = (key, opts) => {
+  if (opts && typeof opts.defaultValue === 'string') return opts.defaultValue
+  return ZH[key] ?? key
 }
 
-export default { useTranslation }
+export function useTranslation(): { t: Translate } {
+  return { t: translate }
+}
+
+/** 上游 `import i18n from '…/i18n/config'` 的替身(样式设置面板的提示文案用) */
+const i18n = { t: translate }
+export default i18n

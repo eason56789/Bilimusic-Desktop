@@ -224,7 +224,16 @@ const STYLE_TILES: { id: string; label: string; ready: boolean; grad: string }[]
   { id: 'classic', label: '经典', ready: true, grad: 'linear-gradient(135deg,#1a1a1f,#0b0b0e)' },
   { id: 'tilt', label: '倾斜', ready: true, grad: 'linear-gradient(135deg,#1f2a1f,#0b100b)' },
   { id: 'cadenza', label: '商籁', ready: true, grad: 'linear-gradient(135deg,#2a1f14,#120d08)' },
-  { id: 'fume', label: '雾里', ready: true, grad: 'linear-gradient(135deg,#2f2f35,#121215)' }
+  { id: 'fume', label: '雾里', ready: true, grad: 'linear-gradient(135deg,#2f2f35,#121215)' },
+  { id: 'cappella', label: '群唱', ready: true, grad: 'linear-gradient(135deg,#1e2a33,#0d1418)' },
+  { id: 'monet', label: '莫奈', ready: true, grad: 'linear-gradient(135deg,#3a4a2f,#151c10)' },
+  { id: 'pendolo', label: '钟摆', ready: true, grad: 'linear-gradient(135deg,#33281a,#161009)' },
+  { id: 'lumiere', label: '绘光', ready: true, grad: 'linear-gradient(135deg,#3a3320,#181408)' },
+  { id: 'hanabi', label: '花火', ready: true, grad: 'linear-gradient(135deg,#301a2a,#140a12)' },
+  { id: 'nebbia', label: '雾笺', ready: true, grad: 'linear-gradient(135deg,#24303a,#10161c)' },
+  { id: 'sonnet', label: '诗节', ready: true, grad: 'linear-gradient(135deg,#2a2438,#121018)' },
+  { id: 'diorama', label: '镜台', ready: true, grad: 'linear-gradient(135deg,#1a2e2a,#0a1412)' },
+  { id: 'machi', label: '町景', ready: true, grad: 'linear-gradient(135deg,#30302a,#151511)' }
 ]
 
 /** JIZURA 舞台的情绪(对应引擎 J.MOODS) */
@@ -1119,7 +1128,7 @@ export function SettingsPage() {  const styles = useStyles()
                   <button
                     key={t.id}
                     className={`${styles.styleTile} ${(s.pvArrange ?? 'pv') === t.id ? styles.styleTileActive : ''}`}
-                    onClick={() => update('pvArrange', t.id)}
+                    onClick={() => t.ready && update('pvArrange', t.id)}
                     title={t.label}
                   >
                     <span className={styles.styleThumb} style={{ background: t.grad, borderColor: (s.pvArrange ?? "pv") === t.id ? "#4f8cff" : "transparent" }}>
