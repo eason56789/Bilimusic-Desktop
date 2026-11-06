@@ -301,12 +301,12 @@ export interface PendoloTuning {
 
 export const DEFAULT_PENDOLO_TUNING: PendoloTuning = {
   render: { scale: 'global', antialias: 'global' },
-  arcRadius: 0.42,
+  arcRadius: 0.52,
   arcAngleDeg: 100,
   wheelCenterX: 0.0,
   wheelCenterY: 0.5,
   tickSnappiness: 2.0,
-  activeScale: 1.25,
+  activeScale: 1.4,
   showGearDecor: 'subtle',
   showCenterGradient: true,
   showCoverOnWatchFace: false,

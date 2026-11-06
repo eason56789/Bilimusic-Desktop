@@ -399,6 +399,12 @@ const VisualizerPendolo: React.FC<VisualizerSharedProps> = (props) => {
     const resolvedMode = useMemo(() => resolveSubtitleContentMode(subtitleContentMode, showSubtitleTranslation), [subtitleContentMode, showSubtitleTranslation]);
     const subtitleFontFamily = useMemo(() => resolveThemeTranslationFontStack(subtitleTheme ?? theme), [subtitleTheme, theme]);
 
+    // 基准字号随视口短边缩放:上游固定 28px 在高分屏上偏小(#大屏可读性)。
+    const pendoloFontPx = useMemo(
+        () => Math.max(28, Math.round(Math.min(viewportSize.width, viewportSize.height) * 0.034)),
+        [viewportSize],
+    );
+
     const lineBlockHeights = useMemo(() => {
         const measureWidth = availableTextWidth / pendoloTuning.activeScale;
         return lines.map((line, index) => {
@@ -406,7 +412,7 @@ const VisualizerPendolo: React.FC<VisualizerSharedProps> = (props) => {
                 return 0;
             }
             // Always pre-allocate space for the focal state to prevent overlapping when scaled up
-            const fontPx = Math.round(28 * lyricsFontScale);
+            const fontPx = Math.round(pendoloFontPx * lyricsFontScale);
             const mainHeight = buildPendoloTextLayout(
                 line.fullText,
                 `${fontWeight} ${fontPx}px ${fontFamily}`,
@@ -592,7 +598,7 @@ const VisualizerPendolo: React.FC<VisualizerSharedProps> = (props) => {
                                 motionProfile,
                             );
                             const maxTextWidth = availableTextWidth / item.scale;
-                            const fontPx = Math.round((isFocal ? 28 : 22) * lyricsFontScale);
+                            const fontPx = Math.round((isFocal ? pendoloFontPx : pendoloFontPx * 0.78) * lyricsFontScale);
                             const subtitleTracks = resolvePendoloSubtitleTracks(item.line, {
                                 mode: resolvedMode,
                                 hidden: hideTranslationSubtitle,

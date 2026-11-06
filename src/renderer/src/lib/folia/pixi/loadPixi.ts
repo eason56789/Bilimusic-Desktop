@@ -1,4 +1,7 @@
 import { installPixiFilterPoolCompat } from './pixiFilterPoolCompat';
+// CSP 未开放 unsafe-eval:Pixi 的 shader/UBO 同步代码用 new Function() 会被拦,
+// 导入官方免 eval 补丁(副作用导入,必须在构造任何 renderer 之前)
+import 'pixi.js/unsafe-eval';
 
 // src/components/visualizer/pixi/loadPixi.ts
 // The single place a visualizer pulls Pixi in, so the shader precision default is raised before
