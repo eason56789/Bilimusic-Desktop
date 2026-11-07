@@ -178,11 +178,15 @@ function parseDuration(d: string): number {
 export async function fetchSuggestions(keyword: string): Promise<string[]> {
   try {
     const resp = await fetch(
-      `https://s.search.bilibili.com/main/suggest?term=${encodeURIComponent(keyword)}`,
+      `https://s.search.bilibili.com/main/suggest?term=${encodeURIComponent(keyword)}&main_ver=v1`,
       { headers: baseHeaders() }
     )
-    const json = (await resp.json()) as { result?: { value?: string }[] }
-    return (json.result ?? [])
+    const json = (await resp.json()) as {
+      result?: { value?: string }[] | { tag?: { value?: string }[] }
+    }
+    // 接口现返回 { result: { tag: [...] } },兼容旧的纯数组结构
+    const raw = Array.isArray(json.result) ? json.result : (json.result?.tag ?? [])
+    return (raw as { value?: string }[])
       .map((it) => (it.value ?? '').replace(/<[^>]*>/g, ''))
       .filter((s) => s.trim())
   } catch {
@@ -979,5 +983,48 @@ export async function getChartSongs(chartId: string): Promise<ChartDetail> {
     updateTip: '三日排行',
     songs,
     total: songs.length
+  }
+}
+
+/**
+ * 上传播放记录到B站观看历史(heartbeat 接口):歌曲实际播放 ≥30s 后由播放器调用。
+ * 需要 SESSDATA + bili_jct(登录 cookie);cid 用 getVideoPages / getCidForPage 取。
+ */
+export async function reportWatch(
+  bvid: string,
+  cid: number,
+  playedSec: number
+): Promise<{ ok: boolean; code?: number; error?: string }> {
+  const csrf = /(?:^|;\s*)bili_jct=([^;]+)/.exec(biliCookie)?.[1] ?? ''
+  if (!csrf) return { ok: false, error: '未登录哔哩哔哩' }
+  if (!bvid || !Number.isFinite(cid) || cid <= 0) return { ok: false, error: '缺少 bvid/cid' }
+  try {
+    const now = Math.floor(Date.now() / 1000)
+    const played = Math.floor(playedSec)
+    const body = new URLSearchParams({
+      bvid,
+      cid: String(cid),
+      played_time: String(played),
+      realtime: String(played),
+      start_time: String(Math.max(0, now - played)),
+      type: '3',
+      dt: '2',
+      play_type: '0',
+      csrf
+    }).toString()
+    const resp = await fetch('https://api.bilibili.com/x/click-interface/web/heartbeat', {
+      method: 'POST',
+      headers: baseHeaders({
+        Cookie: biliCookie,
+        'Content-Type': 'application/x-www-form-urlencoded'
+      }),
+      body
+    })
+    const json = JSON.parse(await resp.text())
+    return json?.code === 0
+      ? { ok: true, code: 0 }
+      : { ok: false, code: json?.code, error: json?.message ?? `code ${json?.code}` }
+  } catch (e) {
+    return { ok: false, error: String(e) }
   }
 }

@@ -23,13 +23,11 @@ import type {
   MonetTuning,
   PartitaTuning,
   PendoloTuning,
-  TiltTuning
 } from '../motion'
 import type { VisualizerTuningBundle, VisualizerTuningSettings } from '../tuningDefinition'
 import type { HanabiTuning } from './hanabi/types'
 import type { NebbiaTuning } from './nebbia/types'
 import type { SonnetTuning } from './sonnet/types'
-import type { DioramaTuning } from '../motion'
 import type { MachiTuning } from './machi/types'
 
 export interface VisualizerSharedProps {
@@ -55,7 +53,6 @@ export interface VisualizerSharedProps {
   claddaghTuning?: CladdaghTuning
   classicTuning?: ClassicTuning
   partitaTuning?: PartitaTuning
-  tiltTuning?: TiltTuning
   cadenzaTuning?: CadenzaTuning
   fumeTuning?: FumeTuning
   cappellaTuning?: import('./cappella/tuning').CappellaTuning
@@ -97,10 +94,11 @@ export interface VisualizerSharedProps {
   subtitleUpcomingLyricsBlur?: boolean
   isPlayerChromeHidden?: boolean
   paused?: boolean
+  /** 隐现(Latent)流光背景开关(宿主 FoliaStage 注入) */
+  latentBackground?: boolean
   backgroundStaticMode?: boolean
   visualizerOpacity?: number
-  /** diorama / machi(上游由设置面板注入;这里给默认值即可) */
-  dioramaTuning?: DioramaTuning
+  /** machi(上游由设置面板注入;这里给默认值即可) */
   machiTuning?: MachiTuning
 }
 

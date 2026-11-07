@@ -25,6 +25,7 @@ import {
 import { getSongUrl } from './api/netease'
 import { getQqSongUrl } from './api/qqmusic'
 import { getKugouSongUrl } from './api/kugou'
+import { getAudioUrl as getQishuiAudioUrl } from './api/qishui'
 import { getStore } from './store'
 
 let cacheDir = ''
@@ -89,7 +90,13 @@ const PROXY_HOST_SUFFIXES = [
   // 酷狗(音频与图片 CDN)
   'kugou.com',
   'kgimg.com',
-  'kglink.cn'
+  'kglink.cn',
+  // 汽水音乐(字节):音频 CDN 在 365yg.com 下,封面在 douyinpic.com 下
+  '365yg.com',
+  'douyinvod.com',
+  'zjcdn.com',
+  'douyinpic.com',
+  'byteimg.com'
 ]
 
 function isAllowedProxyTarget(u: string): boolean {
@@ -315,7 +322,7 @@ function downloadToCache(
 
 /** 网易云 CDN 直链带签名会过期(约 20 分钟),缓存需带 TTL,避免重放过期链接 */
 const NETEASE_URL_TTL_MS = 10 * 60 * 1000
-const neteaseUrlCache = new Map<string, { url: string; quality: string; at: number }>()
+const neteaseUrlCache = new Map<string, { url: string; quality: string; at: number; trial?: boolean }>()
 /** QQ vkey / 酷狗直链同样带签名过期,统一 8 分钟 TTL */
 const STREAM_URL_TTL_MS = 8 * 60 * 1000
 const qqUrlCache = new Map<string, { url: string; quality: string; at: number }>()
@@ -325,9 +332,9 @@ const kgUrlCache = new Map<string, { url: string; quality: string; at: number }>
 const URL_CACHE_MAX = 100
 
 function cachePut(
-  m: Map<string, { url: string; quality: string; at: number }>,
+  m: Map<string, { url: string; quality: string; at: number; trial?: boolean }>,
   key: string,
-  value: { url: string; quality: string; at: number }
+  value: { url: string; quality: string; at: number; trial?: boolean }
 ): void {
   if (m.size >= URL_CACHE_MAX) {
     const oldest = m.keys().next().value
@@ -413,18 +420,22 @@ async function prepareAudioInner(
     const fresh = hit && Date.now() - hit.at < NETEASE_URL_TTL_MS ? hit : null
     let direct = fresh?.url ?? null
     let quality = fresh?.quality ?? ''
+    let trial = fresh?.trial ?? false
     if (!direct) {
       if (hit) neteaseUrlCache.delete(cacheKey)
       const info = await getSongUrl(song.neteaseId, neteaseQuality)
       direct = info.url
-      quality = neteaseLevelText(info.level || neteaseQuality, info.type)
-      if (direct) cachePut(neteaseUrlCache, cacheKey, { url: direct, quality, at: Date.now() })
+      trial = !!info.trial
+      // 试听片段:音质描述带「试听」前缀,渲染层据此跨平台换完整音源
+      quality = (trial ? '试听 ' : '') + neteaseLevelText(info.level || neteaseQuality, info.type)
+      if (direct) cachePut(neteaseUrlCache, cacheKey, { url: direct, quality, at: Date.now(), trial })
     }
     if (direct) {
       // 部分链接为 http,统一走代理避免混合内容问题
       return {
         url: `bmedia://proxy/?url=${encodeURIComponent(direct)}`,
-        quality: quality || neteaseLevelText(neteaseQuality, '')
+        quality: quality || neteaseLevelText(neteaseQuality, ''),
+        preview: trial
       }
     }
     // 网易云无音源 → 由调用方回退到 B 站
@@ -516,6 +527,18 @@ async function prepareAudioInner(
       url: `bmedia://proxy/?url=${encodeURIComponent(resolved.url)}&referer=${encodeURIComponent('https://www.bilibili.com/')}`,
       isFragmented: resolved.fragmented,
       quality: resolved.quality
+    }
+  }
+
+  // 汽水音乐:平台明文直链(VIP 曲返回试听片段,渲染层走跨平台垫底)
+  if (song.source === 'QISHUI' && song.qishuiId) {
+    onProgress?.({ stage: 'resolving' })
+    const info = await getQishuiAudioUrl(song.qishuiId)
+    if (!info) throw new Error('qishui-no-source')
+    onProgress?.({ stage: 'done' })
+    return {
+      url: `bmedia://proxy/?url=${encodeURIComponent(info.url)}&referer=${encodeURIComponent('https://qishui.douyin.com/')}`,
+      quality: info.preview ? '试听' : info.quality
     }
   }
   throw new Error('unsupported song')

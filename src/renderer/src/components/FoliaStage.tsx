@@ -32,7 +32,6 @@ export interface FoliaStyleDef {
 export const FOLIA_STYLES: FoliaStyleDef[] = [
   { id: 'still', label: '时计', ready: true },
   { id: 'classic', label: '经典', ready: true },
-  { id: 'tilt', label: '倾斜', ready: true },
   { id: 'partita', label: '云阶', ready: true },
   { id: 'claddagh', label: '回环', ready: true },
   { id: 'cadenza', label: '商籁', ready: true },
@@ -44,7 +43,6 @@ export const FOLIA_STYLES: FoliaStyleDef[] = [
   { id: 'hanabi', label: '花火', ready: true },
   { id: 'nebbia', label: '雾笺', ready: true },
   { id: 'sonnet', label: '诗节', ready: true },
-  { id: 'diorama', label: '镜台', ready: true },
   { id: 'machi', label: '町景', ready: true }
 ]
 
@@ -60,9 +58,6 @@ const STYLE_COMPONENTS: Record<string, React.LazyExoticComponent<React.Component
   ),
   classic: lazy(() =>
     import('../lib/folia/styles/classic/VisualizerClassic').then((m) => ({ default: (m as any).VisualizerClassic ?? (m as any).default }))
-  ),
-  tilt: lazy(() =>
-    import('../lib/folia/styles/tilt/VisualizerTilt').then((m) => ({ default: (m as any).VisualizerTilt ?? (m as any).default }))
   ),
   partita: lazy(() =>
     import('../lib/folia/styles/partita/VisualizerPartita').then((m) => ({ default: (m as any).VisualizerPartita ?? (m as any).default }))
@@ -96,9 +91,6 @@ const STYLE_COMPONENTS: Record<string, React.LazyExoticComponent<React.Component
   ),
   sonnet: lazy(() =>
     import('../lib/folia/styles/sonnet/VisualizerSonnet').then((m) => ({ default: (m as any).VisualizerSonnet ?? (m as any).default }))
-  ),
-  diorama: lazy(() =>
-    import('../lib/folia/styles/diorama/VisualizerDiorama').then((m) => ({ default: (m as any).VisualizerDiorama ?? (m as any).default }))
   ),
   machi: lazy(() =>
     import('../lib/folia/styles/machi/VisualizerMachi').then((m) => ({ default: (m as any).VisualizerMachi ?? (m as any).default }))
@@ -193,6 +185,8 @@ function useAudioFrame(playing: boolean): React.MutableRefObject<AudioFrame> {
 
 export function FoliaStage({ lines, theme, styleId }: FoliaStageProps): JSX.Element {
   const playing = useStore((s) => s.playing)
+  const current = useStore((s) => s.current)
+  const latentBackground = useStore((s) => s.library?.settings.latentBackground ?? true)
   const offset = useStore((s) => s.library?.settings.lyricOffsetMs ?? 0)
   const audioRef = useAudioFrame(playing)
   const [, force] = useState(0)
@@ -215,7 +209,8 @@ export function FoliaStage({ lines, theme, styleId }: FoliaStageProps): JSX.Elem
     return () => cancelAnimationFrame(raf)
   }, [lines, offset])
 
-  const Comp = STYLE_COMPONENTS[styleId]
+  // 已移除的样式(如 tilt/diorama)或未知 id 一律退回经典,避免落进"尚未移植"占位
+  const Comp = STYLE_COMPONENTS[styleId] ?? STYLE_COMPONENTS.classic
   /**
    * currentTime / audioPower 必须是真正的 framer-motion MotionValue ——
    * 上游样式会对它们用 useSpring / useTransform,假对象会直接报错。
@@ -267,6 +262,12 @@ export function FoliaStage({ lines, theme, styleId }: FoliaStageProps): JSX.Elem
             audioBands={bandsMV}
             showText
             isDaylight={false}
+            paused={!playing}
+            latentBackground={latentBackground}
+            songTitle={current?.title ?? null}
+            songArtist={current?.artist ?? null}
+            songAlbum={current?.album ?? null}
+            coverUrl={coverSrc(current?.coverUrl, 480)}
           />
         </Suspense>
       ) : (

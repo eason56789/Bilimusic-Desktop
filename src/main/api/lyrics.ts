@@ -9,6 +9,7 @@ import {
 } from './bilibili'
 import { getLyricNew, searchSongs } from './netease'
 import { getQqRichLyrics, findQqRichLyrics } from './qqLyrics'
+import { getLyrics as getQishuiLyrics } from './qishui'
 
 /** 解析 LRC 文本 */
 export function parseLrc(lrc: string): LyricLine[] {
@@ -299,6 +300,13 @@ export async function getLyrics(song: Song): Promise<LyricsResult> {
       const qq = await getQqRichLyrics(song.qqMid, song.qqId)
       if (qq && qq.lines.length > 0 && hasRichTiming(qq.lines)) {
         result = { lines: stripLines(qq.lines), provider: 'qq', title: song.title }
+      }
+    }
+    // 汽水原生逐字歌词(QISHUI 源,逐字精度与 QQ QRC 同级)
+    if (song.source === 'QISHUI' && song.qishuiId) {
+      const qs = await getQishuiLyrics(song.qishuiId)
+      if (qs.length > 0) {
+        result = { lines: qs, provider: 'qishui', title: song.title }
       }
     }
     // 其它来源:同样先到 QQ 找一份匹配的逐字歌词(用户要求"无论从哪里播放,默认先从 QQ 拿逐字")

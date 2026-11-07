@@ -879,3 +879,145 @@ export async function getQqUserPlaylists(): Promise<
   }
   return out
 }
+
+// ============ 播放记录(读 / 写) ============
+
+/**
+ * 上报「最近播放」(ReportPlayRecentlyInfo,与 QQ音乐客户端行为一致;
+ * 走 musicu.fcg + 登录 cookie,无需签名通道)。歌曲实际播放 ≥30s 后由播放器调用。
+ */
+export async function reportRecently(songId: number): Promise<{ ok: boolean; code?: number; error?: string }> {
+  const uin = getQqUin()
+  if (uin === '0') return { ok: false, error: '未登录QQ音乐' }
+  if (!Number.isFinite(songId) || songId <= 0) return { ok: false, error: '缺少QQ音乐歌曲 id' }
+  try {
+    const resp = await fetch('https://u.y.qq.com/cgi-bin/musicu.fcg?cgiKey=ReportPlayRecentlyInfo', {
+      method: 'POST',
+      headers: {
+        'User-Agent': UA,
+        Referer: 'https://y.qq.com/',
+        'Content-Type': 'application/json',
+        Cookie: qqCookie
+      },
+      body: JSON.stringify({
+        comm: { ct: '19', cv: '1859', uin, format: 'json' },
+        'music.musicasset.PlayRecentlyWrite.ReportPlayRecentlyInfo': {
+          module: 'music.musicasset.PlayRecentlyWrite',
+          method: 'ReportPlayRecentlyInfo',
+          param: {
+            data: [
+              {
+                id: String(songId),
+                type: 2,
+                lastTime: Math.floor(Date.now() / 1000),
+                listenCnt: 1,
+                auxillaryID: '0',
+                auxillaryDict: { vip: '1' }
+              }
+            ]
+          }
+        }
+      }),
+      signal: AbortSignal.timeout(15_000)
+    })
+    const json: any = await resp.json()
+    const code = json?.code ?? json?.['music.musicasset.PlayRecentlyWrite.ReportPlayRecentlyInfo']?.code
+    return code === 0
+      ? { ok: true, code }
+      : { ok: false, code, error: `code ${code}` }
+  } catch (e) {
+    return { ok: false, error: String(e) }
+  }
+}
+
+/** vecPlayRecord 条目 → Song(条目字段随端版本有差异,做宽松映射) */
+function qqSongFromRecord(it: any): Song | null {
+  if (!it) return null
+  const song = it.song_info ?? it.song ?? it
+  // 数值 song id:优先 id/album 里的数字字段,退回 songmid
+  const numericId = Number(song.id ?? it.id ?? 0)
+  const mid = String(song.mid ?? it.mid ?? '')
+  if (!numericId && !mid) return null
+  const iv = song.interval?.value ?? song.interval ?? it.interval ?? 0
+  return {
+    id: numericId ? `qq-${numericId}` : `qq-${mid}`,
+    title: decodeEntities(String(song.name ?? song.songname ?? it.songname ?? '')).trim() || '未知',
+    artist:
+      (Array.isArray(song.singer) ? song.singer : Array.isArray(it.singer) ? it.singer : [])
+        .map((s: any) => decodeEntities(String(s?.name ?? '')))
+        .filter(Boolean)
+        .join(' / ') || '未知',
+    album: decodeEntities(String(song.album?.name ?? song.albumname ?? it.albumname ?? '')),
+    coverUrl:
+      song.album?.mid
+        ? `https://y.gtimg.cn/music/photo_new/T002R300x300M000${song.album.mid}.jpg`
+        : it.albummid
+          ? `https://y.gtimg.cn/music/photo_new/T002R300x300M000${it.albummid}.jpg`
+          : null,
+    duration: Math.round(Number(iv) || 0),
+    source: 'QQMUSIC',
+    page: 1,
+    qqMid: mid || undefined,
+    qqId: numericId || undefined,
+    addedAt: Date.now()
+  }
+}
+
+/**
+ * QQ音乐「最近播放」(GetRecentPlayList,网页端同款)。
+ * 返回最新在前的一段 Song 列表;需登录(cookie 里有 uin)。
+ */
+export async function getRecentPlay(
+  limit = 50
+): Promise<{ ok: boolean; notLoggedIn?: boolean; songs: Song[]; error?: string }> {
+  const uin = getQqUin()
+  if (uin === '0') return { ok: false, notLoggedIn: true, songs: [] }
+  try {
+    const json = await postMusicu(
+      {
+        module: 'music.musichallSong.RecentPlayList',
+        method: 'GetRecentPlayList',
+        param: { uin, begin: 0, num: limit }
+      },
+      { ct: '19', cv: '1859', uin, format: 'json' }
+    )
+    const code = json?.code ?? json?.req?.code
+    if (code !== 0) return { ok: false, songs: [], error: `code ${code}` }
+    const items: any[] =
+      json?.req?.data?.vecPlayRecord ?? json?.req?.data?.list ?? []
+    return { ok: true, songs: items.map(qqSongFromRecord).filter((s): s is Song => s !== null) }
+  } catch (e) {
+    return { ok: false, songs: [], error: String(e) }
+  }
+}
+
+/** 搜索推荐(输入联想):Smartbox 联想词;模块已下线时用真实搜索兜底 */
+export async function searchSuggest(keyword: string): Promise<string[]> {
+  try {
+    const json = await postMusicu(
+      {
+        req_1: {
+          module: 'music.smartboxCgi',
+          method: 'GetSmartbox',
+          param: { grp: 1, query: keyword, num: 8 }
+        }
+      },
+      { ct: '19', cv: '1859', uin: getQqUin(), format: 'json' }
+    )
+    const body = json?.req_1?.data?.body ?? {}
+    const items: any[] = body.smartbox ?? body.item ?? []
+    const out = items
+      .map((it) => String(it?.hint_txt ?? it?.hint ?? it?.txt ?? '').trim())
+      .filter(Boolean)
+      .slice(0, 8)
+    if (out.length > 0) return out
+  } catch {
+    /* smartbox 模块已下线,走真实搜索兜底 */
+  }
+  try {
+    const songs = await searchQqSongs(keyword, 1, 5)
+    return songs.map((sg) => `${sg.title} - ${sg.artist}`).slice(0, 8)
+  } catch {
+    return []
+  }
+}

@@ -39,6 +39,7 @@ import { fetchPlaylistByLink } from './api/linkImport'
 import { fetchQqPlaylist, fetchKugouPlaylist, fetchKugouCollectionPlaylist, fetchKugouUserPlaylists } from './api/qqkugou'
 import { computeSyncPlan } from './syncDelta'
 import { getLyrics } from './api/lyrics'
+import * as qishui from './api/qishui'
 import { prepareAudio, coverProxyUrl, clearAudioCache, getCacheDir } from './audio'
 import { enqueueDownload, cancelDownload, removeDownload } from './downloads'
 import { checkUpdateDetailed } from './update'
@@ -145,6 +146,7 @@ function librarySnapshot(): Library {
     qqProfile: d.qqProfile,
     kugouProfile: d.kugouProfile,
     kugouConceptProfile: d.kugouConceptProfile,
+    qishuiProfile: d.qishuiProfile ?? null,
     listenStats: d.listenStats,
     // 收藏 id 列表必须随快照下发:渲染层的行内心形/播放条/全屏页都读它判断收藏态,
     // 之前漏了这一项,导致「已收藏」永远显示成未收藏
@@ -897,16 +899,20 @@ export function registerIpc(): void {
     deletePlaylist(id)
     return true
   })
-  ipcMain.handle('library:updatePlaylist', (_e, p: { id: string; name: string; description?: string }) => {
-    const pl = getStore().playlists.find((x) => x.id === p.id)
-    if (pl) {
-      pl.name = p.name
-      pl.description = p.description ?? pl.description
-      pl.updatedAt = Date.now()
-      saveStore()
+  ipcMain.handle(
+    'library:updatePlaylist',
+    (_e, p: { id: string; name: string; description?: string; hidden?: boolean }) => {
+      const pl = getStore().playlists.find((x) => x.id === p.id)
+      if (pl) {
+        pl.name = p.name
+        pl.description = p.description ?? pl.description
+        if (p.hidden != null) pl.hidden = p.hidden
+        pl.updatedAt = Date.now()
+        saveStore()
+      }
+      return pl
     }
-    return pl
-  })
+  )
   ipcMain.handle('library:addToPlaylist', (_e, playlistId: string, songs: Song[]) => {
     addToPlaylist(playlistId, songs)
     return librarySnapshot().playlists
@@ -1077,6 +1083,28 @@ export function registerIpc(): void {
   ipcMain.handle('bili:historyPage', (_e, max: string, viewAt: string) =>
     bilibili.getWatchHistoryPage(max, viewAt, 20)
   )
+  // 播放记录上报(歌曲实际播放 ≥30s 后由播放器调用):网易云打卡 / B站观看历史
+  ipcMain.handle('netease:scrobble', (_e, songId: number, seconds: number) => netease.scrobble(songId, seconds))
+  ipcMain.handle('bili:reportWatch', (_e, bvid: string, cid: number, seconds: number) =>
+    bilibili.reportWatch(bvid, cid, seconds)
+  )
+  // 网易云云端播放记录(听歌排行,最近一周优先,空则累计)
+  ipcMain.handle('qq:reportRecently', (_e, songId: number) => qqmusic.reportRecently(songId))
+  ipcMain.handle('qq:recentPlay', async () => {
+    try {
+      return { ok: true, data: await qqmusic.getRecentPlay(50) }
+    } catch (e) {
+      return { ok: false, error: String(e) }
+    }
+  })
+  ipcMain.handle('netease:playRecord', async () => {
+    try {
+      const r = await netease.getPlayRecord()
+      return { ok: true, data: r }
+    } catch (e) {
+      return { ok: false, error: String(e) }
+    }
+  })
   ipcMain.handle('bili:importFav', async (_e, folderId: number, folderName: string) => {
     // 查重兜底:同一收藏夹只导入一次,已导入过直接返回已有歌单
     const existing = findImportedPlaylist('bili', String(folderId), folderName)
@@ -1113,6 +1141,15 @@ export function registerIpc(): void {
     } else if (pl.qqPlaylistId) {
       const linked = await fetchQqPlaylist(String(pl.qqPlaylistId))
       remote = linked.songs
+      complete = true
+    } else if (pl.qishuiPlaylistId) {
+      // 汽水歌单:分页拉全量(每页 50)
+      remote = []
+      for (let offset = 0; offset < 2000; offset += 50) {
+        const page = await qishui.getPlaylistTracks(String(pl.qishuiPlaylistId), 50, offset)
+        remote.push(...page.songs)
+        if (!page.hasMore || page.songs.length === 0) break
+      }
       complete = true
     } else if (pl.kugouPlaylistId) {
       // 概念版 collection_ 走 v5 分享接口,普通 specialid 走 v3
@@ -1409,24 +1446,169 @@ export function registerIpc(): void {
       return null
     }
   })
-  ipcMain.handle('auth:neQRPoll', async (_e, key: string) => {
-    const state = await netease.pollNeteaseQR(key)
-    if (state.status === 'ok') {
-      const acct = await netease.getNeteaseAccount().catch(() => null)
-      setNeteaseCookieStore(getNeteaseCookies())
-      if (acct) {
-        setProfile('netease', {
-          uid: acct.userId,
-          nickname: acct.nickname,
-          avatar: coverProxyUrl(acct.avatar) ?? ''
-        })
+  /** 网易云网页登录窗口(与B站网页登录同款交互) */
+  let neLoginWin: BrowserWindow | null = null
+  ipcMain.handle('auth:neWebLogin', async () => {
+    if (neLoginWin && !neLoginWin.isDestroyed()) {
+      neLoginWin.focus()
+      return { ok: false, message: '登录窗口已打开' }
+    }
+    return await new Promise<{ ok: boolean; message: string }>((resolve) => {
+      const win = new BrowserWindow({
+        width: 540,
+        height: 700,
+        title: '网易云音乐登录',
+        autoHideMenuBar: true,
+        backgroundColor: '#ffffff',
+        webPreferences: {
+          // 独立持久分区:保留网页登录会话,下次免重登
+          partition: 'persist:netease-web',
+          contextIsolation: true,
+          nodeIntegration: false
+        }
+      })
+      neLoginWin = win
+      let settled = false
+      let poll: ReturnType<typeof setInterval> | null = null
+      const settle = (r: { ok: boolean; message: string }) => {
+        if (settled) return
+        settled = true
+        if (poll) clearInterval(poll)
+        if (!win.isDestroyed()) win.destroy()
+        neLoginWin = null
+        resolve(r)
+      }
+      // 轮询检测登录完成(MUSIC_U 出现即视为登录成功,验证码/密码/扫码全由官方页面处理)
+      const check = async () => {
+        if (settled || win.isDestroyed()) return
+        try {
+          const ses = win.webContents.session
+          const cookies = await ses.cookies.get({ url: 'https://music.163.com/' })
+          if (!cookies.some((c) => c.name === 'MUSIC_U' && c.value)) return
+          const record: Record<string, string> = {}
+          for (const c of cookies) record[c.name] = c.value
+          netease.setNeteaseCookies(record)
+          const acct = await netease.getNeteaseAccount().catch(() => null)
+          if (!acct) return // MUSIC_U 存在但资料还没就绪:下一轮再确认
+          setNeteaseCookieStore(getNeteaseCookies())
+          setProfile('netease', {
+            uid: acct.userId,
+            nickname: acct.nickname,
+            avatar: coverProxyUrl(acct.avatar) ?? ''
+          })
+          settle({ ok: true, message: `登录成功:${acct.nickname}` })
+        } catch {
+          /* ignore */
+        }
+      }
+      poll = setInterval(check, 700)
+      win.webContents.on('did-navigate', () => check())
+      win.webContents.on('did-navigate-in-page', () => check())
+      win.on('closed', () => {
+        if (!settled) {
+          settled = true
+          if (poll) clearInterval(poll)
+          neLoginWin = null
+          resolve({ ok: false, message: '已取消登录' })
+        }
+      })
+      win.loadURL('https://music.163.com/#/login')
+    })
+  })
+
+  /** 扫码轮询在验证流程期间会阻塞数分钟:并发调用合并到同一 promise */
+  let neQRPollInFlight: Promise<{
+    status: 'waiting' | 'scanned' | 'ok' | 'expired' | 'error'
+    message: string
+  }> | null = null
+  ipcMain.handle('auth:neQRPoll', (_e, key: string) => {
+    if (neQRPollInFlight) return neQRPollInFlight
+    neQRPollInFlight = (async () => {
+      // 扫码轮询同样会撞上风控(-462/8821「请完成验证操作」):接入验证窗口流程,
+      // 弹出滑块验证页,完成后携带窗口 cookie 重试;普通状态码会立即跳出并关窗。
+      const json = await withNeteaseVerify((extra) => netease.pollNeteaseQRJson(key, extra))
+      const state = netease.qrStateFromJson(json)
+      if (state.status === 'ok') {
+        const acct = await netease.getNeteaseAccount().catch(() => null)
+        setNeteaseCookieStore(getNeteaseCookies())
+        if (acct) {
+          setProfile('netease', {
+            uid: acct.userId,
+            nickname: acct.nickname,
+            avatar: coverProxyUrl(acct.avatar) ?? ''
+          })
+        }
+      }
+      return state
+    })().finally(() => {
+      neQRPollInFlight = null
+    })
+    return neQRPollInFlight
+  })
+
+  /**
+   * 网易云登录风控(-462)处理:请求被拦时,服务端会随响应给出人机验证地址
+   * (data.verifyUrl,网易云「加密页面」滑块/拼图)。这里自动弹出一个小窗让用户完成
+   * 验证,期间每 3 秒把验证窗口会话里种下的 .163.com cookie 合并给重试函数,
+   * 直到请求不再 -462(成功或变成业务错误)或超时(3 分钟)。
+   */
+  let neVerifyWin: BrowserWindow | null = null
+  async function withNeteaseVerify(run: (extraCookies?: string) => Promise<any>): Promise<any> {
+    let json = await run()
+    // -462:网络环境风险;8821:需要行为验证码 —— 两者都带 data.verifyUrl 加密验证页
+    if ((json?.code !== -462 && json?.code !== 8821) || !json?.data?.verifyUrl) return json
+    if (neVerifyWin && !neVerifyWin.isDestroyed()) neVerifyWin.destroy()
+    const parent = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0]
+    const win = new BrowserWindow({
+      width: 440,
+      height: 580,
+      title: '安全验证',
+      parent,
+      ...(parent ? { parent } : {}),
+      autoHideMenuBar: true,
+      webPreferences: { sandbox: true, partition: 'persist:netease-verify' }
+    })
+    neVerifyWin = win
+    // 加密验证页会检查 UA:Electron 默认 UA 会被判"请在 app 内打开",
+    // 纯浏览器 UA 又会跳到官网下载页 —— 必须伪装成网易云 PC 客户端内嵌浏览器
+    win.webContents.setUserAgent(
+      'Mozilla/5.0 (Windows NT 10.0; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Safari/537.36 Chrome/91.0.4472.164 NeteaseMusicDesktop/3.1.17.204416'
+    )
+    const collectVerifyCookies = async (): Promise<string | undefined> => {
+      try {
+        const list = await win.webContents.session.cookies.get({})
+        const ours = list.filter((c) => /163\.com$/.test((c.domain ?? '').replace(/^\./, '')))
+        if (ours.length === 0) return undefined
+        return ours.map((c) => `${c.name}=${c.value}`).join('; ')
+      } catch {
+        return undefined
       }
     }
-    return state
-  })
+    // 关闭窗口即放弃
+    const closed = new Promise<void>((resolve) => win.on('closed', () => resolve()))
+    win.loadURL(json.data.verifyUrl).catch(() => {})
+    const deadline = Date.now() + 3 * 60_000
+    while (Date.now() < deadline) {
+      const winner = await Promise.race([
+        (async () => {
+          await new Promise((r) => setTimeout(r, 3000))
+          return 'retry'
+        })(),
+        closed.then(() => 'closed')
+      ])
+      if (winner === 'closed' || win.isDestroyed()) return json
+      const extra = await collectVerifyCookies()
+      json = await run(extra)
+      if (json?.code !== -462 && json?.code !== 8821) break
+    }
+    if (!win.isDestroyed()) win.destroy()
+    neVerifyWin = null
+    return json
+  }
+
   ipcMain.handle('auth:neCaptcha', async (_e, phone: string) => {
     try {
-      const json = await netease.sendCaptcha(phone)
+      const json = await withNeteaseVerify((extra) => netease.sendCaptcha(phone, '86', extra))
       return { ok: json.code === 200, message: json.message ?? (json.code === 200 ? '已发送' : '发送失败') }
     } catch (e) {
       return err(e) as { ok: false; error: string } & { ok: boolean; message?: string }
@@ -1434,7 +1616,7 @@ export function registerIpc(): void {
   })
   ipcMain.handle('auth:neLoginCaptcha', async (_e, phone: string, captcha: string) => {
     try {
-      const json = await netease.loginByCaptcha(phone, captcha)
+      const json = await withNeteaseVerify((extra) => netease.loginByCaptcha(phone, captcha, '86', extra))
       if (json.code === 200) {
         setNeteaseCookieStore(getNeteaseCookies())
         const acct = await netease.getNeteaseAccount().catch(() => null)
@@ -1454,7 +1636,7 @@ export function registerIpc(): void {
   })
   ipcMain.handle('auth:neLoginPassword', async (_e, phone: string, password: string) => {
     try {
-      const json = await netease.loginByPassword(phone, password)
+      const json = await withNeteaseVerify((extra) => netease.loginByPassword(phone, password, '86', extra))
       if (json.code === 200) {
         setNeteaseCookieStore(getNeteaseCookies())
         const acct = await netease.getNeteaseAccount().catch(() => null)
@@ -1476,6 +1658,90 @@ export function registerIpc(): void {
     setNeteaseCookies({})
     setNeteaseCookieStore({})
     setProfile('netease', null)
+    return true
+  })
+
+  // ===== 搜索推荐(输入联想):按来源分发,失败静默返回空 =====
+  ipcMain.handle('search:suggest', async (_e, source: string, keyword: string): Promise<string[]> => {
+    const kw = String(keyword ?? '').trim()
+    if (!kw || kw.length > 100) return []
+    try {
+      if (source === 'netease') return await netease.searchSuggest(kw)
+      if (source === 'bili') return await bilibili.fetchSuggestions(kw)
+      if (source === 'qq') return await qqmusic.searchSuggest(kw)
+      if (source === 'qishui') return await qishui.searchSuggest(kw)
+      return []
+    } catch {
+      return []
+    }
+  })
+
+  // ===== 汽水音乐(字节):npm qishui-music-api 协议桥 + 登录态/搜索/歌单 =====
+  ipcMain.handle('qishui:request', (_e, operation: string, params: Record<string, unknown>) =>
+    qishui.qishuiRequest(operation, params ?? {})
+  )
+  ipcMain.handle('qishui:search', async (_e, keyword: string, limit?: number) => {
+    try {
+      return ok(await qishui.searchSongs(keyword, limit ?? 30))
+    } catch (e) {
+      return err(e)
+    }
+  })
+  ipcMain.handle('qishui:playlistTracks', async (_e, id: string, limit?: number, offset?: number, ownerId?: string) => {
+    try {
+      return ok(await qishui.getPlaylistTracks(id, limit ?? 50, offset ?? 0, ownerId))
+    } catch (e) {
+      return err(e)
+    }
+  })
+  ipcMain.handle('qishui:account', async () => {
+    try {
+      const acct = await qishui.getAccount()
+      if (acct) {
+        setProfile('qishui', {
+          uid: acct.userId,
+          nickname: acct.nickname,
+          avatar: coverProxyUrl(acct.avatar) ?? ''
+        })
+      } else {
+        setProfile('qishui', null)
+      }
+      return ok(acct)
+    } catch (e) {
+      return err(e)
+    }
+  })
+  ipcMain.handle('qishui:userPlaylists', async () => {
+    try {
+      return ok(await qishui.getUserPlaylists(50))
+    } catch (e) {
+      return err(e)
+    }
+  })
+  ipcMain.handle('qishui:importPlaylist', async (_e, id: string, name: string) => {
+    try {
+      // 查重兜底:已导入过(按来源 id)直接返回已有歌单,不再新建
+      const existing = findImportedPlaylist('qishui', String(id), name)
+      if (existing) return ok(existing)
+      const songs = await qishui.importPlaylistTracks(id)
+      if (songs.length === 0) return { ok: false, error: '歌单为空或获取失败' }
+      upsertSongs(songs)
+      const pl = createPlaylist(name, '汽水音乐歌单导入')
+      pl.qishuiPlaylistId = String(id)
+      pl.sourcePlatform = 'qishui'
+      pl.sourceId = String(id)
+      pl.songIds = songs.map((s2) => s2.id)
+      pl.syncedIds = [...pl.songIds]
+      if (songs[0].coverUrl) pl.coverUrl = songs[0].coverUrl
+      saveStore()
+      return ok(pl)
+    } catch (e) {
+      return err(e)
+    }
+  })
+  ipcMain.handle('qishui:logout', () => {
+    void qishui.qishuiRequest('logout').catch(() => {})
+    setProfile('qishui', null)
     return true
   })
 

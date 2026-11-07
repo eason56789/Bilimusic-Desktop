@@ -7,7 +7,6 @@
  * 所以这里不再提供"假 MotionValue",只放类型与各样式 tuning 的默认值。
  */
 
-import type { TiltColorScheme } from './bridge'
 
 /* ===================== 各样式 tuning ===================== */
 
@@ -37,18 +36,6 @@ export const DEFAULT_PARTITA_TUNING: PartitaTuning = {
   useSemanticLayout: true,
   staggerMin: 20,
   staggerMax: 100
-}
-
-export interface TiltTuning {
-  splitProbability: number
-  tiltStyleProbability: number
-  colorScheme?: TiltColorScheme
-}
-
-export const DEFAULT_TILT_TUNING: TiltTuning = {
-  splitProbability: 0.75,
-  tiltStyleProbability: 0.35,
-  colorScheme: 'default'
 }
 
 /* ===================== cadenza / fume 的 tuning(与上游 types.ts 一致) ===================== */
@@ -320,115 +307,3 @@ export type { NebbiaTuning } from './styles/nebbia/types'
 
 export { DEFAULT_SONNET_TUNING } from './styles/sonnet/types'
 export type { SonnetTuning, SonnetOuterFrameMode } from './styles/sonnet/types'
-
-// ── Diorama(上游 src/types.ts 的 Diorama 段,移植时追加到这里) ─────────────────────────
-// Diorama 的相机 STYLE(calm/standard/chaotic)不属于 tuning:和其他样式一样跟 theme.animationIntensity。
-/** The two mutually-exclusive shapes the point-cloud layer can take. */
-export type DioramaGeometryMode = 'clouds' | 'corridor'
-
-export interface DioramaGeometryVisibility {
-  /** Parent switch: hides the whole point-cloud layer without discarding child preferences. */
-  enabled: boolean
-  /**
-   * 'clouds' = per-lyric point-cloud formations (the family switches below apply).
-   * 'corridor' = one always-on point tunnel threaded along the flight path (families ignored).
-   * The two never render together - picking one replaces the other.
-   */
-  mode: DioramaGeometryMode
-  /** Point-cloud cubes used by architectural formations. */
-  strands: boolean
-  /** Open cylindrical point-cloud shells. */
-  blobs: boolean
-  /** Triangular tetrahedron point-cloud crystals. */
-  ribbons: boolean
-  /** Circular point-cloud loops. */
-  rings: boolean
-}
-
-export const DEFAULT_DIORAMA_GEOMETRY_VISIBILITY: DioramaGeometryVisibility = {
-  enabled: true,
-  mode: 'clouds',
-  strands: true,
-  blobs: true,
-  ribbons: true,
-  rings: true,
-}
-
-export const DIORAMA_PARTICLE_DENSITY_MIN = 96
-export const DIORAMA_PARTICLE_DENSITY_MAX = 1536
-export const DIORAMA_PARTICLE_DENSITY_STEP = 24
-// Background dust motes PER LINE of the resident window. The motes sit in a shell around the flight
-// axis, and the two axes are INDEPENDENT: 圆周 = motes around each ring, 径向 = layers across the shell
-// thickness. Motes-per-line = 圆周 x 径向.
-export const DIORAMA_MOTE_CIRCUMFERENCE_MIN = 4
-export const DIORAMA_MOTE_CIRCUMFERENCE_MAX = 48
-export const DIORAMA_MOTE_CIRCUMFERENCE_STEP = 2
-export const DIORAMA_MOTE_RADIAL_MIN = 1
-export const DIORAMA_MOTE_RADIAL_MAX = 4
-export const DIORAMA_MOTE_RADIAL_STEP = 1
-export const DIORAMA_PARTICLE_SCALE_MIN = 0.65
-export const DIORAMA_PARTICLE_SCALE_MAX = 1.6
-export const DIORAMA_PARTICLE_SCALE_STEP = 0.05
-// Compatibility aliases for the uncommitted tuning UI while it migrates from point size to cluster scale.
-export const DIORAMA_PARTICLE_SIZE_MIN = DIORAMA_PARTICLE_SCALE_MIN
-export const DIORAMA_PARTICLE_SIZE_MAX = DIORAMA_PARTICLE_SCALE_MAX
-export const DIORAMA_PARTICLE_SIZE_STEP = DIORAMA_PARTICLE_SCALE_STEP
-export const DIORAMA_PARTICLE_GLOW_INTENSITY_MIN = 0.1
-export const DIORAMA_PARTICLE_GLOW_INTENSITY_MAX = 1.5
-export const DIORAMA_PARTICLE_GLOW_INTENSITY_STEP = 0.05
-
-export interface DioramaTuning {
-  /** 分辨率与抗锯齿:默认跟随「动画与性能」里的全局挡位。 */
-  render: LyricRenderOverride
-  cameraSpeed: number
-  motionAmount: number
-  audioReactivity: number
-  geometryVisibility: DioramaGeometryVisibility
-  /** Number of points requested for each formation anchor; the renderer also enforces a global cap. */
-  particleDensity: number
-  /** Spatial scale multiplier for each complete point-cloud formation. */
-  particleScale: number
-  /** One soft gradient aura per point-cloud cluster, separate from lyric sung-glow. */
-  particleGlowEnabled: boolean
-  particleGlowIntensity: number
-  showParticles: boolean
-  /** Background dust shell, two INDEPENDENT axes (motes-per-line = the product; field clamps to its cap). */
-  backgroundParticleCircumference: number
-  backgroundParticleRadial: number
-  /** 普通辉光跟唱: soft glow on the unit being sung. Independent toggle + strength. */
-  glowEnabled: boolean
-  glowIntensity: number
-  /** 灵魂出窍跟唱: a ghost copy of the sung glyph drifts out of the text. Independent toggle + strength. */
-  soulEnabled: boolean
-  soulIntensity: number
-  /** 当前字漂移: a plain ON/OFF sub-switch of 灵魂出窍. */
-  soulActiveEnabled: boolean
-  /** 渐变跟唱: the line's fill progressively deepens with the sung progress. Independent toggle + strength. */
-  gradientEnabled: boolean
-  gradientIntensity: number
-  /** 关键字着色: theme `wordColors` keywords become the follow-sing TARGET colour of the units they cover. */
-  keywordColoringEnabled: boolean
-}
-
-export const DEFAULT_DIORAMA_TUNING: DioramaTuning = {
-  render: { scale: 'global', antialias: 'global' },
-  cameraSpeed: 1,
-  motionAmount: 1,
-  audioReactivity: 1,
-  geometryVisibility: DEFAULT_DIORAMA_GEOMETRY_VISIBILITY,
-  particleDensity: 576,
-  particleScale: 1,
-  particleGlowEnabled: true,
-  particleGlowIntensity: 0.65,
-  showParticles: true,
-  backgroundParticleCircumference: 28,
-  backgroundParticleRadial: 2,
-  glowEnabled: true,
-  glowIntensity: 1,
-  soulEnabled: true,
-  soulIntensity: 1,
-  soulActiveEnabled: false,
-  gradientEnabled: false,
-  gradientIntensity: 1,
-  keywordColoringEnabled: true,
-}

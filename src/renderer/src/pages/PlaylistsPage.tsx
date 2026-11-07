@@ -15,6 +15,10 @@ import {
   MenuItem,
   MenuPopover,
   MenuTrigger,
+  Popover,
+  PopoverSurface,
+  PopoverTrigger,
+  Switch,
   Text,
   makeStyles,
   tokens,
@@ -30,6 +34,8 @@ import {
   CloudArrowDownRegular,
   DeleteRegular,
   EditRegular,
+  EyeOffRegular,
+  EyeRegular,
   FolderAddRegular,
   HeartFilled,
   HeartRegular,
@@ -72,23 +78,29 @@ const useStyles = makeStyles({
   }
 })
 
-/** B站在线视图入口:播放记录 / 某个收藏夹(登录即出现,打开才拉数据) */
+/** B站在线视图入口:播放记录 / 在线歌单预览(点击卡片先打开预览,导入按钮显式化) */
 export type RemoteView =
   | { kind: 'history' }
+  | { kind: 'netease-record' }
+  | { kind: 'qq-record' }
+  | { kind: 'qishui'; id: string; title: string; coverUrl?: string; count: number; ownerId?: string }
+  | { kind: 'netease-pl'; id: number; title: string; coverUrl?: string; count: number }
+  | { kind: 'qq-pl'; id: string; title: string; coverUrl?: string; count: number }
   | { kind: 'fav'; id: number; title: string; coverUrl?: string; count: number }
 
 /** 是否可同步(B站收藏夹 / 网易云歌单 / QQ歌单 / 酷狗歌单 / 播放记录) */
 const isSyncable = (pl: Playlist | null | undefined): boolean =>
-  !!(pl && (pl.favoriteFolderId || pl.neteasePlaylistId || pl.qqPlaylistId || pl.kugouPlaylistId || pl.biliHistory))
+  !!(pl && (pl.favoriteFolderId || pl.neteasePlaylistId || pl.qqPlaylistId || pl.kugouPlaylistId || pl.qishuiPlaylistId || pl.biliHistory))
 
 /** 歌单来源分类(依据来源 id 标记,无标记为本地) */
-export type PlaylistCategory = 'local' | 'netease' | 'bili' | 'qq' | 'kugou'
+export type PlaylistCategory = 'local' | 'netease' | 'bili' | 'qq' | 'kugou' | 'qishui'
 
 export function sourceOf(pl: Playlist): PlaylistCategory {
   if (pl.neteasePlaylistId) return 'netease'
   if (pl.favoriteFolderId || pl.biliHistory) return 'bili'
   if (pl.qqPlaylistId) return 'qq'
   if (pl.kugouPlaylistId) return 'kugou'
+  if (pl.qishuiPlaylistId) return 'qishui'
   return 'local'
 }
 
@@ -98,7 +110,7 @@ type OnlineBrief = {
   name: string
   coverUrl?: string
   count: number
-  platform: 'netease' | 'qq' | KugouPlatform
+  platform: 'netease' | 'qq' | 'qishui' | KugouPlatform
 }
 
 /**
@@ -320,6 +332,7 @@ function RemotePlaylistDetail({ view, onBack }: { view: RemoteView; onBack: () =
   const [loading, setLoading] = useState(true)
   const [hasMore, setHasMore] = useState(true)
   const [saving, setSaving] = useState(false)
+  const [importingRemote, setImportingRemote] = useState(false)
   const loadingRef = useRef(false)
   const cursor = useRef({ max: '0', viewAt: '0' })
   const pageRef = useRef(1)
@@ -330,7 +343,63 @@ function RemotePlaylistDetail({ view, onBack }: { view: RemoteView; onBack: () =
     loadingRef.current = true
     setLoading(true)
     try {
-      if (view.kind === 'history') {
+      if (view.kind === 'qishui') {
+        const r = await api.qishuiPlaylistTracks(view.id, 50, pageRef.current * 50 - 50, view.ownerId)
+        if (r.ok && r.data) {
+          const got = r.data
+          setSongs((prev) => [...prev, ...got.songs])
+          setTotal((prev) => (got.songs.length > 0 ? Math.max(prev, view.count) : prev))
+          setHasMore(got.hasMore)
+          pageRef.current += 1
+        } else {
+          toastError('加载失败', r.error ?? '汽水请求失败')
+          setHasMore(false)
+        }
+      } else if (view.kind === 'netease-pl') {
+        const r = await api.neteasePlaylistSongs(view.id)
+        if (r.ok && r.data) {
+          setSongs(r.data)
+          setTotal(view.count > 0 ? view.count : r.data.length)
+        } else {
+          toastError('加载失败', r.error ?? '网易云未登录或接口异常')
+        }
+        setHasMore(false)
+      } else if (view.kind === 'qq-pl') {
+        const r = await api.sourcePlaylistSongs('qq', view.id)
+        if (r.ok && r.data) {
+          setSongs(r.data.songs)
+          setTotal(view.count > 0 ? view.count : r.data.songs.length)
+        } else {
+          toastError('加载失败', r.error ?? 'QQ音乐未登录或接口异常')
+        }
+        setHasMore(false)
+      } else if (view.kind === 'qq-record') {
+        const r = await api.qqRecentPlay()
+        if (r.ok && r.data) {
+          if (r.data.notLoggedIn) {
+            toastError('需要登录', '请先在「设置 → 账号」中登录QQ音乐')
+          } else {
+            setSongs(r.data.songs)
+            setTotal(r.data.songs.length)
+          }
+        } else {
+          toastError('加载失败', r.error ?? 'QQ音乐未登录或接口异常')
+        }
+        setHasMore(false)
+      } else if (view.kind === 'netease-record') {
+        const r = await api.neteasePlayRecord()
+        if (r.ok && r.data) {
+          if (r.data.notLoggedIn) {
+            toastError('需要登录', '请先在「设置 → 账号」中登录网易云')
+          } else {
+            setSongs(r.data.songs)
+            setTotal(r.data.songs.length)
+          }
+        } else {
+          toastError('加载失败', r.error ?? '网易云未登录或接口异常')
+        }
+        setHasMore(false)
+      } else if (view.kind === 'history') {
         const r = await api.biliHistoryPage(cursor.current.max, cursor.current.viewAt)
         if (r.notLoggedIn) {
           toastError('需要登录', '请先在「设置 → 账号」中登录哔哩哔哩')
@@ -379,7 +448,7 @@ function RemotePlaylistDetail({ view, onBack }: { view: RemoteView; onBack: () =
     if (saving || songs.length === 0) return
     setSaving(true)
     try {
-      const name = view.kind === 'history' ? 'B站播放记录' : view.title
+      const name = view.kind === 'history' ? 'B站播放记录' : view.kind === 'netease-record' ? '网易云播放记录' : view.kind === 'qq-record' ? 'QQ音乐播放记录' : view.kind === 'qishui' ? view.title : view.title
       const pl = await api.libraryCreatePlaylist(name)
       await api.libraryAddToPlaylist(pl.id, songs)
       await refresh()
@@ -391,10 +460,38 @@ function RemotePlaylistDetail({ view, onBack }: { view: RemoteView; onBack: () =
     }
   }
 
-  const title = view.kind === 'history' ? 'B站播放记录' : view.title
+  const title = view.kind === 'history' ? 'B站播放记录' : view.kind === 'netease-record' ? '网易云播放记录' : view.kind === 'qq-record' ? 'QQ音乐播放记录' : view.title
+  /** 有平台级导入接口的歌单类型:导入走查重兜底,比快照更干净 */
+  const platformImportable =
+    view.kind === 'qishui' || view.kind === 'netease-pl' || view.kind === 'qq-pl'
+  const importRemote = async (): Promise<void> => {
+    if (importingRemote) return
+    setImportingRemote(true)
+    try {
+      const pl =
+        view.kind === 'qishui'
+          ? await api.qishuiImportPlaylist(view.id, view.title).then((r) => (r.ok ? r.data : null))
+          : view.kind === 'netease-pl'
+            ? await api.importNeteasePlaylist(view.id, view.title)
+            : view.kind === 'qq-pl'
+              ? await api.qqImportPlaylist(Number(view.id), view.title)
+              : null
+      if (pl) {
+        await refresh()
+        toastSuccess('已导入', `${title} · ${pl.songIds.length} 首`)
+        onBack()
+      } else {
+        toastError('导入失败', '内容为空或获取失败')
+      }
+    } catch (e) {
+      toastError('导入失败', String(e))
+    } finally {
+      setImportingRemote(false)
+    }
+  }
   return (
     <div
-      key={`remote-${view.kind}-${view.kind === 'fav' ? view.id : ''}`}
+      key={`remote-${view.kind}-${view.kind === 'fav' || view.kind === 'netease-pl' ? view.id : ''}`}
       className={animCls}
       style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}
     >
@@ -403,7 +500,7 @@ function RemotePlaylistDetail({ view, onBack }: { view: RemoteView; onBack: () =
           <Tooltip content="返回" relationship="label">
             <Button appearance="subtle" icon={<ArrowLeftRegular />} onClick={onBack} />
           </Tooltip>
-          {view.kind === 'fav' && view.coverUrl ? (
+          {view.kind !== 'history' && view.kind !== 'netease-record' && view.kind !== 'qq-record' && view.coverUrl ? (
             <Cover url={view.coverUrl} size={64} radius={8} iconSize={28} />
           ) : (
             <div
@@ -428,7 +525,11 @@ function RemotePlaylistDetail({ view, onBack }: { view: RemoteView; onBack: () =
             </Text>
             <div>
               <Text size={300} style={{ color: tokens.colorNeutralForeground3 }}>
-                {view.kind === 'fav' ? `${total} 个收藏` : '最近观看 · 下翻加载更多'}
+                {view.kind === 'fav'
+                  ? `${total} 个收藏`
+                  : view.kind === 'history' || view.kind === 'netease-record' || view.kind === 'qq-record'
+                    ? '最近观看 · 下翻加载更多'
+                    : `共 ${total || view.count} 首`}
               </Text>
             </div>
           </div>
@@ -440,11 +541,24 @@ function RemotePlaylistDetail({ view, onBack }: { view: RemoteView; onBack: () =
           >
             播放已加载
           </Button>
-          <Tooltip content="把已加载内容快照为本地歌单" relationship="label">
-            <Button icon={<SaveRegular />} disabled={saving || songs.length === 0} onClick={() => void saveLocal()}>
-              保存为本地
-            </Button>
-          </Tooltip>
+          {platformImportable ? (
+            <Tooltip content="导入完整歌单(已导入过会直接复用)" relationship="label">
+              <Button
+                appearance="primary"
+                icon={<SaveRegular />}
+                disabled={importingRemote}
+                onClick={() => void importRemote()}
+              >
+                {importingRemote ? '导入中…' : '导入为本地歌单'}
+              </Button>
+            </Tooltip>
+          ) : (
+            <Tooltip content="把已加载内容快照为本地歌单" relationship="label">
+              <Button icon={<SaveRegular />} disabled={saving || songs.length === 0} onClick={() => void saveLocal()}>
+                保存为本地
+              </Button>
+            </Tooltip>
+          )}
         </div>
         <div className={styles.scroll} ref={scrollRef} onScroll={onScroll}>
           {songs.length > 0 ? (
@@ -452,7 +566,7 @@ function RemotePlaylistDetail({ view, onBack }: { view: RemoteView; onBack: () =
           ) : loading ? null : (
             <div className={styles.empty}>
               <HistoryRegular fontSize={40} />
-              <Text size={400}>{view.kind === 'fav' ? '收藏夹是空的' : '暂无播放记录'}</Text>
+              <Text size={400}>{platformImportable ? '歌单是空的或加载失败' : view.kind === 'fav' ? '收藏夹是空的' : '暂无播放记录'}</Text>
             </div>
           )}
           {loading && (
@@ -570,13 +684,24 @@ export function PlaylistsPage() {
           .catch((e) => toastError(tag, String(e)))
       )
     }
+    if (library?.qishuiProfile) {
+      jobs.push(
+        api
+          .qishuiUserPlaylists()
+          .then((r) => {
+            if (r.ok && r.data) for (const d of r.data) collected.push({ ...d, platform: 'qishui' as const })
+            else if (!r.ok) toastError('汽水歌单获取失败', r.error)
+          })
+          .catch((e) => toastError('汽水歌单获取失败', String(e)))
+      )
+    }
     Promise.all(jobs).then(() => {
       if (!cancelled) setOnlinePls(collected)
     })
     return () => {
       cancelled = true
     }
-  }, [library?.neteaseProfile, library?.qqProfile, library?.kugouProfile, library?.kugouConceptProfile])
+  }, [library?.neteaseProfile, library?.qqProfile, library?.kugouProfile, library?.kugouConceptProfile, library?.qishuiProfile])
 
   /**
    * 在线卡片 platform → 查重键前缀。
@@ -584,7 +709,7 @@ export function PlaylistsPage() {
    * 而集合里存的是 `kugou:<id>`,永远查不中,导致每点一次来源卡片就重复导入一个歌单。
    */
   const sourceKeyPrefix = (platform: OnlineBrief['platform']): string =>
-    platform === 'netease' ? 'netease' : platform === 'qq' ? 'qq' : 'kugou'
+    platform === 'netease' ? 'netease' : platform === 'qq' ? 'qq' : platform === 'qishui' ? 'qishui' : 'kugou'
 
   /** 已导入的来源 id(避免在线卡片重复导入;key = 前缀:来源id) */
   const importedSourceIds = useMemo(() => {
@@ -593,6 +718,7 @@ export function PlaylistsPage() {
       if (pl.neteasePlaylistId) s.add(`netease:${pl.neteasePlaylistId}`)
       if (pl.qqPlaylistId) s.add(`qq:${pl.qqPlaylistId}`)
       if (pl.kugouPlaylistId) s.add(`kugou:${pl.kugouPlaylistId}`)
+      if (pl.qishuiPlaylistId) s.add(`qishui:${pl.qishuiPlaylistId}`)
     }
     return s
   }, [library?.playlists])
@@ -605,6 +731,11 @@ export function PlaylistsPage() {
       let pl: Playlist | null = null
       if (b.platform === 'netease') pl = await api.importNeteasePlaylist(Number(b.id), b.name)
       else if (b.platform === 'qq') pl = await api.qqImportPlaylist(Number(b.id), b.name)
+      else if (b.platform === 'qishui') {
+        const r = await api.qishuiImportPlaylist(String(b.id), b.name)
+        pl = r.ok ? (r.data ?? null) : null
+        if (!r.ok) toastError('导入失败', r.error)
+      }
       else pl = await api.kugouImportPlaylist(b.platform as KugouPlatform, String(b.id), b.name)
       if (pl) {
         await refresh()
@@ -621,20 +752,32 @@ export function PlaylistsPage() {
 
   if (!library) return null
 
-  /** 分类过滤:本地歌单按来源标记,B站在线条目随 bili 分类显隐 */
-  const visiblePlaylists = library.playlists.filter(
-    (pl) => category === 'all' || sourceOf(pl) === category
-  )
+  /** 平台显隐设置:勾选隐藏的平台,其导入歌单与在线入口一并从列表消失 */
+  const hiddenPlatforms = new Set(library.settings.hiddenPlaylistPlatforms ?? [])
+  const platformVisible = (p: PlaylistCategory): boolean =>
+    p === 'local' || !hiddenPlatforms.has(p as 'netease' | 'bili' | 'qq' | 'kugou' | 'qishui')
+  const showVisibilityBtn =
+    library.settings.hiddenPlaylistPlatforms?.length || library.playlists.some((pl) => pl.hidden)
+
+  /** 分类过滤:本地歌单按来源标记;隐藏的歌单与被隐藏平台的歌单不进列表 */
+  const visiblePlaylists = library.playlists.filter((pl) => {
+    if (pl.hidden) return false
+    const src = sourceOf(pl)
+    if (!platformVisible(src)) return false
+    return category === 'all' || src === category
+  })
   const showLocalSection = category === 'all' || category === 'local'
-  const showBiliSection = category === 'all' || category === 'bili'
-  const showNeteaseSection = category === 'all' || category === 'netease'
-  const showQqSection = category === 'all' || category === 'qq'
-  const showKugouSection = category === 'all' || category === 'kugou'
+  const showBiliSection = (category === 'all' || category === 'bili') && platformVisible('bili')
+  const showNeteaseSection = (category === 'all' || category === 'netease') && platformVisible('netease')
+  const showQishuiSection = (category === 'all' || category === 'qishui') && platformVisible('qishui')
+  const showQqSection = (category === 'all' || category === 'qq') && platformVisible('qq')
+  const showKugouSection = (category === 'all' || category === 'kugou') && platformVisible('kugou')
 
   /** 在线歌单卡片:已导入点开本地详情,未导入一键导入 */
   const onlineMeta: Record<OnlineBrief['platform'], { label: string; color: string; bg: string }> = {
     netease: { label: '网易云', color: '#ec4141', bg: 'rgba(236,65,65,0.15)' },
     qq: { label: 'QQ音乐', color: '#31c27c', bg: 'rgba(49,194,124,0.15)' },
+    qishui: { label: '汽水', color: '#22c8b5', bg: 'rgba(34,200,181,0.15)' },
     normal: { label: '酷狗', color: '#00a9ff', bg: 'rgba(0,169,255,0.15)' },
     concept: { label: '酷狗概念版', color: '#7c6cff', bg: 'rgba(124,108,255,0.15)' }
   }
@@ -646,7 +789,8 @@ export function PlaylistsPage() {
           (pl) =>
             (b.platform === 'netease' && pl.neteasePlaylistId === Number(b.id)) ||
             (b.platform === 'qq' && pl.qqPlaylistId === Number(b.id)) ||
-            (b.platform !== 'netease' && b.platform !== 'qq' && pl.kugouPlaylistId === String(b.id))
+            (b.platform === 'qishui' && pl.qishuiPlaylistId === String(b.id)) ||
+            (b.platform !== 'netease' && b.platform !== 'qq' && b.platform !== 'qishui' && pl.kugouPlaylistId === String(b.id))
         )
       : undefined
     const busy = onlineImporting === key
@@ -659,8 +803,23 @@ export function PlaylistsPage() {
             setSelected(localPl)
             return
           }
-          void importOnline(b)
+          // 未导入:先打开预览(导入按钮在预览页,显式化,避免"点一下就生成歌单")
+          if (b.platform === 'netease')
+            setRemoteView({ kind: 'netease-pl', id: Number(b.id), title: b.name, coverUrl: b.coverUrl, count: b.count })
+          else if (b.platform === 'qishui')
+            setRemoteView({ kind: 'qishui', id: String(b.id), title: b.name, coverUrl: b.coverUrl, count: b.count })
+          else if (b.platform === 'qq')
+            setRemoteView({ kind: 'qq-pl', id: String(b.id), title: b.name, coverUrl: b.coverUrl, count: b.count })
+          else void importOnline(b)
         }}
+        onContextMenu={
+          localPl
+            ? (e) => {
+                // 已导入的在线歌单:右键直接对本地副本提供 编辑/同步/删除 等操作
+                onCardContextMenu(e, localPl)
+              }
+            : undefined
+        }
       >
         <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
           <Cover url={b.coverUrl} size={56} radius={8} iconSize={24} />
@@ -851,6 +1010,21 @@ export function PlaylistsPage() {
     setRenameValue(p.name)
     setDescValue(p.description ?? '')
     setRenameTarget(p)
+  }
+
+  /** 歌单显隐:不删除,只是从列表里收起;「显示设置」浮层可恢复 */
+  const togglePlaylistHidden = async (pl: Playlist): Promise<void> => {
+    try {
+      await api.libraryUpdatePlaylist({
+        id: pl.id,
+        name: pl.name,
+        description: pl.description ?? '',
+        hidden: !pl.hidden
+      })
+      await refresh()
+    } catch (e) {
+      toastError('操作失败', String(e))
+    }
   }
 
   /** 把某歌单的歌曲批量 添加到 / 从 其他歌单移动 */
@@ -1073,6 +1247,16 @@ export function PlaylistsPage() {
                 </MenuItem>
               )}
               <MenuItem
+                icon={menuTarget.hidden ? <EyeRegular /> : <EyeOffRegular />}
+                onClick={() => {
+                  const t = menuTarget
+                  setMenuTarget(null)
+                  void togglePlaylistHidden(t)
+                }}
+              >
+                {menuTarget.hidden ? '恢复显示' : '在列表中隐藏'}
+              </MenuItem>
+              <MenuItem
                 icon={<DeleteRegular />}
                 onClick={() => {
                   setMenuTarget(null)
@@ -1205,8 +1389,8 @@ export function PlaylistsPage() {
         </>
       }
     >
-      {/* 分类筛选:全部 / 本地 / 网易云 / B站 / QQ / 酷狗 */}
-      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 14 }}>
+      {/* 分类筛选:全部 / 本地 / 网易云 / B站 / QQ / 酷狗 / 汽水 + 显示设置 */}
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 14, alignItems: 'center' }}>
         {(
           [
             ['all', '全部'],
@@ -1214,7 +1398,8 @@ export function PlaylistsPage() {
             ['netease', '网易云'],
             ['bili', 'B站'],
             ['qq', 'QQ音乐'],
-            ['kugou', '酷狗']
+            ['kugou', '酷狗'],
+            ['qishui', '汽水']
           ] as const
         ).map(([key, label]) => (
           <ToggleButton
@@ -1226,6 +1411,71 @@ export function PlaylistsPage() {
             {label}
           </ToggleButton>
         ))}
+        <Popover>
+          <PopoverTrigger disableButtonEnhancement>
+            <Button
+              size="small"
+              appearance={showVisibilityBtn ? 'primary' : 'subtle'}
+              icon={<EyeOffRegular />}
+              title="按平台/按歌单隐藏"
+            >
+              显示设置
+            </Button>
+          </PopoverTrigger>
+          <PopoverSurface style={{ maxWidth: 320 }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8, padding: 4, minWidth: 260 }}>
+              <Text weight="semibold" size={300}>
+                按平台显示
+              </Text>
+              {(
+                [
+                  ['netease', '网易云'],
+                  ['bili', 'B站'],
+                  ['qq', 'QQ音乐'],
+                  ['kugou', '酷狗'],
+                  ['qishui', '汽水']
+                ] as const
+              ).map(([key, label]) => (
+                <Switch
+                  key={key}
+                  label={label}
+                  checked={platformVisible(key)}
+                  onChange={(_, d) => {
+                    const next = new Set(hiddenPlatforms)
+                    if (d.checked) next.delete(key)
+                    else next.add(key)
+                    useStore.getState().updateSetting('hiddenPlaylistPlatforms', [...next])
+                  }}
+                />
+              ))}
+              {library.playlists.some((pl) => pl.hidden) && (
+                <>
+                  <Text weight="semibold" size={300} style={{ marginTop: 6 }}>
+                    已隐藏的歌单
+                  </Text>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                    {library.playlists
+                      .filter((pl) => pl.hidden)
+                      .map((pl) => (
+                        <div key={pl.id} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                          <Text size={300} style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                            {pl.name}
+                          </Text>
+                          <Button
+                            size="small"
+                            appearance="subtle"
+                            onClick={() => void togglePlaylistHidden(pl)}
+                          >
+                            恢复
+                          </Button>
+                        </div>
+                      ))}
+                  </div>
+                </>
+              )}
+            </div>
+          </PopoverSurface>
+        </Popover>
       </div>
 
       {/* 歌单网格:本地歌单与B站在线条目同层级混排 */}
@@ -1404,8 +1654,87 @@ export function PlaylistsPage() {
           </Card>
         ))}
 
+        {/* 网易云云端播放记录(听歌排行):登录即出现,打开才拉数据 */}
+        {showNeteaseSection && library.neteaseProfile && (
+          <Card key="netease-record" className={styles.card} onClick={() => setRemoteView({ kind: 'netease-record' })}>
+            <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
+              <div
+                style={{
+                  width: 56,
+                  height: 56,
+                  borderRadius: 8,
+                  background: 'rgba(230,33,41,0.14)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  color: '#e62129',
+                  flexShrink: 0
+                }}
+              >
+                <HistoryRegular fontSize={24} />
+              </div>
+              <div style={{ minWidth: 0 }}>
+                <Text
+                  weight="semibold"
+                  style={{
+                    display: 'block',
+                    whiteSpace: 'nowrap',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis'
+                  }}
+                >
+                  播放记录
+                </Text>
+                <Text size={200} style={{ color: tokens.colorNeutralForeground3 }}>
+                  网易云听歌排行 · 最近一周优先
+                </Text>
+              </div>
+            </div>
+          </Card>
+        )}
+
+        {/* QQ音乐最近播放:登录即出现,打开才拉数据 */}
+        {showQqSection && library.qqProfile && (
+          <Card key="qq-record" className={styles.card} onClick={() => setRemoteView({ kind: 'qq-record' })}>
+            <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
+              <div
+                style={{
+                  width: 56,
+                  height: 56,
+                  borderRadius: 8,
+                  background: 'rgba(12,193,242,0.14)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  color: '#0cc1f2',
+                  flexShrink: 0
+                }}
+              >
+                <HistoryRegular fontSize={24} />
+              </div>
+              <div style={{ minWidth: 0 }}>
+                <Text
+                  weight="semibold"
+                  style={{
+                    display: 'block',
+                    whiteSpace: 'nowrap',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis'
+                  }}
+                >
+                  播放记录
+                </Text>
+                <Text size={200} style={{ color: tokens.colorNeutralForeground3 }}>
+                  QQ音乐最近播放 · 网页端接口
+                </Text>
+              </div>
+            </div>
+          </Card>
+        )}
+
         {/* 其他平台在线歌单:登录即自动列出(与B站收藏夹一致),点卡片一键导入,已导入点开详情 */}
         {showNeteaseSection && onlinePls.filter((b) => b.platform === 'netease').map(renderOnlineCard)}
+        {showQishuiSection && onlinePls.filter((b) => b.platform === 'qishui').map(renderOnlineCard)}
         {showQqSection && onlinePls.filter((b) => b.platform === 'qq').map(renderOnlineCard)}
         {showKugouSection &&
           onlinePls.filter((b) => b.platform === 'normal' || b.platform === 'concept').map(renderOnlineCard)}

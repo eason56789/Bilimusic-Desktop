@@ -14,6 +14,7 @@ import { readdirSync } from 'fs'
 import type { DownloadRecord, Song } from '@shared/types'
 import { resolvePlayUrl, getCidForPage, bvidFromSongId, pageFromSongId, searchVideos } from './api/bilibili'
 import { getSongUrl } from './api/netease'
+import { getAudioUrl as getQishuiAudioUrl } from './api/qishui'
 import { getStore, addDownloadRecord, removeDownloadRecord } from './store'
 
 const queue: DownloadRecord[] = []
@@ -53,6 +54,11 @@ async function resolveDownloadUrl(
           )
         : results[0]
     return await resolveDownloadUrl(picked)
+  }
+  if (song.source === 'QISHUI' && song.qishuiId) {
+    const info = await getQishuiAudioUrl(song.qishuiId)
+    if (!info) return null
+    return { url: info.url, referer: 'https://qishui.douyin.com/', ext: 'mp3' }
   }
   if (song.source === 'BILIBILI' && song.bvid) {
     const bvid = bvidFromSongId(song.bvid || song.id)

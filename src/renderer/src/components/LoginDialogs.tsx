@@ -243,103 +243,23 @@ export function BiliLoginDialog({ open, onClose }: { open: boolean; onClose: () 
   )
 }
 
-/** 网易云登录(扫码/验证码/密码) */
+/** 网易云登录:内嵌官方网页登录窗口(扫码/验证码/密码/滑块全由官方页面处理) */
 export function NeteaseLoginDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
-  const styles = useStyles()
   const refreshLibrary = useStore((s) => s.refreshLibrary)
-  const [tab, setTab] = useState<'qr' | 'captcha' | 'password'>('qr')
-  const [image, setImage] = useState<string | null>(null)
-  const [status, setStatus] = useState<QRStatus>('loading')
-  const [message, setMessage] = useState('')
-  const [phone, setPhone] = useState('')
-  const [captcha, setCaptcha] = useState('')
-  const [password, setPassword] = useState('')
-  const [showPassword, setShowPassword] = useState(false)
-  const [countdown, setCountdown] = useState(0)
   const [busy, setBusy] = useState(false)
-  const keyRef = useRef<string | null>(null)
 
-  const startQR = async () => {
-    setStatus('loading')
-    const qr = await api.neteaseQRStart()
-    if (!qr) {
-      setStatus('error')
-      setMessage('获取二维码失败')
-      return
-    }
-    setImage(qr.imageDataUrl)
-    keyRef.current = qr.key
-    setStatus('waiting')
-    setMessage('等待扫码...')
-  }
-
-  useEffect(() => {
-    if (!open || tab !== 'qr') return
-    startQR()
-    let stopped = false
-    const timer = setInterval(async () => {
-      if (!keyRef.current || stopped) return
-      const r = await api.neteaseQRPoll(keyRef.current)
-      if (stopped) return
-      setMessage(r.message)
-      if (r.status === 'scanned') setStatus('scanned')
-      if (r.status === 'ok') {
-        setStatus('ok')
+  const openWebLogin = async () => {
+    if (busy) return
+    setBusy(true)
+    try {
+      const r = await api.neteaseWebLogin()
+      if (r.ok) {
         await refreshLibrary()
-        toastSuccess('网易云登录成功')
-        setTimeout(onClose, 800)
+        toastSuccess('网易云登录成功', r.message)
+        onClose()
+      } else if (r.message !== '已取消登录') {
+        toastError('登录未完成', r.message)
       }
-      if (r.status === 'expired') setStatus('expired')
-    }, 1600)
-    return () => {
-      stopped = true
-      clearInterval(timer)
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, tab])
-
-  useEffect(() => {
-    if (countdown <= 0) return
-    const t = setTimeout(() => setCountdown((c) => c - 1), 1000)
-    return () => clearTimeout(t)
-  }, [countdown])
-
-  const phoneOk = PHONE_RE.test(phone.trim())
-
-  const sendCaptcha = async () => {
-    if (!phoneOk) return
-    const r = await api.neteaseSendCaptcha(phone.trim())
-    if (r.ok) {
-      setCountdown(60)
-      toastSuccess('验证码已发送')
-    } else toastError('发送失败', r.message)
-  }
-
-  const doLoginCaptcha = async () => {
-    if (!phoneOk || !captcha.trim()) return
-    setBusy(true)
-    try {
-      const r = await api.neteaseLoginCaptcha(phone.trim(), captcha.trim())
-      if (r.ok) {
-        await refreshLibrary()
-        toastSuccess('网易云登录成功')
-        onClose()
-      } else toastError('登录失败', r.message)
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  const doLoginPassword = async () => {
-    if (!phoneOk || !password) return
-    setBusy(true)
-    try {
-      const r = await api.neteaseLoginPassword(phone.trim(), password)
-      if (r.ok) {
-        await refreshLibrary()
-        toastSuccess('网易云登录成功')
-        onClose()
-      } else toastError('登录失败', r.message)
     } finally {
       setBusy(false)
     }
@@ -351,96 +271,14 @@ export function NeteaseLoginDialog({ open, onClose }: { open: boolean; onClose: 
         <DialogBody>
           <DialogTitle>网易云音乐登录</DialogTitle>
           <DialogContent>
-            <TabList
-              selectedValue={tab}
-              onTabSelect={(_, d) => setTab(d.value as typeof tab)}
-              appearance="transparent"
-              style={{ marginBottom: 12 }}
-            >
-              <Tab value="qr">扫码登录</Tab>
-              <Tab value="captcha">验证码登录</Tab>
-              <Tab value="password">密码登录</Tab>
-            </TabList>
-
-            {tab === 'qr' && (
-              <div className={styles.qrBox}>
-                <QRPanel imageDataUrl={image} status={status} message={message} onRefresh={startQR} />
-                <Text size={300} style={{ color: tokens.colorNeutralForeground3 }}>
-                  {status === 'scanned' ? message : '使用网易云音乐 App 扫码登录'}
-                </Text>
-              </div>
-            )}
-
-            {tab === 'captcha' && (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-                <Field
-                  label="手机号"
-                  validationMessage={
-                    phone.trim() && !phoneOk ? '请输入 11 位有效手机号' : undefined
-                  }
-                  validationState={phone.trim() && !phoneOk ? 'error' : 'none'}
-                >
-                  <Input value={phone} onChange={(_, d) => setPhone(d.value)} placeholder="11位手机号" />
-                </Field>
-                <Field label="验证码">
-                  <div style={{ display: 'flex', gap: 8 }}>
-                    <Input
-                      value={captcha}
-                      onChange={(_, d) => setCaptcha(d.value)}
-                      style={{ flex: 1 }}
-                    />
-                    <Button onClick={sendCaptcha} disabled={countdown > 0 || !phoneOk || busy}>
-                      {countdown > 0 ? `${countdown}s` : '发送'}
-                    </Button>
-                  </div>
-                </Field>
-                <Button
-                  appearance="primary"
-                  onClick={doLoginCaptcha}
-                  disabled={busy || !captcha.trim() || !phoneOk}
-                >
-                  {busy ? <Spinner size="tiny" /> : '登录'}
-                </Button>
-              </div>
-            )}
-
-            {tab === 'password' && (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-                <Field
-                  label="手机号"
-                  validationMessage={
-                    phone.trim() && !phoneOk ? '请输入 11 位有效手机号' : undefined
-                  }
-                  validationState={phone.trim() && !phoneOk ? 'error' : 'none'}
-                >
-                  <Input value={phone} onChange={(_, d) => setPhone(d.value)} placeholder="11位手机号" />
-                </Field>
-                <Field label="密码">
-                  <Input
-                    type={showPassword ? 'text' : 'password'}
-                    value={password}
-                    onChange={(_, d) => setPassword(d.value)}
-                    onKeyDown={(e) => e.key === 'Enter' && phoneOk && password && doLoginPassword()}
-                    contentAfter={
-                      <Button
-                        appearance="transparent"
-                        size="small"
-                        aria-label={showPassword ? '隐藏密码' : '显示密码'}
-                        icon={showPassword ? <EyeOff24Regular /> : <Eye24Regular />}
-                        onClick={() => setShowPassword((v) => !v)}
-                      />
-                    }
-                  />
-                </Field>
-                <Button
-                  appearance="primary"
-                  onClick={doLoginPassword}
-                  disabled={busy || !password || !phoneOk}
-                >
-                  {busy ? <Spinner size="tiny" /> : '登录'}
-                </Button>
-              </div>
-            )}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 12, padding: '8px 0 16px' }}>
+              <Text size={300} style={{ color: tokens.colorNeutralForeground3 }}>
+                将打开网易云音乐官方登录窗口,支持扫码、验证码、密码与安全验证,登录完成后自动回到应用。
+              </Text>
+              <Button appearance="primary" onClick={openWebLogin} disabled={busy}>
+                {busy ? <Spinner size="tiny" /> : '打开登录窗口'}
+              </Button>
+            </div>
           </DialogContent>
         </DialogBody>
       </DialogSurface>
@@ -515,6 +353,101 @@ export function KugouLoginDialog({
               <QRPanel imageDataUrl={image} status={status} message={message} onRefresh={startQR} />
               <Text size={300} style={{ color: tokens.colorNeutralForeground3 }}>
                 {status === 'scanned' ? message : '使用酷狗音乐 App 扫码登录'}
+              </Text>
+            </div>
+          </DialogContent>
+        </DialogBody>
+      </DialogSurface>
+    </Dialog>
+  )
+}
+
+/** 汽水音乐登录:抖音授权二维码(login_qr_key → create → check 轮询) */
+export function QishuiLoginDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const styles = useStyles()
+  const refreshLibrary = useStore((s) => s.refreshLibrary)
+  const [image, setImage] = useState<string | null>(null)
+  const [status, setStatus] = useState<QRStatus>('loading')
+  const [message, setMessage] = useState('')
+  const keyRef = useRef<string | null>(null)
+
+  const startQR = async () => {
+    setStatus('loading')
+    const r = await api.qishuiRequest<{ key: string }>('login_qr_key')
+    if (!r.ok || !r.data?.key) {
+      setStatus('error')
+      setMessage('获取二维码失败')
+      return
+    }
+    const key = r.data.key
+    keyRef.current = key
+    const img = await api.qishuiRequest<{ imageUrl: string }>('login_qr_create', { key })
+    if (!img.ok || !img.data?.imageUrl) {
+      setStatus('error')
+      setMessage('生成二维码失败')
+      return
+    }
+    setImage(img.data.imageUrl)
+    setStatus('waiting')
+    setMessage('等待扫码...')
+  }
+
+  useEffect(() => {
+    if (!open) {
+      setImage(null)
+      keyRef.current = null
+      setStatus('loading')
+      return
+    }
+    startQR()
+    let stopped = false
+    const timer = setInterval(async () => {
+      if (!keyRef.current || stopped) return
+      const r = await api.qishuiRequest<{ state: 'waiting' | 'scanned' | 'confirmed' | 'expired' | 'error' }>(
+        'login_qr_check',
+        { key: keyRef.current }
+      )
+      if (stopped) return
+      if (!r.ok) {
+        setMessage(r.error?.message ?? '网络错误')
+        return
+      }
+      const st = r.data?.state
+      if (st === 'scanned') setStatus('scanned')
+      else if (st === 'waiting') setStatus('waiting')
+      else if (st === 'expired') setStatus('expired')
+      else if (st === 'error') setStatus('error')
+      if (st === 'confirmed') {
+        setStatus('ok')
+        // 确认后主进程已存会话;取账号写入资料并刷新
+        await api.qishuiAccount().catch(() => {})
+        await refreshLibrary()
+        toastSuccess('汽水音乐登录成功')
+        setTimeout(onClose, 800)
+      }
+    }, 1800)
+    return () => {
+      stopped = true
+      clearInterval(timer)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open])
+
+  return (
+    <Dialog open={open} onOpenChange={(_, d) => !d.open && onClose()}>
+      <DialogSurface style={{ minWidth: 400 }}>
+        <DialogBody>
+          <DialogTitle>汽水音乐登录</DialogTitle>
+          <DialogContent>
+            <div className={styles.qrBox}>
+              <QRPanel
+                imageDataUrl={image}
+                status={status}
+                message={message}
+                onRefresh={startQR}
+              />
+              <Text size={300} style={{ color: tokens.colorNeutralForeground3 }}>
+                {status === 'scanned' ? message : '使用抖音/汽水音乐 App 扫码登录'}
               </Text>
             </div>
           </DialogContent>

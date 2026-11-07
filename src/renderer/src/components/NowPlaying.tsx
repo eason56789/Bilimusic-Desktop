@@ -62,38 +62,6 @@ import { CommentsBody } from './PlayerDialogs'
 import { badgeOf } from '../lib/sourceBadge'
 import { formatTime } from './SongList'
 
-/** 文字PV 版式显示名 */
-const PV_ARRANGE_LABEL: Record<string, string> = {
-  pv: '逐字PV',
-  partita: '云阶',
-  claddagh: '回环',
-  still: '时计',
-  tempera: '凝彩',
-  jizura: '印刷分镜',
-  classic: '经典',
-  tilt: '倾斜',
-  cadenza: '商籁',
-  fume: '雾里',
-  cappella: '群唱',
-  monet: '莫奈',
-  pendolo: '钟摆',
-  lumiere: '绘光',
-  hanabi: '花火',
-  nebbia: '雾笺',
-  sonnet: '诗节',
-  diorama: '镜台',
-  machi: '町景'
-}
-
-const PV_LAYOUT_LABEL: Record<string, string> = {
-  'type-impact': '巨字炸裂',
-  'editorial-column': '竖排专栏',
-  'fragment-collage': '碎片拼贴',
-  'tracking-ribbon': '单行带状',
-  'mask-reveal': '中轴落入',
-  'quiet-tableau': '静场堆叠'
-}
-
 /** 右侧评论停靠面板宽度(px):播放内容整体左移同样的量 */const COMMENTS_PANEL_W = 360
 /** 面板滑入/内容左移的同一条曲线 */
 const PANEL_EASE = 'cubic-bezier(0.22, 1, 0.36, 1)'
@@ -909,44 +877,42 @@ export function NowPlaying() {
                       icon={!pvMode ? <CheckmarkRegular /> : undefined}
                       onClick={() => void useStore.getState().updateSetting('lyricStyle', 'classic')}
                     >
-                      经典歌词(滚动列表)
+                      经典歌词
                     </MenuItem>
                     <MenuItem
                       icon={pvMode ? <CheckmarkRegular /> : undefined}
                       onClick={() => void useStore.getState().updateSetting('lyricStyle', 'pv')}
                     >
-                      文字PV(整屏大字 + 动效)
+                      文字PV
                     </MenuItem>
                     <MenuDivider />
                     {/* 排布样式:同一套 PV 舞台,换整行的摆法(参考 folia 的多种歌词样式) */}
                     <Menu>
                       <MenuTrigger disableButtonEnhancement>
                         <MenuItem icon={<TextEffectsRegular />} disabled={!pvMode}>
-                          排布样式({PV_ARRANGE_LABEL[pvArrange]})
+                          排布样式
                         </MenuItem>
                       </MenuTrigger>
                       <MenuPopover>
                         <MenuList>
                           {(
                             [
-                              ['pv', '逐字PV(词块 + 镜头)'],
-                              ['partita', '云阶(分栏词块)'],
-                              ['claddagh', '回环(圆弧排布)'],
-                              ['still', '时计(静态三行)'],
-                              ['tempera', '凝彩(构图色块 + 反相大字)'],
-                              ['classic', '经典(逐词高亮滚动)'],
-                              ['tilt', '倾斜(随机断行倾斜)'],
-                              ['cadenza', '商籁(逐字飞入)'],
-                              ['fume', '雾里(活字印刷)'],
-                              ['cappella', '群唱(聊天气泡)'],
-                              ['monet', '莫奈(海报版面)'],
-                              ['pendolo', '钟摆(钟盘弧线)'],
-                              ['lumiere', '绘光(体积光刻字)'],
-                              ['hanabi', '花火(烟花PV)'],
-                              ['nebbia', '雾笺(起雾车窗)'],
-                              ['sonnet', '诗节(翻页诗稿)'],
-                              ['diorama', '镜台(3D点阵)'],
-                              ['machi', '町景(微缩街景)']
+                              ['pv', '逐字PV'],
+                              ['partita', '云阶'],
+                              ['claddagh', '回环'],
+                              ['still', '时计'],
+                              ['tempera', '凝彩'],
+                              ['classic', '经典'],
+                              ['cadenza', '商籁'],
+                              ['fume', '雾里'],
+                              ['cappella', '群唱'],
+                              ['monet', '莫奈'],
+                              ['pendolo', '钟摆'],
+                              ['lumiere', '绘光'],
+                              ['hanabi', '花火'],
+                              ['nebbia', '雾笺'],
+                              ['sonnet', '诗节'],
+                              ['machi', '町景']
                             ] as const
                           ).map(([k, label]) => (
                             <MenuItem
@@ -991,15 +957,15 @@ export function NowPlaying() {
                     <Menu>
                       <MenuTrigger disableButtonEnhancement>
                         <MenuItem icon={<TextAlignCenterRegular />} disabled={!pvMode}>
-                          版式{pvLayout !== 'auto' ? `(${PV_LAYOUT_LABEL[pvLayout]})` : '(自动)'}
+                          版式
                         </MenuItem>
                       </MenuTrigger>
                       <MenuPopover>
                         <MenuList>
                           {(
                             [
-                              ['auto', '自动(按句轮转)'],
-                              ['type-impact', '巨字炸裂(副歌)'],
+                              ['auto', '自动'],
+                              ['type-impact', '巨字炸裂'],
                               ['editorial-column', '竖排专栏'],
                               ['fragment-collage', '碎片拼贴'],
                               ['tracking-ribbon', '单行带状'],
@@ -1023,7 +989,7 @@ export function NowPlaying() {
                       disabled={!pvMode}
                       onClick={() => void useStore.getState().updateSetting('pvDecor', !pvDecor)}
                     >
-                      装饰层(网格/光圈/角框)
+                      装饰层
                     </MenuItem>
                   </MenuList>
                 </MenuPopover>

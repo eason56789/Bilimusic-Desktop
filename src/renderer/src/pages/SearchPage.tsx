@@ -4,6 +4,11 @@ import {
   Button,
   Dropdown,
   Input,
+  Menu,
+  MenuTrigger,
+  MenuPopover,
+  MenuList,
+  MenuItem,
   Option,
   Spinner,
   Switch,
@@ -22,8 +27,17 @@ import {
   MusicNote2Regular,
   PlayRegular,
   ArrowLeftRegular,
+  ArrowRightRegular,
+  ArrowDownloadRegular,
+  ArrowSwapRegular,
   CloudArrowDownRegular,
-  HistoryRegular
+  HistoryRegular,
+  HeartRegular,
+  HeartFilled,
+  FolderAddRegular,
+  InfoRegular,
+  CopyRegular,
+  OpenRegular
 } from '@fluentui/react-icons'
 import type {
   NeteaseArtistBrief,
@@ -38,6 +52,7 @@ import type {
 import { api } from '../lib/api'
 import { useStore } from '../store'
 import { SongList } from '../components/SongList'
+import { AddToPlaylistDialog } from '../components/AddToPlaylistDialog'
 import { Cover } from '../components/Cover'
 import { formatCount } from '../lib/format'
 import { toastError, toastSuccess } from '../lib/toast'
@@ -119,7 +134,7 @@ export function SearchPage() {
   const refresh = useStore((s) => s.refreshLibrary)
   const playQueue = useStore((s) => s.playQueue)
   // 默认音源来自设置(默认网易云);首帧 library 未加载完时先给 'netease'
-  const [source, setSource] = useState<'bili' | 'netease' | 'qq' | 'kugou'>(
+  const [source, setSource] = useState<'bili' | 'netease' | 'qq' | 'kugou' | 'qishui'>(
     () => useStore.getState().library?.settings.defaultSearchSource ?? 'netease'
   )
   /** 搜索类型(歌曲/歌单/歌手):网易云、QQ音乐、酷狗 共用同一选择 */
@@ -130,6 +145,7 @@ export function SearchPage() {
   const [neHasMore, setNeHasMore] = useState(false)
   const [qqResults, setQqResults] = useState<Song[]>([])
   const [kgResults, setKgResults] = useState<Song[]>([])
+  const [qsResults, setQsResults] = useState<Song[]>([])
   const [qqPage, setQqPage] = useState(1)
   const [kgPage, setKgPage] = useState(1)
   const [nePlaylists, setNePlaylists] = useState<NeteasePlaylistBrief[]>([])
@@ -248,6 +264,11 @@ export function SearchPage() {
             toastError('酷狗搜索失败', r.error)
           }
         }
+      } else if (src === 'qishui') {
+        // 汽水音乐:仅支持歌曲搜索(字节平台无公开歌单/歌手搜索)
+        const r = await api.qishuiSearch(keyword, 30)
+        if (r.ok && r.data) setQsResults(r.data)
+        else toastError('汽水搜索失败', r.error)
       } else if (st === 'songs') {
         const r = await api.neteaseSearch(keyword, 0)
         if (r.ok && r.data) {
@@ -424,17 +445,22 @@ export function SearchPage() {
     }
   }
 
-  // B站搜索建议(防抖)
+  // 搜索建议(防抖):B站站内建议词 / 网易云与QQ、汽水联想
   useEffect(() => {
-    if (source !== 'bili' || !query.trim()) {
+    if (!query.trim() || (source !== 'bili' && source !== 'netease' && source !== 'qq' && source !== 'qishui')) {
       setSuggestions([])
       return
     }
     if (searchTimer.current) clearTimeout(searchTimer.current)
+    const kw = query.trim()
     searchTimer.current = setTimeout(async () => {
-      const list = await api.biliSuggest(query.trim())
-      setSuggestions(list.slice(0, 8))
-      setShowSuggestions(true)
+      try {
+        const list = await api.searchSuggest(source, kw)
+        setSuggestions(list.slice(0, 8))
+        setShowSuggestions(true)
+      } catch {
+        setSuggestions([])
+      }
     }, 300)
     return () => {
       if (searchTimer.current) clearTimeout(searchTimer.current)
@@ -447,7 +473,7 @@ export function SearchPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [order])
 
-  const switchSource = (src: 'bili' | 'netease' | 'qq' | 'kugou') => {
+  const switchSource = (src: 'bili' | 'netease' | 'qq' | 'kugou' | 'qishui') => {
     userPickedSource.current = true
     setSource(src)
     setShowSuggestions(false)
@@ -461,6 +487,43 @@ export function SearchPage() {
   const [recSongs, setRecSongs] = useState<Song[]>([])
   // 加载完成标记:失败时也要结束转圈,否则 Spinner 永远转下去
   const [recLoaded, setRecLoaded] = useState(false)
+
+  // 主页推荐卡片右键菜单(推荐歌曲 / 网易云推荐歌单)
+  const playSongNext = useStore((s) => s.playSongNext)
+  const current = useStore((s) => s.current)
+  const favoriteIds = useStore((s) => s.library?.favoriteIds)
+  const faved = (id: string): boolean => !!favoriteIds?.includes(id)
+  const [recCtx, setRecCtx] = useState<{ song: Song } | null>(null)
+  const [plCtx, setPlCtx] = useState<NeteasePlaylistBrief | null>(null)
+  const [addTarget, setAddTarget] = useState<Song[] | null>(null)
+  const recAnchorRef = useRef<HTMLSpanElement>(null)
+  const plAnchorRef = useRef<HTMLSpanElement>(null)
+
+  /** 收藏 / 取消收藏(与 SongList 同款;成功后刷新库让心形图标立刻反映) */
+  const recToggleFav = async (song: Song): Promise<void> => {
+    try {
+      const r = await api.libraryToggleFavorite(song)
+      await useStore.getState().refreshLibrary()
+      toastSuccess(r.favorited ? '已收藏' : '已取消收藏', song.title)
+    } catch (e) {
+      toastError('收藏失败', String(e))
+    }
+  }
+  /** 歌单右键「播放全部」:拉取歌单曲目直接开播(不经过预览页) */
+  const plPlayAll = async (pl: NeteasePlaylistBrief): Promise<void> => {
+    try {
+      const r = await api.neteasePlaylistSongs(pl.id)
+      if (r.ok && r.data && r.data.length > 0) {
+        playQueue(r.data, 0)
+        toastSuccess('播放全部', `${pl.name} · ${r.data.length} 首`)
+      } else {
+        toastError('播放失败', r.ok ? '歌单为空' : r.error)
+      }
+    } catch (e) {
+      toastError('播放失败', String(e))
+    }
+  }
+
   useEffect(() => {
     api
       .neteasePersonalized()
@@ -477,6 +540,90 @@ export function SearchPage() {
       })
       .catch(() => {})
   }, [])
+
+  /** 推荐歌曲右键菜单项(与 SongList 的行内菜单一致,播放按整组推荐队列算) */
+  const recMenuItems = (song: Song) => {
+    const isFav = faved(song.id)
+    return (
+      <>
+        <MenuItem
+          icon={<PlayRegular />}
+          onClick={() => {
+            if (playerLoading && current?.id === song.id) {
+              toastError('音源加载中', '当前歌曲正在加载,请稍候')
+              return
+            }
+            playQueue([...recSongs], Math.max(0, recSongs.findIndex((x) => x.id === song.id)))
+          }}
+        >
+          立即播放
+        </MenuItem>
+        <MenuItem icon={<ArrowRightRegular />} onClick={() => playSongNext(song)}>
+          下一首播放
+        </MenuItem>
+        <MenuItem
+          icon={isFav ? <HeartFilled /> : <HeartRegular />}
+          onClick={() => void recToggleFav(song)}
+        >
+          {isFav ? '取消收藏' : '收藏'}
+        </MenuItem>
+        <MenuItem icon={<FolderAddRegular />} onClick={() => setAddTarget([song])}>
+          添加到歌单
+        </MenuItem>
+        <MenuItem
+          icon={<ArrowDownloadRegular />}
+          onClick={() => {
+            api.downloadAdd([song])
+            toastSuccess('已加入下载队列', song.title)
+          }}
+        >
+          下载
+        </MenuItem>
+        <MenuItem
+          icon={<ArrowSwapRegular />}
+          onClick={() => useStore.getState().openSongDialog('source', song)}
+        >
+          更换音源
+        </MenuItem>
+        <MenuItem
+          icon={<InfoRegular />}
+          onClick={() => useStore.getState().openSongDialog('info', song)}
+        >
+          歌曲详情
+        </MenuItem>
+        <MenuItem
+          icon={<CopyRegular />}
+          onClick={() => {
+            void api.appCopy(`${song.title} - ${song.artist}`)
+            toastSuccess('已复制', `${song.title} - ${song.artist}`)
+          }}
+        >
+          复制歌名歌手
+        </MenuItem>
+      </>
+    )
+  }
+
+  /** 推荐歌单右键菜单项 */
+  const plMenuItems = (pl: NeteasePlaylistBrief) => (
+    <>
+      <MenuItem icon={<OpenRegular />} onClick={() => void openPlaylistPreview(pl)}>
+        打开歌单
+      </MenuItem>
+      <MenuItem icon={<PlayRegular />} onClick={() => void plPlayAll(pl)}>
+        播放全部
+      </MenuItem>
+      <MenuItem
+        icon={<CopyRegular />}
+        onClick={() => {
+          void api.appCopy(pl.name)
+          toastSuccess('已复制', pl.name)
+        }}
+      >
+        复制歌单名
+      </MenuItem>
+    </>
+  )
 
   const clearHistory = async () => {
     await api.libraryClearSearchHistory()
@@ -715,7 +862,9 @@ export function SearchPage() {
                 ? '搜索QQ音乐(原生音源)'
                 : source === 'kugou'
                   ? '搜索酷狗音乐(原生音源)'
-                  : '搜索网易云音乐、歌手、专辑'
+                  : source === 'qishui'
+                    ? '搜索汽水音乐'
+                    : '搜索网易云音乐、歌手、专辑'
           }
           value={query}
           onChange={(_, d) => setQuery(d.value)}
@@ -772,16 +921,17 @@ export function SearchPage() {
 
       <TabList
         selectedValue={source}
-        onTabSelect={(_, d) => switchSource(d.value as 'bili' | 'netease' | 'qq' | 'kugou')}
+        onTabSelect={(_, d) => switchSource(d.value as 'bili' | 'netease' | 'qq' | 'kugou' | 'qishui')}
         appearance="transparent"
       >
         <Tab value="netease">网易云音乐</Tab>
         <Tab value="bili">哔哩哔哩</Tab>
         <Tab value="qq">QQ音乐</Tab>
         <Tab value="kugou">酷狗</Tab>
+        <Tab value="qishui">汽水</Tab>
       </TabList>
 
-      {source !== 'bili' && (
+      {source !== 'bili' && source !== 'qishui' && (
         <TabList
           selectedValue={searchType}
           onTabSelect={(_, d) => {
@@ -842,6 +992,15 @@ export function SearchPage() {
                       className={styles.chip}
                       style={{ display: 'flex', gap: 10, alignItems: 'center', padding: 8, borderRadius: 10, boxSizing: 'border-box', cursor: 'pointer' }}
                       onClick={() => playQueue([...recSongs], recSongs.indexOf(s))}
+                      onContextMenu={(e) => {
+                        e.preventDefault()
+                        const anchor = recAnchorRef.current
+                        if (anchor) {
+                          anchor.style.left = `${e.clientX}px`
+                          anchor.style.top = `${e.clientY}px`
+                        }
+                        setRecCtx({ song: s })
+                      }}
                     >
                       <Cover url={s.coverUrl} size={44} radius={6} iconSize={18} />
                       <div style={{ minWidth: 0 }}>
@@ -868,8 +1027,17 @@ export function SearchPage() {
                   <div
                     key={p.id}
                     className={styles.chip}
-                    style={{ display: 'flex', gap: 12, alignItems: 'center', padding: 10, borderRadius: 12, boxSizing: 'border-box' }}
+                    style={{ display: 'flex', gap: 12, alignItems: 'center', padding: 10, borderRadius: 12, boxSizing: 'border-box', cursor: 'pointer' }}
                     onClick={() => openPlaylistPreview(p)}
+                    onContextMenu={(e) => {
+                      e.preventDefault()
+                      const anchor = plAnchorRef.current
+                      if (anchor) {
+                        anchor.style.left = `${e.clientX}px`
+                        anchor.style.top = `${e.clientY}px`
+                      }
+                      setPlCtx(p)
+                    }}
                   >
                     <Cover url={p.coverUrl} size={64} radius={8} iconSize={24} />
                     <div style={{ minWidth: 0 }}>
@@ -892,6 +1060,51 @@ export function SearchPage() {
                 <Spinner />
               </div>
             )}
+
+            {/* 主页推荐卡片右键菜单(受控,锚点跟随鼠标) */}
+            <span
+              ref={recAnchorRef}
+              style={{ position: 'fixed', width: 0, height: 0, pointerEvents: 'none' }}
+              aria-hidden
+            />
+            <Menu
+              open={!!recCtx}
+              onOpenChange={(_, d) => {
+                if (!d.open) setRecCtx(null)
+              }}
+              positioning={{ target: recCtx ? recAnchorRef.current : undefined }}
+            >
+              <MenuTrigger disableButtonEnhancement>
+                <span style={{ display: 'none' }} />
+              </MenuTrigger>
+              <MenuPopover>
+                <MenuList>{recCtx ? recMenuItems(recCtx.song) : null}</MenuList>
+              </MenuPopover>
+            </Menu>
+            <span
+              ref={plAnchorRef}
+              style={{ position: 'fixed', width: 0, height: 0, pointerEvents: 'none' }}
+              aria-hidden
+            />
+            <Menu
+              open={!!plCtx}
+              onOpenChange={(_, d) => {
+                if (!d.open) setPlCtx(null)
+              }}
+              positioning={{ target: plCtx ? plAnchorRef.current : undefined }}
+            >
+              <MenuTrigger disableButtonEnhancement>
+                <span style={{ display: 'none' }} />
+              </MenuTrigger>
+              <MenuPopover>
+                <MenuList>{plCtx ? plMenuItems(plCtx) : null}</MenuList>
+              </MenuPopover>
+            </Menu>
+            <AddToPlaylistDialog
+              songs={addTarget ?? []}
+              open={addTarget != null}
+              onClose={() => setAddTarget(null)}
+            />
           </>
         )}
 
@@ -1118,6 +1331,20 @@ export function SearchPage() {
               !loading && (
                 <div className={styles.empty}>
                   <Text size={400}>没有找到相关歌手</Text>
+                </div>
+              )
+            )}
+          </>
+        )}
+
+        {searched && source === 'qishui' && (
+          <>
+            {qsResults.length > 0 ? (
+              <SongList songs={qsResults} showAlbum />
+            ) : (
+              !loading && (
+                <div className={styles.empty}>
+                  <Text size={400}>没有找到相关歌曲</Text>
                 </div>
               )
             )}

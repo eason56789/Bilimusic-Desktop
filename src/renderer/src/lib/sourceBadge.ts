@@ -41,6 +41,12 @@ export const SOURCE_BADGES: Record<MusicSource, SourceBadge> = {
     bg: 'rgba(44,169,225,0.14)',
     bgStrong: 'rgba(44,169,225,0.25)',
     color: '#2ca9e1'
+  },
+  QISHUI: {
+    label: '汽水',
+    bg: 'rgba(34,200,181,0.14)',
+    bgStrong: 'rgba(34,200,181,0.25)',
+    color: '#22c8b5'
   }
 }
 

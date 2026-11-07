@@ -96,6 +96,7 @@ export const defaultSettings: Settings = {
   pvJizuraStyle: 'auto',
   defaultSearchSource: 'netease',
   neteaseFallback: true,
+  hiddenPlaylistPlatforms: [],
   songRecognizeEnabled: true,
   toastPosition: 'top-center',
   toastDuration: 1,
@@ -188,6 +189,7 @@ const emptyData = (): StoreData => ({
   neteaseProfile: null,
   qqProfile: null,
   kugouProfile: null,
+  qishuiProfile: null,
   kugouConceptProfile: null,
   listenStats: { totalMs: 0, todayMs: 0, date: localToday() }
 })
@@ -543,13 +545,14 @@ export function removeDownloadRecord(id: string): void {
 }
 
 export function setProfile(
-  kind: 'bili' | 'netease' | 'qq' | 'kugou' | 'kugouConcept',
+  kind: 'bili' | 'netease' | 'qq' | 'kugou' | 'kugouConcept' | 'qishui',
   profile: UserProfile | null
 ): void {
   if (kind === 'bili') data.biliProfile = profile
   else if (kind === 'netease') data.neteaseProfile = profile
   else if (kind === 'qq') data.qqProfile = profile
   else if (kind === 'kugou') data.kugouProfile = profile
+  else if (kind === 'qishui') data.qishuiProfile = profile
   else data.kugouConceptProfile = profile
   scheduleSave()
 }

@@ -59,6 +59,8 @@ let triedHtml5For: string | null = null
 let lastKnownPos = 0
 /** lastKnownPos 属于哪首歌:跨曲兜底时不能沿用上一首/上一次失败的位置 */
 let lastKnownPosSongId: string | null = null
+/** 播放记录上报:已打过卡的歌曲(每首歌每次播放只报一次,换歌自动重置) */
+let scrobbledFor: string | null = null
 /** 最近一次 timeupdate 时间戳 + 卡死恢复冷却(看门狗用) */
 let lastTimeupdateAt = 0
 let recoveringAt = 0
@@ -354,6 +356,20 @@ export const useStore = create<PlayerState>((set, get) => {
       const prepared = await api.audioPrepare(song, html5Fallback)
       // 已被更新的播放请求抢占:丢弃这次结果,什么都不写
       if (isStale(seq) || get().current?.id !== song.id) return
+      // 试听片段(VIP/付费歌,登录后常见):播到 0:20 就触发 ended 跳下一首,
+      // 与其放 20s 试听不如直接跨平台换完整音源(keepMeta 换源重放除外,防循环)
+      if (
+        prepared.preview &&
+        !keepMeta &&
+        fallbackEnabled &&
+        (song.source === 'NETEASE' ||
+          song.source === 'QQMUSIC' ||
+          song.source === 'KUGOU' ||
+          song.source === 'QISHUI')
+      ) {
+        await fallbackToOther(song, '网易云为试听片段,自动切换完整音源', resume)
+        return
+      }
       el.src = prepared.url
       const st = get().library?.settings
       // 音调优先:有升降调时用 tape 变速移调(关闭 pitch 保持),否则按倍速+保持音调
@@ -401,6 +417,19 @@ export const useStore = create<PlayerState>((set, get) => {
           await startPlayback(song, true, resume)
           return
         }
+        // 原生 URL 拿到了但放不出来(试听失效/403/编码不支持):
+        // 网易云/QQ/酷狗/汽水同样走跨平台兜底(keepMeta=true 的换源重放除外,防循环)
+        if (
+          !keepMeta &&
+          fallbackEnabled &&
+          (song.source === 'NETEASE' ||
+            song.source === 'QQMUSIC' ||
+            song.source === 'KUGOU' ||
+            song.source === 'QISHUI')
+        ) {
+          await fallbackToOther(song, `原生音源播放失败(${de?.name ?? 'unknown'}),自动切换到其他音源`, resume)
+          return
+        }
         set({ playing: false, loading: false, loadProgress: null })
       }
       // 换源播放不重拉歌词(保留原曲歌词)
@@ -419,6 +448,7 @@ export const useStore = create<PlayerState>((set, get) => {
       // 已被新请求抢占:这次失败属于旧歌,不要弹错误、不要把 loading 关掉
       if (isStale(seq)) return
       const msg = e instanceof Error ? e.message : String(e)
+      console.warn(`[playback] prepare failed: ${song.source} ${song.title} | ${msg.slice(0, 120)}`)
       // 网易云任何取流失败都垫底到其他平台(无源/VIP/风控);设置关闭时不垫底
       if (song.source === 'NETEASE') {
         if (!fallbackEnabled) {
@@ -462,6 +492,7 @@ export const useStore = create<PlayerState>((set, get) => {
    * 与弹窗首项不一致(VIP 歌曲自动兜底时尤为明显)。
    */
   const fallbackToOther = async (song: Song, reason: string, resumeAt = 0) => {
+    console.warn(`[fallback] enter: ${song.source} ${song.title} - ${song.artist} | ${reason}`)
     const tried: string[] = []
     /** 跨曲兜底不做"续播到 0.x 秒"这种无意义跳变(进度条横跳的另一个来源) */
     const resume = resumeAt > 3 ? resumeAt : 0
@@ -476,21 +507,48 @@ export const useStore = create<PlayerState>((set, get) => {
       )
       return song.duration > 0 && Math.abs(best.duration - song.duration) <= 50 ? best : list[0]
     }
+    /**
+     * B站兜底候选评分(前 10 项内):
+     * 排除「伴奏」,优先「百万豪装」「录音棚」「无损」「Hi-Res」等完整版标记;
+     * 全部命中排除词时退回原列表,宁可挑相对最优也不放弃。
+     */
+    const pickBiliCandidate = (list: Song[]): Song | null => {
+      if (list.length === 0) return null
+      const score = (s: Song): number => {
+        const t = s.title.toLowerCase()
+        let v = 0
+        if (t.includes('伴奏')) v -= 100
+        if (t.includes('翻唱')) v -= 30
+        if (t.includes('live') || t.includes('现场')) v -= 15
+        if (t.includes('百万豪装')) v += 50
+        if (t.includes('录音棚')) v += 45
+        if (t.includes('无损')) v += 40
+        if (t.includes('hires') || t.includes('hi-res') || t.includes('hi res')) v += 40
+        return v
+      }
+      const pool = list.slice(0, 10).filter((s) => !s.title.toLowerCase().includes('伴奏'))
+      const cands = pool.length > 0 ? pool : list.slice(0, 10)
+      return cands.reduce((best, s) => (score(s) > score(best) ? s : best), cands[0])
+    }
+    /** QQ/酷狗候选:同样排除伴奏 */
+    const pickQkCandidate = (list: Song[]): Song | null =>
+      pickByDuration(list.filter((s) => !s.title.toLowerCase().includes('伴奏')))
     let picked: Song | null = null
-    // 1) B站(有现成的缓存/兜底经验):取搜索结果第一项
+    // 1) B站(有现成的缓存/兜底经验):前 10 项里按标题评分选优
     try {
       const list = await api.biliSearch(`${song.title} ${song.artist}`, 1, 'totalrank')
-      picked = list[0] ?? null
+      picked = pickBiliCandidate(list)
+      console.warn(`[fallback] bili search hits=${list.length} picked=${picked ? `${picked.title}/${picked.source}` : 'none'}`)
       if (picked) tried.push('B站')
-    } catch {
-      /* 下一个平台 */
+    } catch (e) {
+      console.warn('[fallback] bili search failed', e)
     }
     // 2) QQ 音乐
     if (!picked) {
       try {
         const r = await api.qqSearch(`${song.title} ${song.artist}`, 1)
         if (r.ok && r.data) {
-          picked = pickByDuration(r.data.filter((s) => !s.vipOnly))
+          picked = pickQkCandidate(r.data.filter((s2) => !s2.vipOnly))
           if (picked) tried.push('QQ音乐')
         }
       } catch {
@@ -502,7 +560,7 @@ export const useStore = create<PlayerState>((set, get) => {
       try {
         const r = await api.kugouSearch(`${song.title} ${song.artist}`, 1)
         if (r.ok && r.data) {
-          picked = pickByDuration(r.data.filter((s) => !s.vipOnly))
+          picked = pickQkCandidate(r.data.filter((s2) => !s2.vipOnly))
           if (picked) tried.push('酷狗')
         }
       } catch {
@@ -510,6 +568,7 @@ export const useStore = create<PlayerState>((set, get) => {
       }
     }
     if (!picked) {
+      console.warn('[fallback] all platforms missed, giving up')
       set({ loading: false, loadProgress: null })
       toastError('播放失败', 'B站 / QQ音乐 / 酷狗均未找到该歌曲')
       return
@@ -589,6 +648,50 @@ export const useStore = create<PlayerState>((set, get) => {
     })
   }
 
+  /**
+   * 播放记录上报:一首歌实际播放到 ≥30s 时,按开关各报一次。
+   * 网易云走打卡接口(feeback/weblog),B站走 heartbeat 写观看历史。
+   * QQ音乐/酷狗没有公开的播放记录上报接口,不做。
+   */
+  const maybeScrobble = (song: Song, seconds: number): void => {
+    if (seconds < 30 || song.id === scrobbledFor) return
+    const settings = get().library?.settings
+    scrobbledFor = song.id
+    if (settings?.scrobbleNetease && song.neteaseId) {
+      void api
+        .neteaseScrobble(song.neteaseId, Math.min(seconds, 300))
+        .then((r) => {
+          if (!r.ok) console.warn('[scrobble] 网易云上报失败:', r.error ?? r.data?.error)
+        })
+        .catch(() => {})
+    }
+    if (settings?.scrobbleQQ && song.source === 'QQMUSIC') {
+      const qqId = song.qqId ?? Number(/qq-(d+)/.exec(song.id)?.[1] ?? 0)
+      if (qqId > 0) {
+        void api
+          .qqReportRecently(qqId)
+          .then((r) => {
+            if (!r.ok) console.warn('[scrobble] QQ音乐上报失败:', r.error ?? r.data?.error)
+          })
+          .catch(() => {})
+      }
+    }
+    if (settings?.scrobbleBili && song.source === 'BILIBILI' && song.bvid) {
+      void (async () => {
+        try {
+          // heartbeat 需要 cid:用分P列表里当前页的(取不到就忽略)
+          const pages = await api.pagesGet(song.bvid!)
+          const page = pages.find((p) => p.page === (song.page || 1)) ?? pages[0]
+          if (!page?.cid) return
+          const r = await api.biliReportWatch(song.bvid!, page.cid, Math.min(seconds, 600))
+          if (!r.ok) console.warn('[scrobble] B站上报失败:', r.error ?? r.data?.error)
+        } catch {
+          /* cid 获取失败:静默跳过 */
+        }
+      })()
+    }
+  }
+
   const bindAudioEvents = () => {
     const el = getAudio()
     el.addEventListener('timeupdate', () => {
@@ -601,6 +704,7 @@ export const useStore = create<PlayerState>((set, get) => {
       lastTimeupdateAt = Date.now()
       if (el.currentTime > 0.5) lastKnownPos = el.currentTime
       saveResume()
+      maybeScrobble(cur, el.currentTime)
       if ('mediaSession' in navigator && el.duration > 0) {
         try {
           navigator.mediaSession.setPositionState({
@@ -652,6 +756,7 @@ export const useStore = create<PlayerState>((set, get) => {
         (current.source === 'NETEASE' ||
           current.source === 'QQMUSIC' ||
           current.source === 'KUGOU' ||
+          current.source === 'QISHUI' ||
           current.keepMeta)
       ) {
         // 原平台流不可用 → 跨平台垫底(续播中断位置)

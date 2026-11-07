@@ -1,6 +1,6 @@
 /** 全局共享类型 - 主进程与渲染进程共用 */
 
-export type MusicSource = 'BILIBILI' | 'NETEASE' | 'LOCAL' | 'QQMUSIC' | 'KUGOU'
+export type MusicSource = 'BILIBILI' | 'NETEASE' | 'LOCAL' | 'QQMUSIC' | 'KUGOU' | 'QISHUI'
 
 /** 一首歌曲/音频 */
 export interface Song {
@@ -29,6 +29,8 @@ export interface Song {
   kugouHash?: string
   /** 酷狗 album_audio_id / MixSongID(新版接口用) */
   kugouMixId?: string
+  /** 汽水音乐 track id(64 位数字字符串) */
+  qishuiId?: string
   /** 酷狗 albumid(取流所需) */
   kugouAlbumId?: string
   /** 收藏数(平台搜索接口返回:酷狗 OwnerCount;其余平台无公开字段时为 undefined) */
@@ -50,6 +52,8 @@ export interface Playlist {
   kugouPlaylistId?: string | null
   favoriteFolderName?: string | null
   neteasePlaylistId?: number | null
+  /** 汽水音乐歌单 id(导入后可同步) */
+  qishuiPlaylistId?: string | null
   /** B站播放记录歌单(可同步) */
   biliHistory?: boolean
   /** 上次同步拉到的歌曲 id 快照:下次同步据此算增删,并保护手动加入的歌曲 */
@@ -61,6 +65,8 @@ export interface Playlist {
    */
   sourcePlatform?: string | null
   sourceId?: string | null
+  /** 在歌单列表中隐藏(不删除,可在「显示设置」里恢复) */
+  hidden?: boolean
 }
 
 export interface RecentPlay {
@@ -206,6 +212,16 @@ export interface Settings {
    * - 'still'    时计:静态三行(上一句/当前句/下一句)
    */
   pvArrange: 'pv' | 'partita' | 'claddagh' | 'still' | 'tempera' | 'jizura' | string
+  /** 歌词舞台隐现(流光)背景 */
+  latentBackground?: boolean
+  /** 歌单列表中隐藏的平台(其导入歌单与在线入口一并隐藏;空 = 全部显示) */
+  hiddenPlaylistPlatforms?: ('netease' | 'bili' | 'qq' | 'kugou' | 'qishui')[]
+  /** 上传播放记录到网易云(歌曲播到 ≥30s 打卡) */
+  scrobbleNetease?: boolean
+  /** 上传播放记录到QQ音乐 */
+  scrobbleQQ?: boolean
+  /** 上传播放记录到B站(观看历史) */
+  scrobbleBili?: boolean
   /** PV 逐字入场动效 */
   pvAnim: 'pop' | 'rise' | 'slam' | 'wave' | 'typewriter'
   /** PV 版式:自动(按句语义/种子轮转)或指定某套排版 */
@@ -408,7 +424,7 @@ export type FloatControlCmd =
   | 'openMain'
 
 export interface UserProfile {
-  uid: number
+  uid: number | string
   nickname: string
   avatar: string
   extra?: string
@@ -447,6 +463,7 @@ export interface Library {
   settings: Settings
   biliProfile?: UserProfile | null
   neteaseProfile?: UserProfile | null
+  qishuiProfile?: UserProfile | null
   qqProfile?: UserProfile | null
   kugouProfile?: UserProfile | null
   kugouConceptProfile?: UserProfile | null
@@ -481,6 +498,8 @@ export interface PreparedAudio {
   isFragmented?: boolean
   /** 音质描述,如 无损 FLAC / 320k / 标准 128k / 本地文件 */
   quality?: string
+  /** 试听片段(VIP/付费歌):渲染层应跨平台兜底换完整音源,而不是播 20s 就跳走 */
+  preview?: boolean
 }
 
 export interface LyricLine {
@@ -496,8 +515,8 @@ export interface LyricLine {
 
 export interface LyricsResult {
   lines: LyricLine[]
-  /** 歌词来源:qq = QQ 音乐原生 QRC(逐字) */
-  provider: 'bilibili' | 'netease' | 'qq' | 'none'
+  /** 歌词来源:qq = QQ 音乐原生 QRC(逐字);qishui = 汽水原生逐字 */
+  provider: 'bilibili' | 'netease' | 'qq' | 'qishui' | 'none'
   title?: string
 }
 
@@ -671,6 +690,8 @@ export interface DesktopApi {
   // 搜索
   biliSearch(keyword: string, page: number, order: string): Promise<Song[]>
   biliSuggest(keyword: string): Promise<string[]>
+  /** 搜索推荐(输入联想):bili 用站内建议词,netease/qq 用各自联想接口 */
+  searchSuggest(source: 'bili' | 'netease' | 'qq' | 'kugou' | 'qishui', keyword: string): Promise<string[]>
   neteaseSearch(keyword: string, offset: number): Promise<ApiResponse<NeteaseSearchResult>>
   neteaseSearchPlaylists(keyword: string): Promise<ApiResponse<NeteasePlaylistBrief[]>>
   neteaseSearchArtists(keyword: string): Promise<ApiResponse<NeteaseArtistBrief[]>>
@@ -742,7 +763,7 @@ export interface DesktopApi {
   libraryAddSong(song: Song): Promise<void>
   libraryCreatePlaylist(name: string, description?: string): Promise<Playlist>
   libraryDeletePlaylist(id: string): Promise<void>
-  libraryUpdatePlaylist(p: Pick<Playlist, 'id' | 'name' | 'description'>): Promise<void>
+  libraryUpdatePlaylist(p: Pick<Playlist, 'id' | 'name' | 'description'> & { hidden?: boolean }): Promise<void>
   libraryAddToPlaylist(playlistId: string, songs: Song[]): Promise<Playlist[]>
   libraryRemoveFromPlaylist(playlistId: string, songId: string): Promise<Playlist[]>
   libraryAddRecent(song: Song): Promise<void>
@@ -783,6 +804,30 @@ export interface DesktopApi {
   qqImportPlaylist(id: number, name: string): Promise<Playlist | null>
   /** 导入B站播放记录为歌单 */
   biliImportHistory(): Promise<ApiResponse<{ id: string; count: number }>>
+  /** 上传播放记录到网易云(歌曲实际播放 ≥30s 后调用) */
+  neteaseScrobble(songId: number, seconds: number): Promise<ApiResponse<{ ok: boolean; code?: number; error?: string }>>
+  /** 上传播放记录到B站观看历史 */
+  biliReportWatch(bvid: string, cid: number, seconds: number): Promise<ApiResponse<{ ok: boolean; code?: number; error?: string }>>
+  /** 上传播放记录到QQ音乐(最近播放) */
+  qqReportRecently(songId: number): Promise<ApiResponse<{ ok: boolean; code?: number; error?: string }>>
+  /** QQ音乐最近播放(网页端 GetRecentPlayList) */
+  qqRecentPlay(): Promise<ApiResponse<{ ok: boolean; notLoggedIn?: boolean; songs: Song[]; error?: string }>>
+  /** 汽水音乐:白名单操作透传(登录/二维码/点赞等) */
+  qishuiRequest<T = unknown>(operation: string, params?: Record<string, unknown>): Promise<{ ok: true; data: T } | { ok: false; error: { code: string; message: string } }>
+  /** 汽水音乐搜索 */
+  qishuiSearch(keyword: string, limit?: number): Promise<ApiResponse<Song[]>>
+  /** 汽水音乐歌单曲目(分页) */
+  qishuiPlaylistTracks(id: string, limit?: number, offset?: number, ownerId?: string): Promise<ApiResponse<{ songs: Song[]; hasMore: boolean }>>
+  /** 汽水音乐当前登录账号(未登录为 null) */
+  qishuiAccount(): Promise<ApiResponse<{ userId: string; nickname: string; avatar: string } | null>>
+  /** 汽水音乐退出登录 */
+  qishuiLogout(): Promise<boolean>
+  /** 汽水音乐用户歌单列表 */
+  qishuiUserPlaylists(): Promise<ApiResponse<{ id: string; name: string; coverUrl?: string; count: number }[]>>
+  /** 导入汽水歌单为本地歌单(可同步) */
+  qishuiImportPlaylist(id: string, name: string): Promise<ApiResponse<Playlist | null>>
+  /** 网易云云端播放记录(听歌排行) */
+  neteasePlayRecord(): Promise<ApiResponse<{ songs: Song[]; notLoggedIn: boolean; error?: string }>>
   /**
    * 同步可同步歌单(B站收藏夹/网易云歌单/播放记录):按上次同步快照增量更新,
    * 手动加入的歌曲不会被删除
@@ -806,6 +851,8 @@ export interface DesktopApi {
   /** Cookie 登录:B站 Cookie 字符串(SESSDATA=xxx; bili_jct=xxx; DedeUserID=xxx) */
   biliCookieLogin(cookie: string): Promise<{ ok: boolean; message: string }>
   biliLogout(): Promise<void>
+  /** 打开内嵌网易云网页登录窗口(扫码/验证码/密码全由官方页面处理),登录成功自动回填 */
+  neteaseWebLogin(): Promise<{ ok: boolean; message: string }>
   neteaseQRStart(): Promise<{ imageDataUrl: string; key: string } | null>
   neteaseQRPoll(key: string): Promise<{ status: 'waiting' | 'scanned' | 'ok' | 'expired' | 'error'; message: string }>
   neteaseSendCaptcha(phone: string): Promise<{ ok: boolean; message: string }>

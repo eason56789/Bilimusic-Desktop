@@ -665,7 +665,7 @@ export function LyricEditDialog({
   )
 }
 
-/** 更换歌词(从网易云搜索并替换) */
+/** 更换歌词(多来源搜索并替换:网易云/QQ/酷狗/汽水) */
 export function LyricReplaceDialog({
   song,
   open,
@@ -681,6 +681,7 @@ export function LyricReplaceDialog({
   const [results, setResults] = useState<Song[]>([])
   const [loading, setLoading] = useState(false)
   const [pickedId, setPickedId] = useState<string | null>(null)
+  const [src, setSrc] = useState<'netease' | 'qq' | 'kugou' | 'qishui'>('netease')
 
   useEffect(() => {
     if (open && song) {
@@ -692,16 +693,33 @@ export function LyricReplaceDialog({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, song?.id])
 
-  const search = async (keyword: string) => {
+  const search = async (keyword: string, srcOverride?: typeof src) => {
+    const source = srcOverride ?? src
     if (!keyword.trim()) return
     setLoading(true)
     try {
-      const r = await api.neteaseSearch(keyword, 0)
-      if (r.ok && r.data) setResults(r.data.songs.slice(0, 20))
-      else if (r.error) toastError('搜索失败', r.error)
+      if (source === 'netease') {
+        const r = await api.neteaseSearch(keyword, 0)
+        setResults(r.ok && r.data ? r.data.songs.slice(0, 20) : [])
+      } else if (source === 'qq') {
+        const r = await api.qqSearch(keyword, 1)
+        setResults(r.ok && r.data ? r.data.slice(0, 20) : [])
+      } else if (source === 'kugou') {
+        const r = await api.kugouSearch(keyword, 1)
+        setResults(r.ok && r.data ? r.data.slice(0, 20) : [])
+      } else {
+        const r = await api.qishuiSearch(keyword, 20)
+        setResults(r.ok && r.data ? r.data.slice(0, 20) : [])
+      }
     } finally {
       setLoading(false)
     }
+  }
+
+  const switchSource = (v: typeof src) => {
+    setSrc(v)
+    setResults([])
+    void search(q, v)
   }
 
   if (!song) return null
@@ -727,12 +745,31 @@ export function LyricReplaceDialog({
     <Dialog open={open} onOpenChange={(_, d) => !d.open && onClose()}>
       <DialogSurface style={{ maxWidth: 620, width: '92vw' }}>
         <DialogBody>
-          <DialogTitle>更换歌词(从网易云搜索)</DialogTitle>
+          <DialogTitle>更换歌词(多来源搜索)</DialogTitle>
           <DialogContent>
+            <div style={{ display: 'flex', gap: 6, marginBottom: 8 }}>
+              {(
+                [
+                  ['netease', '网易云'],
+                  ['qq', 'QQ音乐'],
+                  ['kugou', '酷狗'],
+                  ['qishui', '汽水']
+                ] as const
+              ).map(([k, label]) => (
+                <Button
+                  key={k}
+                  size="small"
+                  appearance={src === k ? 'primary' : 'subtle'}
+                  onClick={() => switchSource(k)}
+                >
+                  {label}
+                </Button>
+              ))}
+            </div>
             <div style={{ display: 'flex', gap: 8, marginBottom: 10 }}>
               <Input
                 value={q}
-                placeholder="搜索网易云歌曲"
+                placeholder={`搜索${src === 'netease' ? '网易云' : src === 'qq' ? 'QQ音乐' : src === 'kugou' ? '酷狗' : '汽水'}歌曲`}
                 onChange={(_, d) => setQ(d.value)}
                 onKeyDown={(e) => e.key === 'Enter' && search(q)}
                 style={{ flex: 1 }}

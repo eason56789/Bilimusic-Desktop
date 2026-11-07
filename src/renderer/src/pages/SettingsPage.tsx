@@ -28,7 +28,7 @@ import { DeleteRegular, ColorRegular, InfoRegular, SettingsRegular, ArrowClockwi
 import { api } from '../lib/api'
 import { useStore, applyEqSettings, getAudioElement, EQ_FREQS } from '../store'
 import { ACCENTS } from '../lib/theme'
-import { BiliLoginDialog, NeteaseLoginDialog, KugouLoginDialog } from '../components/LoginDialogs'
+import { BiliLoginDialog, NeteaseLoginDialog, KugouLoginDialog, QishuiLoginDialog } from '../components/LoginDialogs'
 import { PageLayout } from '../components/PageHeader'
 import { GithubLogo, BiliLogo } from '../components/BrandLogos'
 import { toastSuccess, toastError } from '../lib/toast'
@@ -222,7 +222,6 @@ const STYLE_TILES: { id: string; label: string; ready: boolean; grad: string }[]
   { id: 'tempera', label: '凝彩', ready: true, grad: 'linear-gradient(135deg,#c9c9c7,#5a5a58)' },
   { id: 'jizura', label: '印刷分镜', ready: true, grad: 'linear-gradient(135deg,#0f0f12,#2a1620)' },
   { id: 'classic', label: '经典', ready: true, grad: 'linear-gradient(135deg,#1a1a1f,#0b0b0e)' },
-  { id: 'tilt', label: '倾斜', ready: true, grad: 'linear-gradient(135deg,#1f2a1f,#0b100b)' },
   { id: 'cadenza', label: '商籁', ready: true, grad: 'linear-gradient(135deg,#2a1f14,#120d08)' },
   { id: 'fume', label: '雾里', ready: true, grad: 'linear-gradient(135deg,#2f2f35,#121215)' },
   { id: 'cappella', label: '群唱', ready: true, grad: 'linear-gradient(135deg,#1e2a33,#0d1418)' },
@@ -232,7 +231,6 @@ const STYLE_TILES: { id: string; label: string; ready: boolean; grad: string }[]
   { id: 'hanabi', label: '花火', ready: true, grad: 'linear-gradient(135deg,#301a2a,#140a12)' },
   { id: 'nebbia', label: '雾笺', ready: true, grad: 'linear-gradient(135deg,#24303a,#10161c)' },
   { id: 'sonnet', label: '诗节', ready: true, grad: 'linear-gradient(135deg,#2a2438,#121018)' },
-  { id: 'diorama', label: '镜台', ready: true, grad: 'linear-gradient(135deg,#1a2e2a,#0a1412)' },
   { id: 'machi', label: '町景', ready: true, grad: 'linear-gradient(135deg,#30302a,#151511)' }
 ]
 
@@ -270,6 +268,7 @@ export function SettingsPage() {  const styles = useStyles()
   const refresh = useStore((s) => s.refreshLibrary)
   const update = useStore((s) => s.updateSetting)
   const [biliLoginOpen, setBiliLoginOpen] = useState(false)
+  const [qishuiLoginOpen, setQishuiLoginOpen] = useState(false)
   const [neLoginOpen, setNeLoginOpen] = useState(false)
   const [kgLoginPlatform, setKgLoginPlatform] = useState<KugouPlatform | null>(null)
   const [qqBusy, setQqBusy] = useState(false)
@@ -644,6 +643,37 @@ export function SettingsPage() {  const styles = useStyles()
               普通版与概念版账号不通用,需分别扫码
             </Text>
           </div>
+
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8, minWidth: 280 }}>
+            <Text size={300} style={{ color: tokens.colorNeutralForeground3 }}>
+              汽水音乐
+            </Text>
+            {library.qishuiProfile ? (
+              <>
+                <Persona
+                  name={library.qishuiProfile.nickname}
+                  avatar={{
+                    image: { src: library.qishuiProfile.avatar || undefined },
+                    initials: library.qishuiProfile.nickname.slice(0, 1)
+                  }}
+                />
+                <Button
+                  onClick={async () => {
+                    await api.qishuiLogout()
+                    await refresh()
+                    toastSuccess('已退出汽水音乐登录')
+                  }}
+                >
+                  退出登录
+                </Button>
+              </>
+            ) : (
+              <>
+                <Text size={300}>未登录(登录后可播放汽水曲库并同步歌单)</Text>
+                <Button onClick={() => setQishuiLoginOpen(true)}>扫码登录</Button>
+              </>
+            )}
+          </div>
         </div>
       </div>
 
@@ -956,6 +986,29 @@ export function SettingsPage() {  const styles = useStyles()
       {/* 播放 */}
       <div {...sec("播放")}>
         <SectionTitle>播放</SectionTitle>
+        {/* 播放记录上报:网易云打卡 / B站观看历史(QQ/酷狗无公开接口) */}
+        <div className={styles.row}>
+          <Text size={300} style={{ minWidth: 96 }}>
+            播放记录上报:
+          </Text>
+          <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
+            <Switch
+              checked={s.scrobbleQQ ?? false}
+              label="QQ音乐(最近播放,需登录)"
+              onChange={(_, d) => update('scrobbleQQ', d.checked)}
+            />
+            <Switch
+              checked={s.scrobbleNetease ?? false}
+              label="网易云(打卡/听歌排行,需登录)"
+              onChange={(_, d) => update('scrobbleNetease', d.checked)}
+            />
+            <Switch
+              checked={s.scrobbleBili ?? false}
+              label="哔哩哔哩(写入观看历史,需登录)"
+              onChange={(_, d) => update('scrobbleBili', d.checked)}
+            />
+          </div>
+        </div>
         <div className={styles.row}>
           <Field label="网易云音质">
             <Dropdown
@@ -1139,6 +1192,17 @@ export function SettingsPage() {  const styles = useStyles()
                   </button>
                 ))}
               </div>
+            </div>
+            {/* 隐现(流光)背景:随封面取色的流体+点阵 shader,对 folia 歌词样式生效 */}
+            <div className={styles.row}>
+              <Text size={300} style={{ minWidth: 96 }}>
+                隐现背景:
+              </Text>
+              <Switch
+                checked={s.latentBackground ?? true}
+                label="随封面配色的流光背景(folia 歌词样式)"
+                onChange={(_, d) => update('latentBackground', d.checked)}
+              />
             </div>
             {/* ===== JIZURA 舞台参数(引擎自带风格系统) ===== */}
             {(s.pvArrange ?? 'pv') === 'jizura' && (
@@ -1945,6 +2009,7 @@ export function SettingsPage() {  const styles = useStyles()
       </Dialog>
 
       <BiliLoginDialog open={biliLoginOpen} onClose={() => setBiliLoginOpen(false)} />
+      <QishuiLoginDialog open={qishuiLoginOpen} onClose={() => setQishuiLoginOpen(false)} />
       <NeteaseLoginDialog open={neLoginOpen} onClose={() => setNeLoginOpen(false)} />
       {kgLoginPlatform && (
         <KugouLoginDialog

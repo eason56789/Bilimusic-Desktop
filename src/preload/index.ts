@@ -22,6 +22,7 @@ const invoke = async <T>(channel: string, ...args: unknown[]): Promise<T> =>
 const api: DesktopApi = {
   biliSearch: (keyword, page, order) => invoke('api:biliSearch', keyword, page, order),
   biliSuggest: (keyword) => invoke('api:biliSuggest', keyword),
+  searchSuggest: (source, keyword) => invoke<string[]>('search:suggest', source, keyword),
   neteaseSearch: (keyword, offset) => invoke('api:neteaseSearch', keyword, offset),
   neteaseSearchPlaylists: (keyword) => invoke('api:neteaseSearchPlaylists', keyword),
   neteaseSearchArtists: (keyword) => invoke('api:neteaseSearchArtists', keyword),
@@ -109,6 +110,16 @@ const api: DesktopApi = {
     }>('qq:userPlaylists'),
   qqImportPlaylist: (id, name) => invoke('qq:importPlaylist', id, name),
   biliImportHistory: () => invoke('bili:importHistory'),
+  // 播放记录:上报(打卡/观看历史)与网易云云端读取
+  neteaseScrobble: (songId, seconds) => invoke('netease:scrobble', songId, seconds),
+  biliReportWatch: (bvid, cid, seconds) => invoke('bili:reportWatch', bvid, cid, seconds),
+  qqReportRecently: (songId) => invoke('qq:reportRecently', songId),
+  qqRecentPlay: () =>
+    invoke<{ ok: boolean; data?: { ok: boolean; notLoggedIn?: boolean; songs: Song[]; error?: string }; error?: string }>('qq:recentPlay'),
+  neteasePlayRecord: () =>
+    invoke<{ ok: boolean; data?: { songs: Song[]; notLoggedIn: boolean; error?: string }; error?: string }>(
+      'netease:playRecord'
+    ),
   librarySyncPlaylist: (id) => invoke('library:syncPlaylist', id),
   playlistImportByLink: (url) => invoke('playlist:importByLink', url),
 
@@ -122,6 +133,8 @@ const api: DesktopApi = {
   /** 打开内嵌官方登录窗口(密码/短信/滑块全由B站页面处理) */
   biliWebLogin: () => invoke<{ ok: boolean; message: string }>('auth:biliWebLogin'),
   biliCookieLogin: (cookie) => invoke<{ ok: boolean; message: string }>('auth:biliCookieLogin', cookie),
+  /** 打开内嵌网易云网页登录窗口(扫码/验证码/密码全由官方页面处理) */
+  neteaseWebLogin: () => invoke<{ ok: boolean; message: string }>('auth:neWebLogin'),
   neteaseQRStart: () => invoke<{ imageDataUrl: string; key: string } | null>('auth:neQRStart'),
   neteaseQRPoll: (key) =>
     invoke<{ status: 'waiting' | 'scanned' | 'ok' | 'expired' | 'error'; message: string }>(
@@ -135,6 +148,14 @@ const api: DesktopApi = {
   neteaseLoginPassword: (phone, password) =>
     invoke<{ ok: boolean; message: string }>('auth:neLoginPassword', phone, password),
   neteaseLogout: () => invoke('auth:neLogout'),
+  // 汽水音乐(字节)
+  qishuiRequest: (operation, params) => invoke('qishui:request', operation, params),
+  qishuiSearch: (keyword, limit) => invoke('qishui:search', keyword, limit),
+  qishuiPlaylistTracks: (id, limit, offset, ownerId) => invoke('qishui:playlistTracks', id, limit, offset, ownerId),
+  qishuiAccount: () => invoke('qishui:account'),
+  qishuiLogout: () => invoke('qishui:logout'),
+  qishuiUserPlaylists: () => invoke('qishui:userPlaylists'),
+  qishuiImportPlaylist: (id, name) => invoke('qishui:importPlaylist', id, name),
   qqWebLogin: (kind) => invoke<{ ok: boolean; message: string }>('auth:qqWebLogin', kind),
   qqLogout: () => invoke('auth:qqLogout'),
   kugouQRStart: (platform) => invoke('auth:kgQRStart', platform),

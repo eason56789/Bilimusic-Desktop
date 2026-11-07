@@ -11,6 +11,7 @@
  * 这样每个样式组件可以几乎原样引用 `VisualizerShell`,不必把整套宿主一起搬。
  */
 import React, { forwardRef } from 'react'
+import LatentBackground from './backgrounds/LatentBackground'
 
 export interface VisualizerShellSharedProps {
   [k: string]: any
@@ -33,22 +34,35 @@ export interface VisualizerShellProps {
 
 /** 与上游同名:样式里直接 import 用 */
 export const VisualizerShell = forwardRef<HTMLDivElement, VisualizerShellProps>(
-  ({ theme, className, children, backdrop }, ref) => (
-    <div
-      ref={ref}
-      className={className}
-      style={{
-        position: 'absolute',
-        inset: 0,
-        overflow: 'hidden',
-        background: theme.backgroundColor,
-        isolation: 'isolate'
-      }}
-    >
-      {backdrop}
-      {children}
-    </div>
-  )
+  ({ theme, className, children, backdrop, sharedProps }, ref) => {
+    // 隐现背景:开启时由它提供背景色,shell 不再画不透明底
+    const latent = sharedProps?.latentBackground as boolean | undefined
+    return (
+      <div
+        ref={ref}
+        className={className}
+        style={{
+          position: 'absolute',
+          inset: 0,
+          overflow: 'hidden',
+          background: latent ? 'transparent' : theme.backgroundColor,
+          isolation: 'isolate'
+        }}
+      >
+        {latent && (
+          <LatentBackground
+            theme={theme as any}
+            coverUrl={sharedProps?.coverUrl ?? null}
+            audioPower={sharedProps?.audioPower}
+            audioBands={sharedProps?.audioBands}
+            paused={sharedProps?.paused ?? false}
+          />
+        )}
+        {backdrop}
+        {children}
+      </div>
+    )
+  }
 )
 
 VisualizerShell.displayName = 'VisualizerShell'
