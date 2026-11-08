@@ -557,6 +557,8 @@ export interface CommentItem {
   content: string
   time: number
   likes: number
+  /** 聚合模式下来源平台(单平台模式可不带) */
+  platform?: CommentPlatform
 }
 
 export interface CommentsResult {
@@ -766,7 +768,9 @@ export interface DesktopApi {
     song: Song,
     offset: number,
     order?: CommentOrder,
-    platform?: CommentPlatform
+    platform?: CommentPlatform,
+    /** 聚合模式:多平台评论区合并(按时间/热度混排,带平台标记) */
+    aggregate?: boolean
   ): Promise<ApiResponse<CommentsResult>>
   songDetail(song: Song): Promise<ApiResponse<Record<string, string>>>
   // 应用操作

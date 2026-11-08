@@ -709,7 +709,8 @@ export function registerIpc(): void {
       song: Song,
       offset: number,
       order: 'hot' | 'time' = 'hot',
-      platform?: 'bilibili' | 'netease' | 'qq'
+      platform?: 'bilibili' | 'netease' | 'qq',
+      aggregate?: boolean
     ) => {
       try {
         const nePayload = (r: { total: number; hasMore: boolean; comments: any[] }) => ({
@@ -762,6 +763,43 @@ export function registerIpc(): void {
           if (!qid) return fetchNetease()
           const r = await qqmusic.getQqComments(qid, offset, 20, order)
           return ok(r)
+        }
+        // 聚合模式:并发拉取所有可用平台的评论区,合并混排(带平台标记)
+        if (aggregate) {
+          const jobs: Array<{ p: 'bilibili' | 'netease' | 'qq'; run: () => Promise<any> }> = []
+          if (song.bvid) jobs.push({ p: 'bilibili', run: fetchBili })
+          jobs.push({ p: 'netease', run: fetchNetease })
+          jobs.push({ p: 'qq', run: fetchQq })
+          const results = await Promise.all(
+            jobs.map(async ({ p, run }) => {
+              try {
+                const r = await run()
+                return r.ok && r.data ? { p, ...r.data } : null
+              } catch {
+                return null
+              }
+            })
+          )
+          const valid = results.filter((r): r is NonNullable<typeof r> => !!r && r.comments.length > 0)
+          if (valid.length === 0) return { ok: false, error: '各平台均未找到评论区' }
+          // 合并去重(同平台同人同内容视为一条),按 热度/时间 混排
+          const seen = new Set<string>()
+          const merged = valid
+            .flatMap((r) => r.comments.map((c: any) => ({ ...c, platform: r.p })))
+            .filter((c) => {
+              const key = c.platform + ':' + c.user + ':' + c.content.slice(0, 60)
+              if (seen.has(key)) return false
+              seen.add(key)
+              return true
+            })
+          merged.sort((a, b) => (order === 'hot' ? b.likes - a.likes : b.time - a.time))
+          const perPage = 30
+          const pageComments = merged.slice(offset, offset + perPage)
+          return ok({
+            total: merged.length,
+            hasMore: offset + perPage < merged.length,
+            comments: pageComments
+          })
         }
         // 兜底场景显式指定平台(网易云垫底B站 / QQ酷狗B站取流时,平台间可切)
         if (platform === 'bilibili') return fetchBili()

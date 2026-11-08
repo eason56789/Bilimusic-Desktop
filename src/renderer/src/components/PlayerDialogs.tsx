@@ -141,6 +141,8 @@ export function CommentsBody({
   const [platform, setPlatform] = useState<CommentPlatform>(() =>
     song?.source === 'QQMUSIC' ? 'qq' : song?.neteaseId ? 'netease' : song?.bvid ? 'bilibili' : 'netease'
   )
+  /** 聚合模式:多平台评论区合并混排(带平台标记);单平台模式保留原切换 Radio */
+  const [aggregate, setAggregate] = useState(false)
   const canBili = !!song?.bvid
   const canNe = !!song?.neteaseId || song?.source === 'QQMUSIC' || song?.source === 'KUGOU'
   // 酷狗无公开评论接口:评论按同名曲从网易云/QQ音乐取,因此也允许切换到 QQ 评论
@@ -160,6 +162,7 @@ export function CommentsBody({
     const defPlat: CommentPlatform =
       song.source === 'QQMUSIC' ? 'qq' : song.neteaseId ? 'netease' : song.bvid ? 'bilibili' : 'netease'
     setPlatform((p) => (p === defPlat ? p : defPlat))
+    setAggregate(false)
   }, [song])
 
   useEffect(() => {
@@ -169,7 +172,7 @@ export function CommentsBody({
     setError('')
     setLoading(true)
     api
-      .commentsGet(song, 0, order, dual ? platform : undefined)
+      .commentsGet(song, 0, order, aggregate ? undefined : dual ? platform : undefined, aggregate)
       .then((r) => {
         if (r.ok && r.data) setData(r.data)
         else setError(r.error || '加载失败')
@@ -183,7 +186,7 @@ export function CommentsBody({
     loadingRef.current = true
     setLoading(true)
     try {
-      const r = await api.commentsGet(song, offset + 20, order, dual ? platform : undefined)
+      const r = await api.commentsGet(song, offset + 20, order, aggregate ? undefined : dual ? platform : undefined, aggregate)
       if (r.ok && r.data) {
         setData({ ...r.data, comments: [...data.comments, ...r.data.comments] })
         setOffset(offset + 20)
@@ -202,17 +205,37 @@ export function CommentsBody({
     <div className={`${styles.commentShell} ${boxed ? styles.commentShellBoxed : ''}`}>
       {dual && (
         <div className={styles.sortRow} style={{ marginBottom: '4px' }}>
-          <RadioGroup
-            layout="horizontal"
-            value={platform}
-            onChange={(_, d) => setPlatform(d.value as CommentPlatform)}
-          >
-            {canBili && <Radio value="bilibili" label={wLabel('哔哩哔哩')} />}
-            {canNe && <Radio value="netease" label={wLabel('网易云')} />}
-            {canQq && <Radio value="qq" label={wLabel('QQ音乐')} />}
-          </RadioGroup>
+          {aggregate ? (
+            <span className={styles.muted}>
+              聚合 B站+网易云+QQ ({order === 'hot' ? '按热度' : '按时间'}混排)
+            </span>
+          ) : (
+            <RadioGroup
+              layout="horizontal"
+              value={platform}
+              onChange={(_, d) => setPlatform(d.value as CommentPlatform)}
+            >
+              {canBili && <Radio value="bilibili" label={wLabel('哔哩哔哩')} />}
+              {canNe && <Radio value="netease" label={wLabel('网易云')} />}
+              {canQq && <Radio value="qq" label={wLabel('QQ音乐')} />}
+            </RadioGroup>
+          )}
           <div style={{ flex: 1 }} />
-          <span className={styles.muted}>评论来源</span>
+          <button
+            onClick={() => setAggregate((v) => !v)}
+            style={{
+              background: aggregate ? 'rgba(80,160,255,0.25)' : 'transparent',
+              color: C_TEXT,
+              border: '1px solid rgba(255,255,255,0.25)',
+              borderRadius: 999,
+              padding: '2px 10px',
+              fontSize: 12,
+              cursor: 'pointer'
+            }}
+            title="合并显示多个平台的评论区"
+          >
+            {aggregate ? '● 聚合中' : '聚合多平台'}
+          </button>
         </div>
       )}
       <div className={styles.sortRow}>
@@ -261,7 +284,31 @@ export function CommentsBody({
         >
           {data.comments.map((c) => (
             <div key={c.id} className={styles.row}>
-              <Cover url={c.avatar} size={36} radius={18} iconSize={14} />
+              <div style={{ position: 'relative', flexShrink: 0 }}>
+                <Cover url={c.avatar} size={36} radius={18} iconSize={14} />
+                {c.platform && (
+                  <span
+                    style={{
+                      position: 'absolute',
+                      right: -4,
+                      bottom: -3,
+                      fontSize: 9,
+                      lineHeight: '12px',
+                      padding: '0 4px',
+                      borderRadius: 6,
+                      color: '#fff',
+                      background:
+                        c.platform === 'bilibili'
+                          ? '#fb7299'
+                          : c.platform === 'netease'
+                            ? '#ec4141'
+                            : '#31c27c'
+                    }}
+                  >
+                    {c.platform === 'bilibili' ? '站' : c.platform === 'netease' ? '云' : 'Q'}
+                  </span>
+                )}
+              </div>
               <div className={styles.meta}>
                 <div style={{ display: 'flex', gap: 8, alignItems: 'baseline' }}>
                   <Text weight="semibold" size={300} style={{ color: C_TEXT }}>{c.user}</Text>
