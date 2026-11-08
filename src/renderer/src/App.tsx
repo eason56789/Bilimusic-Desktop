@@ -117,30 +117,31 @@ function useSystemDark(): boolean {
 }
 
 /** 按设置把 rgba 玻璃色写入 CSS 变量(材质关闭时用不透明色兜底) */
-function useGlassVars(dark: boolean, effect: string, alpha: number): void {
+function useGlassVars(dark: boolean, effect: string, alpha: number, uiBg: boolean): void {
   useEffect(() => {
     const root = document.documentElement
     // 供 CSS 区分深浅主题(顶部轻提示等自绘浮层用;Fluent 的 token 管不到 portal 出去的节点)
     root.setAttribute('data-bm-theme', dark ? 'dark' : 'light')
     const on = effect !== 'none'
-    const a = on ? Math.min(1, Math.max(0.35, alpha)) : 1
-    /** 材质开启 → 半透明;关闭 → 同色实底 */
+    // 界面底图启用时:所有玻璃层用统一的低不透明度,整窗一致透出底图
+    const a = uiBg ? 0.42 : on ? Math.min(1, Math.max(0.35, alpha)) : 1
+    /** 底图启用 → 统一半透明;材质开启 → 半透明;关闭 → 同色实底 */
     const glass = (r: number, g: number, b: number, mul = 1): string =>
-      on ? `rgba(${r}, ${g}, ${b}, ${a * mul})` : `rgb(${r}, ${g}, ${b})`
+      uiBg || on ? `rgba(${r}, ${g}, ${b}, ${a * mul})` : `rgb(${r}, ${g}, ${b})`
     if (dark) {
       root.style.setProperty('--app-titlebar-bg', glass(32, 32, 32))
       root.style.setProperty('--app-sidebar-bg', glass(28, 28, 28))
-      root.style.setProperty('--app-content-bg', glass(20, 20, 20, 0.88))
-      root.style.setProperty('--app-frame-bg', glass(20, 20, 20, 0.82))
+      root.style.setProperty('--app-content-bg', glass(20, 20, 20))
+      root.style.setProperty('--app-frame-bg', glass(20, 20, 20))
       root.style.setProperty('--app-player-bg', glass(28, 28, 28))
     } else {
       root.style.setProperty('--app-titlebar-bg', glass(243, 243, 243))
       root.style.setProperty('--app-sidebar-bg', glass(238, 238, 238))
-      root.style.setProperty('--app-content-bg', glass(249, 249, 249, 0.88))
-      root.style.setProperty('--app-frame-bg', glass(249, 249, 249, 0.82))
+      root.style.setProperty('--app-content-bg', glass(249, 249, 249))
+      root.style.setProperty('--app-frame-bg', glass(249, 249, 249))
       root.style.setProperty('--app-player-bg', glass(243, 243, 243))
     }
-  }, [dark, effect, alpha])
+  }, [dark, effect, alpha, uiBg])
 }
 
 /** 全局播放快捷键 */
@@ -390,7 +391,8 @@ function MainApp() {
   const glassAlpha = library?.settings.glassAlpha ?? 0.82
   const customCss = library?.settings.customCss ?? ''
   const presetCss = useMemo(() => buildPresetCss(library?.settings), [library?.settings])
-  useGlassVars(dark, effect, glassAlpha)
+  const uiBgOn = useStore((s) => s.library?.settings.uiBgEnabled ?? false)
+  useGlassVars(dark, effect, glassAlpha, uiBgOn)
   useGlobalShortcuts()
 
   // 界面样式注入:预设(大小/歌词字号/密度) + 用户自定义 CSS
