@@ -111,6 +111,43 @@ function timeAgo(t: number): string {
   return new Date(t).toLocaleDateString()
 }
 
+/** QQ 评论里的表情码([em]e400824[/em])渲染成官方表情图;其余文本原样输出 */
+const QQ_EM_RE = /[em](ed+)[/em]/g
+function CommentContent({ text, color }: { text: string; color: string }) {
+  const raw = text ?? ''
+  if (!raw.includes('[em]')) {
+    return (
+      <Text size={300} style={{ color, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+        {raw}
+      </Text>
+    )
+  }
+  const parts: JSX.Element[] = []
+  let last = 0
+  let m: RegExpExecArray | null
+  QQ_EM_RE.lastIndex = 0
+  while ((m = QQ_EM_RE.exec(raw))) {
+    if (m.index > last) {
+      parts.push(<span key={`t${last}`}>{raw.slice(last, m.index)}</span>)
+    }
+    parts.push(
+      <img
+        key={`e${m.index}`}
+        src={`https://qzonestyle.gtimg.cn/qzone/em/${m[1]}.png`}
+        alt=""
+        style={{ width: 18, height: 18, verticalAlign: '-3px', display: 'inline-block' }}
+      />
+    )
+    last = m.index + m[0].length
+  }
+  if (last < raw.length) parts.push(<span key={`t${last}`}>{raw.slice(last)}</span>)
+  return (
+    <Text size={300} style={{ color, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+      {parts}
+    </Text>
+  )
+}
+
 /** 评论内容(状态自持):排序切换 + 列表 + 加载更多。弹窗与右侧停靠面板共用。
  *  字体固定白色:不跟随深色/浅色主题(弹窗版带深色底,面板版依托全屏页玻璃底)。 */
 export function CommentsBody({
@@ -290,12 +327,7 @@ export function CommentsBody({
                   <Text weight="semibold" size={300} style={{ color: C_TEXT }}>{c.user}</Text>
                   <span className={styles.muted}>{timeAgo(c.time)}</span>
                 </div>
-                <Text
-                  size={300}
-                  style={{ color: C_TEXT, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}
-                >
-                  {c.content}
-                </Text>
+                <CommentContent text={c.content} color={C_TEXT} />
                 <span className={styles.muted}>♡ {c.likes}</span>
               </div>
             </div>
