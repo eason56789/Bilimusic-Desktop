@@ -322,6 +322,17 @@ export async function getQqSongUrl(songMid: string): Promise<{ url: string; qual
  * - time: 本地按时间倒序重排(降级,但可用)
  * - offset>0 时不再请求(无翻页能力,返回空)
  */
+/** QQ 评论正文里的表情码/富文本标签([em]e400824[/em] 等)对纯文本界面无意义,统一剥除 */
+function stripQqCommentTags(input: string): string {
+  return input
+    .replace(/\[em\][^[]*?\[\/em\]/gi, '')
+    .replace(/\[face\][^[]*?\[\/face\]/gi, '')
+    .replace(/\[url[^\]]*\][^[]*?\[\/url\]/gi, '')
+    .replace(/\[\/?[a-z]{2,8}\]/gi, '')
+    .replace(/\s{2,}/g, ' ')
+    .trim()
+}
+
 export async function getQqComments(
   songId: number,
   offset = 0,
@@ -373,7 +384,9 @@ export async function getQqComments(
     user: decodeEntities(String(c.nick ?? '未知')),
     avatar: String(c.avatarurl ?? ''),
     // 主评论内容在 rootcommentcontent;回复内容在 middlecommentcontent
-    content: decodeEntities(String(c.rootcommentcontent ?? c.middlecommentcontent ?? c.content ?? '')),
+    content: stripQqCommentTags(
+      decodeEntities(String(c.rootcommentcontent ?? c.middlecommentcontent ?? c.content ?? ''))
+    ),
     // QQ 该接口 time 为秒,统一成毫秒
     time: (Number(c.time) || 0) * 1000,
     likes: Number(c.praisenum ?? 0)
