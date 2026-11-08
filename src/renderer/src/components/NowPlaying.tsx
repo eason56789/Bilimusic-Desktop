@@ -224,6 +224,7 @@ export function NowPlaying() {
   /** 进度条高潮点标记(设置可关) */
   const highlights = useStore((s) => s.highlights)
   const rate = useStore((s) => s.library?.settings.playbackRate ?? 1)
+  const pitch = useStore((s) => s.library?.settings.pitchSemitones ?? 0)
   const st = useStore((s) => s.library?.settings)
   // 歌词偏移需响应式:此前经 getState() 读取,暂停时调整偏移不会立即重算当前行
   const lyricOffset = useStore((s) => s.library?.settings.lyricOffsetMs ?? 0)
@@ -1106,6 +1107,13 @@ export function NowPlaying() {
                               {r}x {r === 1 ? '(正常)' : ''}
                             </MenuItem>
                           ))}
+                          <MenuDivider />
+                          <MenuItem icon={<MusicNote2Regular />} disabled>
+                            音调 {pitch > 0 ? '+' : ''}{pitch} 半音
+                          </MenuItem>
+                          <MenuItem onClick={() => useStore.getState().stepPitch(-1)}>降半音</MenuItem>
+                          <MenuItem onClick={() => useStore.getState().setPitch(0)}>还原原调</MenuItem>
+                          <MenuItem onClick={() => useStore.getState().stepPitch(1)}>升半音</MenuItem>
                         </MenuList>
                       </MenuPopover>
                     </Menu>

@@ -365,6 +365,13 @@ export function PlayerBar() {
                           {r}x {r === 1 ? '(正常)' : ''}
                         </MenuItem>
                       ))}
+                      <MenuDivider />
+                      <MenuItem icon={<MusicNote2Regular />} disabled>
+                        音调 {pitch > 0 ? '+' : ''}{pitch} 半音
+                      </MenuItem>
+                      <MenuItem onClick={() => useStore.getState().stepPitch(-1)}>降半音</MenuItem>
+                      <MenuItem onClick={() => useStore.getState().setPitch(0)}>还原原调</MenuItem>
+                      <MenuItem onClick={() => useStore.getState().stepPitch(1)}>升半音</MenuItem>
                     </MenuList>
                   </MenuPopover>
                 </Menu>
