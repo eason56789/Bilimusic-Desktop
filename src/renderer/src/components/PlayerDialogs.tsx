@@ -206,37 +206,23 @@ export function CommentsBody({
     <div className={`${styles.commentShell} ${boxed ? styles.commentShellBoxed : ''}`}>
       {dual && (
         <div className={styles.sortRow} style={{ marginBottom: '4px' }}>
-          {aggregate ? (
-            <span className={styles.muted}>
-              聚合 B站+网易云+QQ ({order === 'hot' ? '按热度' : '按时间'}混排)
-            </span>
-          ) : (
-            <RadioGroup
-              layout="horizontal"
-              value={platform}
-              onChange={(_, d) => setPlatform(d.value as CommentPlatform)}
-            >
-              {canBili && <Radio value="bilibili" label={wLabel('哔哩哔哩')} />}
-              {canNe && <Radio value="netease" label={wLabel('网易云')} />}
-              {canQq && <Radio value="qq" label={wLabel('QQ音乐')} />}
-            </RadioGroup>
-          )}
-          <div style={{ flex: 1 }} />
-          <button
-            onClick={() => setAggregate((v) => !v)}
-            style={{
-              background: aggregate ? 'rgba(80,160,255,0.25)' : 'transparent',
-              color: C_TEXT,
-              border: '1px solid rgba(255,255,255,0.25)',
-              borderRadius: 999,
-              padding: '2px 10px',
-              fontSize: 12,
-              cursor: 'pointer'
+          <RadioGroup
+            layout="horizontal"
+            value={aggregate ? 'aggregate' : platform}
+            onChange={(_, d) => {
+              if (d.value === 'aggregate') setAggregate(true)
+              else {
+                setAggregate(false)
+                setPlatform(d.value as CommentPlatform)
+              }
             }}
-            title="合并显示多个平台的评论区"
           >
-            {aggregate ? '● 聚合中' : '聚合多平台'}
-          </button>
+            {canBili && <Radio value="bilibili" label={wLabel('哔哩哔哩')} />}
+            {canNe && <Radio value="netease" label={wLabel('网易云')} />}
+            {canQq && <Radio value="qq" label={wLabel('QQ音乐')} />}
+            <Radio value="aggregate" label={wLabel('酷狗音乐')} />
+          </RadioGroup>
+          <div style={{ flex: 1 }} />
         </div>
       )}
       <div className={styles.sortRow}>
