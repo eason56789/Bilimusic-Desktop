@@ -169,7 +169,7 @@ async function handleBMedia(req: Request): Promise<Response> {
  */
 const allowedLocalPaths = new Set<string>()
 
-function registerLocalPath(p: string): void {
+export function registerLocalPath(p: string): void {
   try {
     allowedLocalPaths.add(resolve(p))
   } catch {
@@ -208,7 +208,17 @@ function serveLocalFile(p: string, req: Request): Response {
         ? 'audio/mpeg'
         : ext === 'flac'
           ? 'audio/flac'
-          : 'application/octet-stream'
+          : ext === 'jpg' || ext === 'jpeg'
+            ? 'image/jpeg'
+            : ext === 'png'
+              ? 'image/png'
+              : ext === 'webp'
+                ? 'image/webp'
+                : ext === 'gif'
+                  ? 'image/gif'
+                  : ext === 'bmp'
+                    ? 'image/bmp'
+                    : 'application/octet-stream'
   const range = req.headers.get('range')
   const baseHeaders = corsHeaders({
     'Content-Type': mime,

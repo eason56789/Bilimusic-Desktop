@@ -216,6 +216,22 @@ export interface Settings {
   latentBackground?: boolean
   /** 歌单列表中隐藏的平台(其导入歌单与在线入口一并隐藏;空 = 全部显示) */
   hiddenPlaylistPlatforms?: ('netease' | 'bili' | 'qq' | 'kugou' | 'qishui')[]
+  /** 全屏播放底图:本地图片绝对路径(空 = 未设置) */
+  customBgImage?: string
+  /** 全屏播放底图启用开关 */
+  customBgEnabled?: boolean
+  /** 全屏播放底图暗化程度(0-80,百分比) */
+  customBgDim?: number
+  /** 界面底图:主窗口背景图片绝对路径(空 = 未设置) */
+  uiBgImage?: string
+  /** 界面底图启用开关 */
+  uiBgEnabled?: boolean
+  /** 界面底图暗化程度(0-80,百分比) */
+  uiBgDim?: number
+  /** 全屏底图高斯模糊(0-40,px) */
+  customBgBlur?: number
+  /** 界面底图高斯模糊(0-40,px) */
+  uiBgBlur?: number
   /** 上传播放记录到网易云(歌曲播到 ≥30s 打卡) */
   scrobbleNetease?: boolean
   /** 上传播放记录到QQ音乐 */
@@ -881,6 +897,8 @@ export interface DesktopApi {
   downloadClear(failedOnly?: boolean): Promise<void>
   downloadOpenDir(): Promise<void>
   downloadChooseDir(): Promise<string | null>
+  /** 自定义底图:弹系统文件选择框选图片,返回绝对路径(取消返回 null);路径已登记进本地白名单 */
+  settingsPickImage(): Promise<string | null>
   downloadOpenFile(recordId: string): Promise<void>
   // 应用
   appOpenCacheDir(): Promise<void>

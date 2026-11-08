@@ -201,9 +201,43 @@ function Shell({ className }: { className?: string }) {
   const ui = useStore((s) => s.library?.settings.uiModules)
   /** 识曲入口跟随总开关:关闭后侧边栏与页面都不再提供入口 */
   const recognizeEnabled = useStore((s) => s.library?.settings.songRecognizeEnabled !== false)
+  /** 界面底图:铺在主窗口最底层,玻璃面板透出图片 */
+  const uiBgEnabled = useStore((s) => s.library?.settings.uiBgEnabled ?? false)
+  const uiBgImage = useStore((s) => s.library?.settings.uiBgImage ?? '')
+  const uiBgDim = Math.min(80, Math.max(0, useStore((s) => s.library?.settings.uiBgDim ?? 45))) / 100
+  const uiBgBlur = Math.min(40, Math.max(0, useStore((s) => s.library?.settings.uiBgBlur ?? 0)))
 
   return (
-    <div className={`${styles.frame} ${className ?? ''}`}>
+    <div
+      className={`${styles.frame} ${className ?? ''}`}
+      style={{ position: 'relative', overflow: 'hidden' }}
+    >
+      {uiBgEnabled && uiBgImage && (
+        <>
+          <img
+            src={`bmedia://local/?path=${encodeURIComponent(uiBgImage)}`}
+            alt=""
+            style={{
+              position: 'absolute',
+              inset: 0,
+              width: '100%',
+              height: '100%',
+              objectFit: 'cover',
+              transform: uiBgBlur > 0 ? 'scale(1.05)' : undefined,
+              filter: uiBgBlur > 0 ? `blur(${uiBgBlur}px)` : undefined,
+              pointerEvents: 'none'
+            }}
+          />
+          <div
+            style={{
+              position: 'absolute',
+              inset: 0,
+              background: `rgba(0,0,0,${uiBgDim})`,
+              pointerEvents: 'none'
+            }}
+          />
+        </>
+      )}
       {/* 标题栏(拖动区,右侧留出原生窗口按钮) */}
       <div className={`${styles.titlebar} titlebar-drag`}>
         <Text size={300} weight="semibold" style={{ color: tokens.colorNeutralForeground2 }}>

@@ -170,6 +170,7 @@ const api: DesktopApi = {
   downloadClear: (failedOnly?: boolean) => invoke('download:clear', failedOnly),
   downloadOpenDir: () => invoke('download:openDir'),
   downloadChooseDir: () => invoke<string | null>('download:chooseDir'),
+  settingsPickImage: () => invoke<string | null>('settings:pickImage'),
   downloadOpenFile: (recordId) => invoke('download:openFile', recordId),
 
   appOpenCacheDir: () => invoke('app:openCacheDir'),

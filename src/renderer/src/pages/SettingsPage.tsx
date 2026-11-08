@@ -267,6 +267,93 @@ export function SettingsPage() {  const styles = useStyles()
   const library = useStore((s) => s.library)
   const refresh = useStore((s) => s.refreshLibrary)
   const update = useStore((s) => s.updateSetting)
+  /** 底图设置行(全屏播放 / 界面共用):启用开关 + 选图 + 暗化滑条 */
+  const bgRow = (
+    title: string,
+    enKey: 'customBgEnabled' | 'uiBgEnabled',
+    imgKey: 'customBgImage' | 'uiBgImage',
+    dimKey: 'customBgDim' | 'uiBgDim',
+    blurKey: 'customBgBlur' | 'uiBgBlur'
+  ): JSX.Element => {
+    const en = s[enKey] ?? false
+    const img = s[imgKey] ?? ''
+    const dim = s[dimKey] ?? 45
+    const blur = s[blurKey] ?? 0
+    return (
+      <div className={styles.row}>
+        <Text size={300} style={{ minWidth: 96 }}>
+          {title}
+        </Text>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8, flex: 1 }}>
+          <Switch checked={en} label="启用" onChange={(_, d) => void update(enKey, d.checked as never)} />
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            {img ? (
+              <img
+                src={`bmedia://local/?path=${encodeURIComponent(img)}`}
+                alt=""
+                style={{ width: 56, height: 32, objectFit: 'cover', borderRadius: 4 }}
+              />
+            ) : null}
+            <Button
+              size="small"
+              onClick={async () => {
+                const file = await api.settingsPickImage()
+                if (file) {
+                  await update(imgKey, file as never)
+                  await update(enKey, true as never)
+                  toastSuccess('底图已设置', file.split(/[\\/]/).pop())
+                }
+              }}
+            >
+              {img ? '更换图片' : '选择图片'}
+            </Button>
+            {img && (
+              <Button
+                size="small"
+                appearance="subtle"
+                onClick={() => {
+                  void update(imgKey, '' as never)
+                  void update(enKey, false as never)
+                }}
+              >
+                清除
+              </Button>
+            )}
+          </div>
+          {en && img && (
+            <>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                <Text size={300} style={{ flexShrink: 0, width: 64 }}>
+                  暗化 {dim}%
+                </Text>
+                <Slider
+                  min={0}
+                  max={80}
+                  step={5}
+                  value={dim}
+                  onChange={(_, d) => void update(dimKey, d.value as never)}
+                  style={{ width: 200 }}
+                />
+              </div>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                <Text size={300} style={{ flexShrink: 0, width: 64 }}>
+                  模糊 {blur}px
+                </Text>
+                <Slider
+                  min={0}
+                  max={40}
+                  step={2}
+                  value={blur}
+                  onChange={(_, d) => void update(blurKey, d.value as never)}
+                  style={{ width: 200 }}
+                />
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+    )
+  }
   const [biliLoginOpen, setBiliLoginOpen] = useState(false)
   const [qishuiLoginOpen, setQishuiLoginOpen] = useState(false)
   const [neLoginOpen, setNeLoginOpen] = useState(false)
@@ -1200,9 +1287,17 @@ export function SettingsPage() {  const styles = useStyles()
               </Text>
               <Switch
                 checked={s.latentBackground ?? true}
-                label="随封面配色的流光背景(folia 歌词样式)"
+                label="流光背景"
                 onChange={(_, d) => update('latentBackground', d.checked)}
               />
+            </div>
+            {/* 底图:全屏歌词舞台与主窗口界面分别设置 */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 14, width: '100%' }}>
+              <Text weight="semibold" size={300} style={{ color: tokens.colorNeutralForeground3 }}>
+                底图背景
+              </Text>
+              {bgRow('全屏播放底图', 'customBgEnabled', 'customBgImage', 'customBgDim', 'customBgBlur')}
+              {bgRow('界面底图', 'uiBgEnabled', 'uiBgImage', 'uiBgDim', 'uiBgBlur')}
             </div>
             {/* ===== JIZURA 舞台参数(引擎自带风格系统) ===== */}
             {(s.pvArrange ?? 'pv') === 'jizura' && (

@@ -187,6 +187,10 @@ export function FoliaStage({ lines, theme, styleId }: FoliaStageProps): JSX.Elem
   const playing = useStore((s) => s.playing)
   const current = useStore((s) => s.current)
   const latentBackground = useStore((s) => s.library?.settings.latentBackground ?? true)
+  const customBgEnabled = useStore((s) => s.library?.settings.customBgEnabled ?? false)
+  const customBgImage = useStore((s) => s.library?.settings.customBgImage ?? '')
+  const customBgDim = useStore((s) => s.library?.settings.customBgDim ?? 45)
+  const customBgBlur = useStore((s) => s.library?.settings.customBgBlur ?? 0)
   const offset = useStore((s) => s.library?.settings.lyricOffsetMs ?? 0)
   const audioRef = useAudioFrame(playing)
   const [, force] = useState(0)
@@ -264,6 +268,10 @@ export function FoliaStage({ lines, theme, styleId }: FoliaStageProps): JSX.Elem
             isDaylight={false}
             paused={!playing}
             latentBackground={latentBackground}
+            customBgEnabled={customBgEnabled}
+            customBgImage={customBgImage ? `bmedia://local/?path=${encodeURIComponent(customBgImage)}` : null}
+            customBgDim={customBgDim}
+            customBgBlur={customBgBlur}
             songTitle={current?.title ?? null}
             songArtist={current?.artist ?? null}
             songAlbum={current?.album ?? null}

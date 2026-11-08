@@ -96,6 +96,12 @@ export interface VisualizerSharedProps {
   paused?: boolean
   /** 隐现(Latent)流光背景开关(宿主 FoliaStage 注入) */
   latentBackground?: boolean
+  /** 自定义底图(宿主 FoliaStage 注入):启用 + 本地图片路径 + 暗化百分比 */
+  customBgEnabled?: boolean
+  customBgImage?: string | null
+  customBgDim?: number
+  /** 全屏底图高斯模糊(px) */
+  customBgBlur?: number
   backgroundStaticMode?: boolean
   visualizerOpacity?: number
   /** machi(上游由设置面板注入;这里给默认值即可) */

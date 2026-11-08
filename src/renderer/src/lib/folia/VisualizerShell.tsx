@@ -37,6 +37,11 @@ export const VisualizerShell = forwardRef<HTMLDivElement, VisualizerShellProps>(
   ({ theme, className, children, backdrop, sharedProps }, ref) => {
     // 隐现背景:开启时由它提供背景色,shell 不再画不透明底
     const latent = sharedProps?.latentBackground as boolean | undefined
+    // 自定义底图:最底层用户图片(暗化后保证歌词可读);启用时优先于流光背景
+    const customBg = sharedProps?.customBgImage as string | null | undefined
+    const customOn = (sharedProps?.customBgEnabled as boolean | undefined) && !!customBg
+    const dim = Math.min(80, Math.max(0, (sharedProps?.customBgDim as number | undefined) ?? 45)) / 100
+    const blur = Math.min(40, Math.max(0, (sharedProps?.customBgBlur as number | undefined) ?? 0))
     return (
       <div
         ref={ref}
@@ -45,11 +50,38 @@ export const VisualizerShell = forwardRef<HTMLDivElement, VisualizerShellProps>(
           position: 'absolute',
           inset: 0,
           overflow: 'hidden',
-          background: latent ? 'transparent' : theme.backgroundColor,
+          background: latent || customOn ? 'transparent' : theme.backgroundColor,
           isolation: 'isolate'
         }}
       >
-        {latent && (
+        {customOn && (
+          <>
+            <img
+              src={customBg ?? undefined}
+              alt=""
+              style={{
+                position: 'absolute',
+                inset: 0,
+                width: '100%',
+                height: '100%',
+                objectFit: 'cover',
+                // 模糊时放大一点点,避免边缘露出透明缝
+                transform: blur > 0 ? 'scale(1.05)' : undefined,
+                filter: blur > 0 ? `blur(${blur}px)` : undefined,
+                pointerEvents: 'none'
+              }}
+            />
+            <div
+              style={{
+                position: 'absolute',
+                inset: 0,
+                background: `rgba(0,0,0,${dim})`,
+                pointerEvents: 'none'
+              }}
+            />
+          </>
+        )}
+        {!customOn && latent && (
           <LatentBackground
             theme={theme as any}
             coverUrl={sharedProps?.coverUrl ?? null}

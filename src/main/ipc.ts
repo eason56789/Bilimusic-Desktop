@@ -40,7 +40,7 @@ import { fetchQqPlaylist, fetchKugouPlaylist, fetchKugouCollectionPlaylist, fetc
 import { computeSyncPlan } from './syncDelta'
 import { getLyrics } from './api/lyrics'
 import * as qishui from './api/qishui'
-import { prepareAudio, coverProxyUrl, clearAudioCache, getCacheDir } from './audio'
+import { prepareAudio, coverProxyUrl, clearAudioCache, getCacheDir, registerLocalPath } from './audio'
 import { enqueueDownload, cancelDownload, removeDownload } from './downloads'
 import { checkUpdateDetailed } from './update'
 import {
@@ -407,6 +407,23 @@ const SECTION_SETTING_KEYS: Record<string, (keyof Settings)[]> = {
 }
 
 export function registerIpc(): void {
+  // 自定义底图:启动时把设置里已存的图片路径登记进 bmedia://local 白名单
+  const savedBg = getStore().settings.customBgImage
+  if (savedBg) registerLocalPath(savedBg)
+  const savedUiBg = getStore().settings.uiBgImage
+  if (savedUiBg) registerLocalPath(savedUiBg)
+  ipcMain.handle('settings:pickImage', async () => {
+    const options = {
+      properties: ['openFile'] as ('openFile')[],
+      filters: [{ name: '图片', extensions: ['jpg', 'jpeg', 'png', 'webp', 'gif', 'bmp'] }]
+    }
+    const win = dialogHost()
+    const result = win ? await dialog.showOpenDialog(win, options) : await dialog.showOpenDialog(options)
+    const file = result.filePaths[0]
+    if (!file) return null
+    registerLocalPath(file)
+    return file
+  })
   // B站设备 cookie 合并后持久化(收藏夹/播放记录等接口需要 buvid3)
   onBiliCookieChange(setBiliCookieStore)
   // ===== 搜索 =====
@@ -1020,6 +1037,9 @@ export function registerIpc(): void {
       }
       const k = key as keyof Settings
       setSetting(k, value as Settings[typeof k])
+      // 自定义底图换图:新路径登记进 bmedia://local 白名单
+      if (k === 'customBgImage' && typeof value === 'string' && value) registerLocalPath(value)
+      if (k === 'uiBgImage' && typeof value === 'string' && value) registerLocalPath(value)
       // 主题即时应用(此前仅在启动时应用,切换后标题栏按钮颜色要等重启才更新)
       if (key === 'theme' && typeof value === 'string') applyThemeNow(value)
       // 悬浮窗锁定即时生效(鼠标穿透/恢复)
