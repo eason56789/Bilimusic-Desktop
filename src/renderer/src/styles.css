@@ -466,3 +466,19 @@ button:active:not(:disabled) {
   @keyframes bm-toast-fade-in { from { opacity: 0; } to { opacity: 1; } }
   @keyframes bm-toast-fade-out { from { opacity: 1; } to { opacity: 0; } }
 }
+
+/* ===== 界面底图模式:Fluent 卡片/下拉/弹层玻璃化,透出底图 ===== */
+/* Fluent Card 默认不透明白/黑底 → 统一玻璃 */
+/* 深浅主题下的玻璃底色(color-mix 目标) */
+body.bm-uibg[data-bm-theme='light'] .fui-Card { --card-glass: rgba(255, 255, 255, 0.55); }
+body.bm-uibg[data-bm-theme='dark'] .fui-Card { --card-glass: rgba(32, 32, 32, 0.55); }
+body.bm-uibg .fui-Card {
+  background: var(--card-glass, rgba(255, 255, 255, 0.55)) !important;
+  backdrop-filter: blur(18px) saturate(1.15);
+}
+/* 悬浮菜单 / 下拉列表 / 对话框表面 */
+body.bm-uibg .fui-MenuPopover,
+body.bm-uibg .fui-DropdownListbox,
+body.bm-uibg .fui-DialogSurface {
+  backdrop-filter: blur(24px) saturate(1.2);
+}

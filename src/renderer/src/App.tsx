@@ -122,6 +122,8 @@ function useGlassVars(dark: boolean, effect: string, alpha: number, uiBg: boolea
     const root = document.documentElement
     // 供 CSS 区分深浅主题(顶部轻提示等自绘浮层用;Fluent 的 token 管不到 portal 出去的节点)
     root.setAttribute('data-bm-theme', dark ? 'dark' : 'light')
+    // 界面底图启用:body 挂 class,全局 CSS 把卡片/浮层玻璃化(见 styles.css)
+    document.body.classList.toggle('bm-uibg', uiBg)
     const on = effect !== 'none'
     // 界面底图启用时:所有玻璃层用统一的低不透明度,整窗一致透出底图
     const a = uiBg ? 0.42 : on ? Math.min(1, Math.max(0.35, alpha)) : 1
