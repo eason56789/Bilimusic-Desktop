@@ -13,7 +13,15 @@ import { resolveThemeFontStack, resolveThemeFontWeight } from '../../fontStacks'
 import { resolveWordColor } from '../../shared/wordColoring';
 import { GlowWord } from '../../shared/GlowWord';
 import { getGlowWordLineContainerMotion, resolveGlowWordRenderProfile } from '../../shared/glowWordTiming';
-import { buildGlowWordLayoutVariants, glowWordBodyVariants } from '../../shared/glowWordVariants';
+import { Variants } from 'framer-motion';
+
+/** 莫奈式走字的外层布局:静止不弹跳,仅透明度进入/退出 */
+const SWEEP_LAYOUT_VARIANTS: Variants = {
+    waiting: () => ({ opacity: 0, transition: { duration: 0.2 } }),
+    active: () => ({ opacity: 1, transition: { duration: 0.18, ease: 'easeOut' } }),
+    passed: () => ({ opacity: 0.82, transition: { duration: 0.4 } })
+};
+import { glowWordBodyVariants, buildSweepWordBodyVariants } from '../../shared/glowWordVariants';
 
 // This mode is the most straightforward lyric pipeline in the folder.
 // First we ask runtime which line is active right now, then read renderHints from that line,
@@ -266,8 +274,9 @@ const Visualizer: React.FC<VisualizerProps> = (props) => {
         return { wordConfigs, lineConfig };
     }, [activeLine, displayWords, resolvedClassicTuning.enableWordRotation, resolvedClassicTuning.useLegacyLayout, resolvedClassicTuning.wordSpacing, theme, lyricsFontScale, viewportWidth]);
 
-    const layoutVariants = buildGlowWordLayoutVariants(theme.animationIntensity, resolvedClassicTuning.enableWordRotation);
-    const bodyVariants = glowWordBodyVariants;
+    // 莫奈式走字:外层布局静止(不再弹跳/散开),正文按逐字进度扫色
+    const layoutVariants = SWEEP_LAYOUT_VARIANTS;
+    const bodyVariants = buildSweepWordBodyVariants();
 
     const lyricContainerFloat = useMemo(() => {
         const multiplier = resolvedClassicTuning.breathingFloatMultiplier;

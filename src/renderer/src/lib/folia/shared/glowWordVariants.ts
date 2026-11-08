@@ -78,3 +78,46 @@ export const glowWordBodyVariants: Variants = {
         }
     })
 };
+
+// ===== 莫奈式「走字」变体(经典样式选用) =====
+// 借鉴 monet:不做整词弹跳/散开,外层静止;正文按字的进度从"未唱淡色"扫到"已唱实色",
+// 边界字在两色之间线性插值(羽化)。glow 层仍由 wordGlowVariants 提供光晕。
+
+/** 颜色插值:#rrggbb / rgb() / rgba() → rgba 数值混合;解析失败退回目标色 */
+const lerpColor = (a: string, b: string, t: number): string => {
+    const pa = a.match(/\d+(\.\d+)?/g)?.map(Number) ?? [];
+    const pb = b.match(/\d+(\.\d+)?/g)?.map(Number) ?? [];
+    if (pa.length < 3 || pb.length < 3) return t < 1 ? a : b;
+    const mix = (i: number) => Math.round((pa[i] ?? 255) + ((pb[i] ?? 255) - (pa[i] ?? 255)) * t);
+    return `rgba(${mix(0)}, ${mix(1)}, ${mix(2)}, ${(t).toFixed(3)} * ${(pb[3] ?? 1).toFixed(2)} + ${(1 - t).toFixed(3)} * ${(pa[3] ?? 1).toFixed(2)})`
+        .replace('rgba', 'rgba');
+};
+
+/** 走字进度:0..1,基于 currentTime MotionValue 的逐字插值 */
+export const buildSweepWordBodyVariants = (): Variants => ({
+    waiting: ({ baseColor }: any) => ({
+        color: baseColor,
+        filter: 'blur(0px)',
+        transition: { duration: 0.2 }
+    }),
+    active: ({ baseColor, activeColor, duration, index, total, charStartTime, charEndTime, wordStartTime }: any) => {
+        // 逐字:每个字在自己时间段内从 baseColor 扫到 activeColor
+        const hasCharTiming = typeof charStartTime === 'number' && typeof charEndTime === 'number' && typeof wordStartTime === 'number';
+        const single = (duration ?? 0.2) / Math.max(total ?? 1, 1);
+        const charDelay = hasCharTiming ? Math.max(0, charStartTime - wordStartTime) : single * (index ?? 0);
+        const charDur = hasCharTiming ? Math.max(charEndTime - charStartTime, 0.05) : single;
+        return {
+            color: [baseColor, activeColor],
+            filter: 'blur(0px)',
+            transition: {
+                color: { duration: charDur, delay: charDelay, ease: 'linear' },
+                default: { duration: 0 }
+            }
+        };
+    },
+    passed: ({ activeColor }: any) => ({
+        color: activeColor,
+        filter: 'blur(0px)',
+        transition: { duration: 0.15 }
+    })
+});

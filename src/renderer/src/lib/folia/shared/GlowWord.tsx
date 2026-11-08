@@ -93,8 +93,7 @@ export const GlowWord = <TConfig extends { id: string }>({
                             variants={wordGlowVariants}
                             custom={{
                                 config,
-                                activeColor,
-                                baseColor,
+                                glowColor: 'rgba(255, 255, 255, 0.8)',
                                 duration,
                                 index,
                                 total: graphemeTimings.length,
@@ -110,7 +109,7 @@ export const GlowWord = <TConfig extends { id: string }>({
                 ) : (
                     <motion.span
                         variants={wordGlowVariants}
-                        custom={{ config, activeColor, baseColor, duration, wordRevealMode: renderProfile.wordRevealMode }}
+                        custom={{ config, glowColor: 'rgba(255, 255, 255, 0.8)', duration, wordRevealMode: renderProfile.wordRevealMode }}
                     >
                         {word.text}
                     </motion.span>
