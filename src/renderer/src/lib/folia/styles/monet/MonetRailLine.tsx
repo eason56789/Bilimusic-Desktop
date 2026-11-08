@@ -114,7 +114,8 @@ export const MonetRailLine: React.FC<{
                     style={{
                         // An ellipse touching the box's sides, reaching past the line above and below,
                         // gone before any edge: no straight edge shows, and no blur is needed to hide one.
-                        background: `radial-gradient(closest-side, ${CHORUS_GLOW_STOPS.map(([alpha, at]) => `${colorWithAlpha(theme.accentColor, alpha)} ${at}%`).join(', ')}, transparent 100%)`,
+                        // 副歌底光同样改为白光,与字形发光一致(原先取主题强调色)
+                        background: `radial-gradient(closest-side, ${CHORUS_GLOW_STOPS.map(([alpha, at]) => `rgba(255, 255, 255, ${(alpha * 2.2).toFixed(3)}) ${at}%`).join(', ')}, transparent 100%)`,
                     }}
                 />
             )}

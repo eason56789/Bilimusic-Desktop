@@ -187,12 +187,13 @@ const MonetWordSweep: React.FC<{
         });
         // Composited only while it is lit, so idle words on the rail do not each hold a layer.
         const glowWillChange = useTransform(glowOpacity, opacity => (opacity > 0 ? 'opacity' : 'auto'));
+        // 发光统一为白光:不再跟随词色/主题色,与歌词底色解耦,在深浅主题下都读作"光晕"而非"彩色描边"
         const glowHalo = useMemo(() => {
             const radiusOne = Math.round(fontPx * (isChorus ? 0.45 : 0.28));
             const radiusTwo = Math.round(fontPx * (isChorus ? 0.90 : 0.65));
-            const glowColor = mixColors(baseColor, wordColor, 1, isChorus ? 1.0 : 0.88);
+            const glowColor = isChorus ? 'rgba(255, 255, 255, 0.95)' : 'rgba(255, 255, 255, 0.8)';
             return `0 0 ${radiusOne}px ${glowColor}, 0 0 ${radiusTwo}px ${glowColor}`;
-        }, [baseColor, fontPx, isChorus, wordColor]);
+        }, [fontPx, isChorus]);
 
         // Glyphs with deep descenders (g, j, p, y, and many CJK forms) sit below the line box
         // whenever the font's em box is taller than `line-height`, which drives half-leading

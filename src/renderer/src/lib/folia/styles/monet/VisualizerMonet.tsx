@@ -255,15 +255,17 @@ const VisualizerMonet: React.FC<VisualizerMonetProps> = (props) => {
                                 >
                                     {primaryMetaLabel}
                                 </motion.div>
+                                {/* 装饰短线:原先是一根 h-14 的竖线,放在纵向 space-y 列表里会撑开一整行,
+                                    把歌手与标题挤成分离的两块。改为横向短线,只作分隔强调,不再占行高。 */}
                                 <motion.div
                                     key={`line-${introKey}`}
-                                    initial={{ scaleY: 0 }}
-                                    animate={{ scaleY: 1 }}
+                                    initial={{ scaleX: 0 }}
+                                    animate={{ scaleX: 1 }}
                                     transition={{ duration: 1.5, ease: [0.25, 1, 0.5, 1], delay: 0.5 }}
-                                    className="h-14 w-px rounded-full"
-                                    style={{ 
-                                        originY: 0,
-                                        background: `linear-gradient(180deg, ${colorWithAlpha(theme.primaryColor, 0.72)}, transparent)` 
+                                    className="h-px w-14 rounded-full"
+                                    style={{
+                                        originX: 0,
+                                        background: `linear-gradient(90deg, ${colorWithAlpha(theme.primaryColor, 0.72)}, transparent)`
                                     }}
                                 />
                             </div>
