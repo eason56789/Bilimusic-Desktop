@@ -482,3 +482,30 @@ body.bm-uibg .fui-DropdownListbox,
 body.bm-uibg .fui-DialogSurface {
   backdrop-filter: blur(24px) saturate(1.2);
 }
+
+/* 界面底图模式:输入框/按钮/行悬停等白色实底组件玻璃化 */
+body.bm-uibg[data-bm-theme='light'] .fui-Input,
+body.bm-uibg[data-bm-theme='light'] .fui-Button,
+body.bm-uibg[data-bm-theme='light'] .fui-Dropdown,
+body.bm-uibg[data-bm-theme='light'] .fui-Switch {
+  --glass-white: rgba(255, 255, 255, 0.45);
+}
+body.bm-uibg[data-bm-theme='dark'] .fui-Input,
+body.bm-uibg[data-bm-theme='dark'] .fui-Button,
+body.bm-uibg[data-bm-theme='dark'] .fui-Dropdown,
+body.bm-uibg[data-bm-theme='dark'] .fui-Switch {
+  --glass-white: rgba(40, 40, 40, 0.5);
+}
+body.bm-uibg .fui-Input {
+  background: var(--glass-white, rgba(255, 255, 255, 0.45)) !important;
+  backdrop-filter: blur(14px) saturate(1.1);
+}
+body.bm-uibg .fui-Dropdown {
+  background: var(--glass-white, rgba(255, 255, 255, 0.45)) !important;
+  backdrop-filter: blur(14px) saturate(1.1);
+}
+/* 次级按钮玻璃化(primary 蓝色实底保留,作视觉锚点) */
+body.bm-uibg .fui-Button:not([class*='primary']):not(.fui-Button-primary) {
+  background: var(--glass-white, rgba(255, 255, 255, 0.45)) !important;
+  backdrop-filter: blur(14px) saturate(1.1);
+}
