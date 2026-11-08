@@ -147,7 +147,8 @@ export function CommentsBody({
   const canNe = !!song?.neteaseId || song?.source === 'QQMUSIC' || song?.source === 'KUGOU'
   // 酷狗无公开评论接口:评论按同名曲从网易云/QQ音乐取,因此也允许切换到 QQ 评论
   const canQq = song?.source === 'QQMUSIC' || song?.source === 'KUGOU' || !!song?.qqMid
-  const dual = [canBili, canNe, canQq].filter(Boolean).length > 1
+  // 聚合模式会按同名曲跨平台搜索(B站/QQ 兜底解析),因此聚合按钮始终可用
+  const dual = aggregate || [canBili, canNe, canQq].filter(Boolean).length > 1
   /** 滑到底自动加载的防重入(滚动事件密集,不能只靠 loading state) */
   const loadingRef = useRef(false)
   // 首次拿到歌曲/换歌时校准默认排序:挂载时 song 常为 null,一次性初始化算不准;
