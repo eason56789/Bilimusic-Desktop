@@ -126,7 +126,7 @@ function useGlassVars(dark: boolean, effect: string, alpha: number, uiBg: boolea
     document.body.classList.toggle('bm-uibg', uiBg)
     const on = effect !== 'none'
     // 界面底图启用时:所有玻璃层用统一的低不透明度,整窗一致透出底图
-    const a = uiBg ? 0.42 : on ? Math.min(1, Math.max(0.35, alpha)) : 1
+    const a = uiBg ? 0.3 : on ? Math.min(1, Math.max(0.35, alpha)) : 1
     /** 底图启用 → 统一半透明;材质开启 → 半透明;关闭 → 同色实底 */
     const glass = (r: number, g: number, b: number, mul = 1): string =>
       uiBg || on ? `rgba(${r}, ${g}, ${b}, ${a * mul})` : `rgb(${r}, ${g}, ${b})`
@@ -421,7 +421,8 @@ function MainApp() {
       theme={theme}
       style={{
         height: '100%',
-        background: 'var(--app-frame-bg, transparent)'
+        // 界面底图启用时这里必须全透:底图与暗化层在 Shell 内,玻璃色由 titlebar/sidebar/content 各出一份
+        background: 'transparent'
       }}
     >
       {/* 轻提示:位置/样式/时长/图标由设置控制(默认顶部居中滑下) */}
