@@ -141,14 +141,11 @@ export function CommentsBody({
   const [platform, setPlatform] = useState<CommentPlatform>(() =>
     song?.source === 'QQMUSIC' ? 'qq' : song?.neteaseId ? 'netease' : song?.bvid ? 'bilibili' : 'netease'
   )
-  /** 聚合模式:多平台评论区合并混排(带平台标记);单平台模式保留原切换 Radio */
-  const [aggregate, setAggregate] = useState(false)
-  const canBili = !!song?.bvid
-  const canNe = !!song?.neteaseId || song?.source === 'QQMUSIC' || song?.source === 'KUGOU'
-  // 酷狗无公开评论接口:评论按同名曲从网易云/QQ音乐取,因此也允许切换到 QQ 评论
-  const canQq = song?.source === 'QQMUSIC' || song?.source === 'KUGOU' || !!song?.qqMid
-  // 聚合模式会按同名曲跨平台搜索(B站/QQ 兜底解析),因此聚合按钮始终可用
-  const dual = aggregate || [canBili, canNe, canQq].filter(Boolean).length > 1
+  // 三个来源始终列出:主进程会按同名曲跨平台解析(B站无 bvid / QQ 无 id 时自动搜索)
+  const canBili = true
+  const canNe = true
+  const canQq = true
+  const dual = true
   /** 滑到底自动加载的防重入(滚动事件密集,不能只靠 loading state) */
   const loadingRef = useRef(false)
   // 首次拿到歌曲/换歌时校准默认排序:挂载时 song 常为 null,一次性初始化算不准;
@@ -163,7 +160,6 @@ export function CommentsBody({
     const defPlat: CommentPlatform =
       song.source === 'QQMUSIC' ? 'qq' : song.neteaseId ? 'netease' : song.bvid ? 'bilibili' : 'netease'
     setPlatform((p) => (p === defPlat ? p : defPlat))
-    setAggregate(false)
   }, [song])
 
   useEffect(() => {
@@ -173,7 +169,7 @@ export function CommentsBody({
     setError('')
     setLoading(true)
     api
-      .commentsGet(song, 0, order, aggregate ? undefined : dual ? platform : undefined, aggregate)
+      .commentsGet(song, 0, order, platform)
       .then((r) => {
         if (r.ok && r.data) setData(r.data)
         else setError(r.error || '加载失败')
@@ -187,7 +183,7 @@ export function CommentsBody({
     loadingRef.current = true
     setLoading(true)
     try {
-      const r = await api.commentsGet(song, offset + 20, order, aggregate ? undefined : dual ? platform : undefined, aggregate)
+      const r = await api.commentsGet(song, offset + 20, order, platform)
       if (r.ok && r.data) {
         setData({ ...r.data, comments: [...data.comments, ...r.data.comments] })
         setOffset(offset + 20)
@@ -208,19 +204,12 @@ export function CommentsBody({
         <div className={styles.sortRow} style={{ marginBottom: '4px' }}>
           <RadioGroup
             layout="horizontal"
-            value={aggregate ? 'aggregate' : platform}
-            onChange={(_, d) => {
-              if (d.value === 'aggregate') setAggregate(true)
-              else {
-                setAggregate(false)
-                setPlatform(d.value as CommentPlatform)
-              }
-            }}
+            value={platform}
+            onChange={(_, d) => setPlatform(d.value as CommentPlatform)}
           >
-            {canBili && <Radio value="bilibili" label={wLabel('哔哩哔哩')} />}
-            {canNe && <Radio value="netease" label={wLabel('网易云')} />}
-            {canQq && <Radio value="qq" label={wLabel('QQ音乐')} />}
-            <Radio value="aggregate" label={wLabel('酷狗音乐')} />
+            <Radio value="bilibili" label={wLabel('哔哩哔哩')} />
+            <Radio value="netease" label={wLabel('网易云')} />
+            <Radio value="qq" label={wLabel('QQ音乐')} />
           </RadioGroup>
           <div style={{ flex: 1 }} />
         </div>

@@ -726,8 +726,16 @@ export function registerIpc(): void {
           }))
         })
         const fetchBili = async () => {
-          if (!song.bvid) return { ok: false as const, error: '没有可查看的B站评论' }
-          return ok(await bilibili.getVideoComments(bvidOf(song), offset, order))
+          if (song.bvid) return ok(await bilibili.getVideoComments(bvidOf(song), offset, order))
+          // 非 B站 歌曲:按「歌名 歌手」搜一个视频,取其评论区(B站评论区是视频级的)
+          try {
+            const hits = await bilibili.searchVideos(`${song.title} ${song.artist}`, 1, 'totalrank')
+            const hit = hits[0]
+            if (!hit?.bvid) return { ok: false as const, error: 'B站未找到同名视频' }
+            return ok(await bilibili.getVideoComments(hit.bvid, offset, order))
+          } catch {
+            return { ok: false as const, error: 'B站评论获取失败' }
+          }
         }
         const fetchNetease = async () => {
           let id = song.neteaseId
@@ -786,6 +794,8 @@ export function registerIpc(): void {
           const seen = new Set<string>()
           const merged = valid
             .flatMap((r) => r.comments.map((c: any) => ({ ...c, platform: r.p })))
+            // QQ 侧存在已删除/纯表情的原评:内容为空的不进聚合结果
+            .filter((c: any) => String(c.content ?? '').trim().length > 0)
             .filter((c) => {
               const key = c.platform + ':' + c.user + ':' + c.content.slice(0, 60)
               if (seen.has(key)) return false
