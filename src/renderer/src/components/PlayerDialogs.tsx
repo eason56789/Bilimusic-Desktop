@@ -392,7 +392,7 @@ export function PagesDialog({
                   <div
                     key={p.cid}
                     className={styles.row}
-                    style={active ? { background: tokens.colorNeutralBackground3 } : undefined}
+                    style={active ? { background: `var(--bm-surface-3, ${tokens.colorNeutralBackground3})` } : undefined}
                     onClick={() => {
                       if (active) return
                       // 构造同分P歌曲
@@ -529,7 +529,7 @@ export function SongInfoDialog({ song, open, onClose }: { song: Song | null; ope
                   padding: '8px 10px',
                   marginBottom: 8,
                   borderRadius: 8,
-                  background: tokens.colorNeutralBackground3
+                  background: `var(--bm-surface-3, ${tokens.colorNeutralBackground3})`
                 }}
               >
                 <Text size={200} style={{ color: tokens.colorNeutralForeground3 }}>
@@ -887,7 +887,7 @@ export function QueueDialog({ open, onClose }: { open: boolean; onClose: () => v
                   <div
                     key={`${s.id}-${i}`}
                     className={styles.row}
-                    style={{ cursor: 'pointer', ...(active ? { background: tokens.colorNeutralBackground3 } : {}) }}
+                    style={{ cursor: 'pointer', ...(active ? { background: `var(--bm-surface-3, ${tokens.colorNeutralBackground3})` } : {}) }}
                     onClick={() => playAt(i)}
                   >
                     <span style={{ width: 24, color: active ? tokens.colorBrandForeground1 : tokens.colorNeutralForeground3, textAlign: 'center', flexShrink: 0 }}>

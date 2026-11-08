@@ -49,7 +49,7 @@ export function UpdateDialog() {
                     overflowY: 'auto',
                     padding: '12px 16px',
                     borderRadius: 10,
-                    background: tokens.colorNeutralBackground3,
+                    background: `var(--bm-surface-3, ${tokens.colorNeutralBackground3})`,
                     color: tokens.colorNeutralForeground1,
                     fontSize: tokens.fontSizeBase200
                   }}

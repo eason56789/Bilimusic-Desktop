@@ -62,7 +62,7 @@ const useStyles = makeStyles({
     fontSize: tokens.fontSizeBase300,
     textAlign: 'left',
     cursor: 'default',
-    ':hover': { background: tokens.colorNeutralBackground3 }
+    ':hover': { background: `var(--bm-surface-3, ${tokens.colorNeutralBackground3})` }
   },
   chartItemActive: {
     background: tokens.colorBrandBackground2,

@@ -470,12 +470,6 @@ button:active:not(:disabled) {
 /* ===== 界面底图模式:Fluent 卡片/下拉/弹层玻璃化,透出底图 ===== */
 /* Fluent Card 默认不透明白/黑底 → 统一玻璃 */
 /* 深浅主题下的玻璃底色(color-mix 目标) */
-body.bm-uibg[data-bm-theme='light'] .fui-Card { --card-glass: rgba(255, 255, 255, 0.55); }
-body.bm-uibg[data-bm-theme='dark'] .fui-Card { --card-glass: rgba(32, 32, 32, 0.55); }
-body.bm-uibg .fui-Card {
-  background: var(--card-glass, rgba(255, 255, 255, 0.55)) !important;
-  backdrop-filter: blur(18px) saturate(1.15);
-}
 /* 悬浮菜单 / 下拉列表 / 对话框表面 */
 body.bm-uibg .fui-MenuPopover,
 body.bm-uibg .fui-DropdownListbox,
@@ -483,29 +477,40 @@ body.bm-uibg .fui-DialogSurface {
   backdrop-filter: blur(24px) saturate(1.2);
 }
 
-/* 界面底图模式:输入框/按钮/行悬停等白色实底组件玻璃化 */
-body.bm-uibg[data-bm-theme='light'] .fui-Input,
-body.bm-uibg[data-bm-theme='light'] .fui-Button,
-body.bm-uibg[data-bm-theme='light'] .fui-Dropdown,
-body.bm-uibg[data-bm-theme='light'] .fui-Switch {
-  --glass-white: rgba(255, 255, 255, 0.45);
+
+/* ===== 界面底图模式:统一降低所有"表面色"的不透明度 ===== */
+/* 各组件背景都走 --bm-surface-* 变量(见源码 var(--bm-surface-N, token) 写法),
+   底图启用时把变量改成半透明玻璃,卡片/行/输入框/下拉一次性通透 */
+html[data-bm-theme='light'] body.bm-uibg {
+  --bm-surface-1: rgba(255, 255, 255, 0.34);
+  --bm-surface-1h: rgba(255, 255, 255, 0.46);
+  --bm-surface-2: rgba(255, 255, 255, 0.28);
+  --bm-surface-3: rgba(255, 255, 255, 0.3);
+  --bm-surface-3h: rgba(255, 255, 255, 0.42);
+  --bm-surface-4: rgba(255, 255, 255, 0.26);
+  --bm-surface-6: rgba(255, 255, 255, 0.22);
 }
-body.bm-uibg[data-bm-theme='dark'] .fui-Input,
-body.bm-uibg[data-bm-theme='dark'] .fui-Button,
-body.bm-uibg[data-bm-theme='dark'] .fui-Dropdown,
-body.bm-uibg[data-bm-theme='dark'] .fui-Switch {
-  --glass-white: rgba(40, 40, 40, 0.5);
+html[data-bm-theme='dark'] body.bm-uibg {
+  --bm-surface-1: rgba(32, 32, 32, 0.4);
+  --bm-surface-1h: rgba(48, 48, 48, 0.5);
+  --bm-surface-2: rgba(28, 28, 28, 0.34);
+  --bm-surface-3: rgba(30, 30, 30, 0.36);
+  --bm-surface-3h: rgba(48, 48, 48, 0.48);
+  --bm-surface-4: rgba(26, 26, 26, 0.3);
+  --bm-surface-6: rgba(24, 24, 24, 0.26);
 }
-body.bm-uibg .fui-Input {
-  background: var(--glass-white, rgba(255, 255, 255, 0.45)) !important;
-  backdrop-filter: blur(14px) saturate(1.1);
+/* Fluent 自带 Card / Input / Dropdown 的实底也统一玻璃化(它们用内部 token,不走上面变量) */
+body.bm-uibg .fui-Card {
+  background: var(--bm-surface-1, rgba(255, 255, 255, 0.34)) !important;
+  backdrop-filter: blur(16px) saturate(1.1);
 }
+body.bm-uibg .fui-Input,
 body.bm-uibg .fui-Dropdown {
-  background: var(--glass-white, rgba(255, 255, 255, 0.45)) !important;
+  background: var(--bm-surface-2, rgba(255, 255, 255, 0.28)) !important;
   backdrop-filter: blur(14px) saturate(1.1);
 }
-/* 次级按钮玻璃化(primary 蓝色实底保留,作视觉锚点) */
-body.bm-uibg .fui-Button:not([class*='primary']):not(.fui-Button-primary) {
-  background: var(--glass-white, rgba(255, 255, 255, 0.45)) !important;
-  backdrop-filter: blur(14px) saturate(1.1);
+body.bm-uibg .fui-MenuPopover,
+body.bm-uibg .fui-DropdownListbox,
+body.bm-uibg .fui-DialogSurface {
+  backdrop-filter: blur(24px) saturate(1.2);
 }

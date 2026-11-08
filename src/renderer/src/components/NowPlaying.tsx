@@ -72,7 +72,7 @@ const useStyles = makeStyles({
     inset: '0',
     zIndex: 1000,
     overflow: 'hidden',
-    background: tokens.colorNeutralBackground3,
+    background: `var(--bm-surface-3, ${tokens.colorNeutralBackground3})`,
     display: 'flex',
     flexDirection: 'column'
   },

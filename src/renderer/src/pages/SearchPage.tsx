@@ -73,7 +73,7 @@ const useStyles = makeStyles({
     left: 0,
     right: 0,
     zIndex: 10,
-    background: tokens.colorNeutralBackground1,
+    background: `var(--bm-surface-1, ${tokens.colorNeutralBackground1})`,
     border: `1px solid ${tokens.colorNeutralStroke1}`,
     borderRadius: tokens.borderRadiusMedium,
     boxShadow: tokens.shadow8,
@@ -83,7 +83,7 @@ const useStyles = makeStyles({
   suggestionItem: {
     padding: '6px 12px',
     cursor: 'pointer',
-    ':hover': { background: tokens.colorNeutralBackground3 }
+    ':hover': { background: `var(--bm-surface-3, ${tokens.colorNeutralBackground3})` }
   },
   historyRow: {
     display: 'flex',
@@ -93,15 +93,15 @@ const useStyles = makeStyles({
     borderRadius: tokens.borderRadiusMedium,
     cursor: 'pointer',
     transition: 'background 0.15s ease',
-    ':hover': { background: tokens.colorNeutralBackground3 }
+    ':hover': { background: `var(--bm-surface-3, ${tokens.colorNeutralBackground3})` }
   },
   chip: {
     padding: '4px 12px',
     borderRadius: '999px',
-    background: tokens.colorNeutralBackground3,
+    background: `var(--bm-surface-3, ${tokens.colorNeutralBackground3})`,
     cursor: 'pointer',
     fontSize: tokens.fontSizeBase200,
-    ':hover': { background: tokens.colorNeutralBackground3Hover }
+    ':hover': { background: `var(--bm-surface-3h, ${tokens.colorNeutralBackground3Hover})` }
   },
   empty: {
     display: 'flex',

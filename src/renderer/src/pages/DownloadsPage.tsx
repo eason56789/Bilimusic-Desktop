@@ -42,7 +42,7 @@ const useStyles = makeStyles({
     padding: '8px 10px',
     borderRadius: tokens.borderRadiusMedium,
     transition: 'background 0.15s ease',
-    ':hover': { background: tokens.colorNeutralBackground3 }
+    ':hover': { background: `var(--bm-surface-3, ${tokens.colorNeutralBackground3})` }
   },
   meta: { flex: 1, minWidth: 0 },
   progressBox: { display: 'flex', flexDirection: 'column', gap: '4px', width: '220px' },

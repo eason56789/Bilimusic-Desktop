@@ -84,7 +84,7 @@ const useStyles = makeStyles({
     minWidth: 0,
     cursor: 'pointer',
     borderRadius: tokens.borderRadiusMedium,
-    ':hover': { background: tokens.colorNeutralBackground3Hover }
+    ':hover': { background: `var(--bm-surface-3h, ${tokens.colorNeutralBackground3Hover})` }
   },
   center: {
     display: 'flex',

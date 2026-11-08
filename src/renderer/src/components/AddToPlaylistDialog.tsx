@@ -32,7 +32,7 @@ const useStyles = makeStyles({
     padding: '8px 12px',
     borderRadius: tokens.borderRadiusMedium,
     cursor: 'pointer',
-    ':hover': { background: tokens.colorNeutralBackground3Hover }
+    ':hover': { background: `var(--bm-surface-3h, ${tokens.colorNeutralBackground3Hover})` }
   }
 })
 

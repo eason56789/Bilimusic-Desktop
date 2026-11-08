@@ -39,7 +39,7 @@ const useStyles = makeStyles({
     fontSize: tokens.fontSizeBase200,
     padding: '3px 12px',
     borderRadius: '999px',
-    background: tokens.colorNeutralBackground3,
+    background: `var(--bm-surface-3, ${tokens.colorNeutralBackground3})`,
     color: tokens.colorNeutralForeground2
   },
   desc: {

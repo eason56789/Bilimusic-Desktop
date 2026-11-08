@@ -93,7 +93,7 @@ const useStyles = makeStyles({
     fontSize: tokens.fontSizeBase300,
     textAlign: 'left',
     cursor: 'default',
-    ':hover': { background: tokens.colorNeutralBackground3 }
+    ':hover': { background: `var(--bm-surface-3, ${tokens.colorNeutralBackground3})` }
   },
   catItemActive: {
     background: tokens.colorBrandBackground2,
@@ -1037,7 +1037,7 @@ export function SettingsPage() {  const styles = useStyles()
                 padding: '8px 10px',
                 borderRadius: tokens.borderRadiusMedium,
                 border: `1px solid ${tokens.colorNeutralStroke1}`,
-                background: tokens.colorNeutralBackground2,
+                background: `var(--bm-surface-2, ${tokens.colorNeutralBackground2})`,
                 color: tokens.colorNeutralForeground1
               }}
             />

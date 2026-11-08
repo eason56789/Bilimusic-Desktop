@@ -58,10 +58,10 @@ const useStyles = makeStyles({
     borderRadius: tokens.borderRadiusMedium,
     cursor: 'default',
     transition: 'background 0.15s ease',
-    ':hover': { background: tokens.colorNeutralBackground3 }
+    ':hover': { background: `var(--bm-surface-3, ${tokens.colorNeutralBackground3})` }
   },
   rowActive: {
-    background: tokens.colorNeutralBackground3
+    background: `var(--bm-surface-3, ${tokens.colorNeutralBackground3})`
   },
   meta: {
     flex: 1,

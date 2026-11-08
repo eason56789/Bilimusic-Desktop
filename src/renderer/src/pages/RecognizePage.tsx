@@ -41,7 +41,7 @@ const useStyles = makeStyles({
     gap: '18px',
     padding: '48px 24px',
     borderRadius: tokens.borderRadiusXLarge,
-    backgroundColor: tokens.colorNeutralBackground2,
+    backgroundColor: `var(--bm-surface-2, ${tokens.colorNeutralBackground2})`,
     border: `1px solid ${tokens.colorNeutralStroke2}`
   },
   micRing: {
@@ -76,7 +76,7 @@ const useStyles = makeStyles({
     cursor: 'pointer',
     transition: 'background 0.15s ease, opacity 0.15s ease',
     ':hover': {
-      background: tokens.colorNeutralBackground4,
+      background: `var(--bm-surface-4, ${tokens.colorNeutralBackground4})`,
       opacity: 0.88
     },
     ':active': { opacity: 0.72 }
@@ -113,7 +113,7 @@ const useStyles = makeStyles({
     gap: '16px',
     padding: '16px 20px',
     borderRadius: tokens.borderRadiusLarge,
-    backgroundColor: tokens.colorNeutralBackground1,
+    backgroundColor: `var(--bm-surface-1, ${tokens.colorNeutralBackground1})`,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     width: '100%',
     maxWidth: '520px',
@@ -124,7 +124,7 @@ const useStyles = makeStyles({
     width: '260px',
     height: '4px',
     borderRadius: '2px',
-    backgroundColor: tokens.colorNeutralBackground4,
+    backgroundColor: `var(--bm-surface-4, ${tokens.colorNeutralBackground4})`,
     overflow: 'hidden'
   },
   progressFill: {

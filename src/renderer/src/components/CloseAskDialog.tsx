@@ -32,12 +32,12 @@ const useStyles = makeStyles({
     padding: '14px 14px 12px',
     borderRadius: tokens.borderRadiusLarge,
     border: `1px solid ${tokens.colorNeutralStroke1}`,
-    background: tokens.colorNeutralBackground1,
+    background: `var(--bm-surface-1, ${tokens.colorNeutralBackground1})`,
     cursor: 'pointer',
     textAlign: 'left',
     ':hover': {
       boxShadow: `0 0 0 1px ${tokens.colorBrandStroke1}`,
-      background: tokens.colorNeutralBackground1Hover
+      background: `var(--bm-surface-1h, ${tokens.colorNeutralBackground1Hover})`
     }
   },
   choiceIcon: {

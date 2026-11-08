@@ -7,7 +7,7 @@ const useStyles = makeStyles({
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
-    background: `linear-gradient(135deg, ${tokens.colorNeutralBackground4}, ${tokens.colorNeutralBackground6})`,
+    background: `linear-gradient(135deg, ${`var(--bm-surface-4, ${tokens.colorNeutralBackground4})`}, ${`var(--bm-surface-6, ${tokens.colorNeutralBackground6})`})`,
     color: tokens.colorNeutralForeground3
   },
   img: {
