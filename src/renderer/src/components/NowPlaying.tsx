@@ -1092,31 +1092,9 @@ export function NowPlaying() {
                         </MenuList>
                       </MenuPopover>
                     </Menu>
-                    <Menu>
-                      <MenuTrigger disableButtonEnhancement>
-                        <MenuItem icon={<GaugeRegular />}>倍速播放 ({rate}x)</MenuItem>
-                      </MenuTrigger>
-                      <MenuPopover>
-                        <MenuList>
-                          {[0.5, 0.75, 1, 1.25, 1.5, 2].map((r) => (
-                            <MenuItem
-                              key={r}
-                              icon={r === rate ? <CheckmarkRegular /> : undefined}
-                              onClick={() => useStore.getState().setPlaybackRate(r)}
-                            >
-                              {r}x {r === 1 ? '(正常)' : ''}
-                            </MenuItem>
-                          ))}
-                          <MenuDivider />
-                          <MenuItem icon={<MusicNote2Regular />} disabled>
-                            音调 {pitch > 0 ? '+' : ''}{pitch} 半音
-                          </MenuItem>
-                          <MenuItem onClick={() => useStore.getState().stepPitch(-1)}>降半音</MenuItem>
-                          <MenuItem onClick={() => useStore.getState().setPitch(0)}>还原原调</MenuItem>
-                          <MenuItem onClick={() => useStore.getState().stepPitch(1)}>升半音</MenuItem>
-                        </MenuList>
-                      </MenuPopover>
-                    </Menu>
+                    <MenuItem icon={<GaugeRegular />} onClick={() => setDlg('ratePitch')}>
+                      倍速与音调 ({rate}x, {pitch === 0 ? '原调' : `${pitch > 0 ? '+' : ''}${pitch}半音`})
+                    </MenuItem>
                     <MenuItem icon={<SettingsRegular />} onClick={() => setDlg('eq')}>
                       均衡器
                     </MenuItem>

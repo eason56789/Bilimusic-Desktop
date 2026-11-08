@@ -34,6 +34,7 @@ export type DialogKey =
   | 'lyricOffset'
   | 'queue'
   | 'eq'
+  | 'ratePitch'
   | 'source'
   | 'sleep'
 
@@ -83,6 +84,25 @@ function getAudio(): HTMLAudioElement {
     audio.crossOrigin = 'anonymous'
   }
   return audio
+}
+
+/**
+ * 统一应用倍速 + 音调:
+ *   最终速率 = 倍速 × 2^(半音/12)
+ *   preservePitch(保持音调)只在不做手工移调时生效;一旦有半音偏移,
+ *   音高必然随速率变化(浏览器没有独立变调,只能走 tape 式)。
+ */
+function applyRatePitch(
+  el: HTMLAudioElement,
+  rate: number,
+  semitones: number,
+  preservePitch: boolean
+): void {
+  el.playbackRate = rate * Math.pow(2, semitones / 12)
+  const keep = semitones === 0 ? preservePitch : false
+  const pp = el as HTMLAudioElement & { preservesPitch?: boolean; webkitPreservesPitch?: boolean }
+  pp.preservesPitch = keep
+  pp.webkitPreservesPitch = keep
 }
 
 /** 音频图:source → EQ链 → 频谱分析 → 喇叭(频谱可视化 + 均衡器共用) */
@@ -219,6 +239,8 @@ interface PlayerState {
   setPlaybackRate(rate: number): void
   /** 设置音调(半音,-12~+12);0=原调 */
   setPitch(semitones: number): void
+  /** 音调是否随倍速变化(false = 保持音调) */
+  setPreservePitch(keep: boolean): void
   /** 升降 n 个半音 */
   stepPitch(delta: number): void
   playAt(index: number): void
@@ -375,10 +397,7 @@ export const useStore = create<PlayerState>((set, get) => {
       // 音调优先:有升降调时用 tape 变速移调(关闭 pitch 保持),否则按倍速+保持音调
       const semi = st?.pitchSemitones ?? 0
       const baseRate = st?.playbackRate ?? 1
-      el.playbackRate = semi !== 0 ? baseRate * Math.pow(2, semi / 12) : baseRate
-      const pitch = semi !== 0 ? false : (st?.preservePitch ?? true)
-      ;(el as HTMLAudioElement & { preservesPitch?: boolean }).preservesPitch = pitch
-      ;(el as HTMLAudioElement & { webkitPreservesPitch?: boolean }).webkitPreservesPitch = pitch
+      applyRatePitch(el, baseRate, semi, st?.preservePitch ?? true)
       // 建立音频图(频谱可视化 + 均衡器)
       if (st) ensureEqChain(st)
       try {
@@ -1207,17 +1226,18 @@ export const useStore = create<PlayerState>((set, get) => {
     },
 
     setPlaybackRate(rate) {
-      const semi = get().library?.settings.pitchSemitones ?? 0
-      const el = getAudio()
-      // 与音调叠加:rate 最终 = 倍速 × 2^(半音/12)
-      el.playbackRate = semi !== 0 ? rate * Math.pow(2, semi / 12) : rate
-      if (semi === 0) {
-        const pp = el as HTMLAudioElement & { preservesPitch?: boolean; webkitPreservesPitch?: boolean }
-        const keep = get().library?.settings.preservePitch ?? true
-        pp.preservesPitch = keep
-        pp.webkitPreservesPitch = keep
-      }
+      const st = get().library?.settings
+      const semi = st?.pitchSemitones ?? 0
+      const keep = st?.preservePitch ?? true
+      applyRatePitch(getAudio(), rate, semi, keep)
       get().updateSetting('playbackRate', rate)
+    },
+
+    /** 音调是否随倍速变化(true = 变调不变速的相反,即升速升调) */
+    setPreservePitch(keep) {
+      const st = get().library?.settings
+      applyRatePitch(getAudio(), st?.playbackRate ?? 1, st?.pitchSemitones ?? 0, keep)
+      get().updateSetting('preservePitch', keep)
     },
 
     /**
@@ -1228,13 +1248,10 @@ export const useStore = create<PlayerState>((set, get) => {
      * 倍速设置与音调相互独立:最终 rate = 倍速 × 2^(半音/12)。
      */
     setPitch(semitones) {
-      const n = Math.max(-12, Math.min(12, Math.round(semitones)))
-      const el = getAudio()
-      const base = get().library?.settings.playbackRate ?? 1
-      el.playbackRate = base * Math.pow(2, n / 12)
-      const pp = el as HTMLAudioElement & { preservesPitch?: boolean; webkitPreservesPitch?: boolean }
-      pp.preservesPitch = false
-      pp.webkitPreservesPitch = false
+      // 无极调节:保留一位小数,范围 -12 ~ +12 半音
+      const n = Math.max(-12, Math.min(12, Math.round(semitones * 10) / 10))
+      const st = get().library?.settings
+      applyRatePitch(getAudio(), st?.playbackRate ?? 1, n, st?.preservePitch ?? true)
       void get().updateSetting('pitchSemitones', n)
     },
 

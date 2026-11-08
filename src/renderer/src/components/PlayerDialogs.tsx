@@ -863,6 +863,77 @@ export function LyricReplaceDialog({
   )
 }
 
+
+/** 倍速与音调:两者都无极调节;可切换音调是否随倍速变化 */
+export function RatePitchDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const rate = useStore((s) => s.library?.settings.playbackRate ?? 1)
+  const semis = useStore((s) => s.library?.settings.pitchSemitones ?? 0)
+  const preservePitch = useStore((s) => s.library?.settings.preservePitch ?? true)
+  const setRate = useStore((s) => s.setPlaybackRate)
+  const setPitch = useStore((s) => s.setPitch)
+  const setPreserve = useStore((s) => s.setPreservePitch)
+
+  const rateText = rate === 1 ? '正常' : `${rate.toFixed(2).replace(/0+$/, '').replace(/.$/, '')}x`
+  const pitchText = semis === 0 ? '原调' : `${semis > 0 ? '+' : ''}${semis.toFixed(1)} 半音`
+
+  return (
+    <Dialog open={open} onOpenChange={(_, d) => !d.open && onClose()}>
+      <DialogSurface style={{ maxWidth: 520, width: '90vw' }}>
+        <DialogBody>
+          <DialogTitle>倍速与音调</DialogTitle>
+          <DialogContent>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
+              <Text weight="semibold">播放倍速</Text>
+              <Text size={400} weight="semibold">{rateText}</Text>
+            </div>
+            <Slider
+              min={0.25}
+              max={2.5}
+              step={0.05}
+              value={rate}
+              onChange={(_, d) => setRate(d.value)}
+            />
+            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', margin: '4px 0 18px' }}>
+              {[0.5, 0.75, 1, 1.25, 1.5, 2].map((r) => (
+                <Button key={r} size="small" appearance={Math.abs(rate - r) < 0.001 ? 'primary' : 'subtle'} onClick={() => setRate(r)}>
+                  {r}x
+                </Button>
+              ))}
+            </div>
+
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
+              <Text weight="semibold">音调</Text>
+              <Text size={400} weight="semibold">{pitchText}</Text>
+            </div>
+            <Slider
+              min={-12}
+              max={12}
+              step={0.1}
+              value={semis}
+              onChange={(_, d) => setPitch(d.value)}
+            />
+            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', margin: '4px 0 14px' }}>
+              {[-12, -6, -1, -0.5, 0, 0.5, 1, 6, 12].map((v) => (
+                <Button key={v} size="small" appearance={Math.abs(semis - v) < 0.001 ? 'primary' : 'subtle'} onClick={() => setPitch(v)}>
+                  {v === 0 ? '原调' : `${v > 0 ? '+' : ''}${v}`}
+                </Button>
+              ))}
+            </div>
+
+            <Switch
+              checked={!preservePitch}
+              label="音调随倍速变化"
+              onChange={(_, d) => setPreserve(!d.checked)}
+            />
+            <Text size={200} style={{ color: tokens.colorNeutralForeground3, display: 'block', marginTop: 4 }}>
+              关闭时变速保持音调(默认);手动调过音调后按音调偏移生效。
+            </Text>
+          </DialogContent>
+        </DialogBody>
+      </DialogSurface>
+    </Dialog>
+  )
+}
 /** 歌词偏移 */
 export function LyricOffsetDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
   const offset = useStore((s) => s.library?.settings.lyricOffsetMs ?? 0)

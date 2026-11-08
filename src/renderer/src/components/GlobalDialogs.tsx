@@ -27,6 +27,7 @@ import {
   LyricOffsetDialog,
   QueueDialog,
   EqDialog,
+  RatePitchDialog,
   SourceSwitchDialog
 } from './PlayerDialogs'
 
@@ -308,6 +309,7 @@ export function GlobalDialogs() {
       <LyricOffsetDialog open={dlg === 'lyricOffset'} onClose={() => setDlg(null)} />
       <QueueDialog open={dlg === 'queue'} onClose={() => setDlg(null)} />
       <EqDialog open={dlg === 'eq'} onClose={() => setDlg(null)} />
+      <RatePitchDialog open={dlg === 'ratePitch'} onClose={() => setDlg(null)} />
       <SourceSwitchDialog song={target} open={dlg === 'source'} onClose={() => setDlg(null)} />
       <SleepTimerDialog open={dlg === 'sleep'} onClose={() => setDlg(null)} />
     </>
