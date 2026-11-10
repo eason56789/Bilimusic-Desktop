@@ -53,8 +53,13 @@ let audio: HTMLAudioElement | null = null
 let audioContext: AudioContext | null = null
 let eqNodes: BiquadFilterNode[] = []
 let analyserNode: AnalyserNode | null = null
-/** 变调节点:用 playbackRate 变速后,用 detune 把音高拉回目标半音 */
-let pitchSource: AudioBufferSourceNode | null = null
+/** 独立变调节点(AudioWorklet 延迟线移调):只移调不动速度 */
+let sourceNode: MediaElementAudioSourceNode | null = null
+let pitchNode: AudioWorkletNode | null = null
+let pitchReady = false
+let pitchFailed = false
+/** 工作点未就绪期间暂存的目标比率,就绪后自动补上 */
+let pendingPitchRatio = 1
 let triedHtml5For: string | null = null
 /** 最近一次播放位置(秒):突发中断重试时续播用(如流断了/超时,不能从头放) */
 let lastKnownPos = 0
@@ -86,11 +91,25 @@ function getAudio(): HTMLAudioElement {
   return audio
 }
 
+/** 半音 → 移调比率 */
+const semisToRatio = (semis: number) => Math.pow(2, semis / 12)
+
+/** 下发移调比率到 worklet;未就绪则暂存 */
+function sendPitchRatio(ratio: number): void {
+  if (pitchNode) {
+    pitchNode.port.postMessage(ratio)
+  } else {
+    pendingPitchRatio = ratio
+  }
+}
+
 /**
  * 统一应用倍速 + 音调:
- *   最终速率 = 倍速 × 2^(半音/12)
- *   preservePitch(保持音调)只在不做手工移调时生效;一旦有半音偏移,
- *   音高必然随速率变化(浏览器没有独立变调,只能走 tape 式)。
+ *   倍速 → el.playbackRate(纯速度);
+ *   音调 → worklet 移调(纯音高,速度不变);worklet 不可用时退回 tape 式
+ *   (音调乘进 playbackRate,速度随之变化——旧行为,至少可听)。
+ * preservePitch 语义 = 「音调是否随倍速变化」的开关:开(不保持)时把音调
+ * 比率乘进倍速一起变(随速度升降),关(保持)时音调固定不动。
  */
 function applyRatePitch(
   el: HTMLAudioElement,
@@ -98,15 +117,39 @@ function applyRatePitch(
   semitones: number,
   preservePitch: boolean
 ): void {
-  el.playbackRate = rate * Math.pow(2, semitones / 12)
-  const keep = semitones === 0 ? preservePitch : false
+  const manual = Math.abs(semitones) > 0.001
+  const ratio = semisToRatio(semitones)
+  let speed = rate
+  let pitchRatio = 1
+  if (manual) {
+    if (pitchReady) {
+      pitchRatio = preservePitch ? 1 : ratio  // 不保持:音调随速度走(并入倍速)
+      speed = preservePitch ? rate : rate * ratio
+      // 保持:worklet 独立移调;不保持:直接并进速度,worklet 直通
+    } else if (!pitchFailed) {
+      // worklet 还没就绪:先按保持音调的纯速度播放,就绪后 sendPitchRatio 补上
+      speed = preservePitch ? rate : rate * ratio
+      pitchRatio = 1
+      if (!preservePitch) pendingPitchRatio = 1
+    } else {
+      // worklet 初始化失败:退回 tape 式(音调乘速度)
+      speed = rate * ratio
+      pitchRatio = 1
+    }
+  } else {
+    speed = rate
+    pitchRatio = 1
+  }
+  el.playbackRate = Math.max(0.0625, Math.min(16, speed))
+  sendPitchRatio(pitchRatio)
   const pp = el as HTMLAudioElement & { preservesPitch?: boolean; webkitPreservesPitch?: boolean }
-  pp.preservesPitch = keep
-  pp.webkitPreservesPitch = keep
+  // 走 worklet 移调时,浏览器的"保持音调"重采样是多余的(它和移调叠加会二次校正);tape 模式下必须关掉它
+  pp.preservesPitch = manual && pitchReady ? true : preservePitch
+  pp.webkitPreservesPitch = manual && pitchReady ? true : preservePitch
 }
 
-/** 音频图:source → EQ链 → 频谱分析 → 喇叭(频谱可视化 + 均衡器共用) */
-function ensureEqChain(settings: Settings): void {
+/** 音频图:source → 变调(AudioWorklet) → EQ链 → 频谱分析 → 喇叭 */
+async function ensureEqChain(settings: Settings): Promise<void> {
   if (audioContext) {
     eqNodes.forEach((n, i) => {
       n.gain.value = settings.eqEnabled ? (settings.eqGains[i] ?? 0) : 0
@@ -117,6 +160,31 @@ function ensureEqChain(settings: Settings): void {
     const el = getAudio()
     const ctx = new AudioContext()
     const source = ctx.createMediaElementSource(el)
+    sourceNode = source
+    // 变调节点:异步装载,装载完成前数据原样直通(worklet 未连接时输入直接进 EQ)。
+    // worklet 必须以同源文件方式装载(Electron CSP 拒绝 Blob/data URL);
+    // new URL 相对 import.meta.url 解析,dev(http)与打包(file://)都指向正确路径。
+    try {
+      const workletUrl = new URL('../public/pitch-worklet.js', import.meta.url).href
+      await ctx.audioWorklet.addModule(workletUrl)
+      const node = new AudioWorkletNode(ctx, 'bm-pitch', { outputChannelCount: [2] })
+      source.connect(node)
+      pitchNode = node
+      pitchReady = true
+      if (pendingPitchRatio !== 1) {
+        node.port.postMessage(pendingPitchRatio)
+        pendingPitchRatio = 1
+      }
+      // 就绪后按当前设置重新应用一次(可能等模块期间设置已变)
+      const st = get().library?.settings
+      if (st) applyRatePitch(el, st.playbackRate ?? 1, st.pitchSemitones ?? 0, st.preservePitch ?? true)
+    } catch (e) {
+      console.warn('pitch worklet init failed, tape fallback', e)
+      pitchFailed = true
+      pitchReady = false
+      // 失败也要接上链路:source 直连 EQ
+    }
+    const head: AudioNode = pitchNode ?? source
     const nodes = EQ_FREQS.map((freq, i) => {
       const node = ctx.createBiquadFilter()
       node.type = i === 0 ? 'lowshelf' : i === EQ_FREQS.length - 1 ? 'highshelf' : 'peaking'
@@ -125,7 +193,7 @@ function ensureEqChain(settings: Settings): void {
       node.gain.value = settings.eqEnabled ? (settings.eqGains[i] ?? 0) : 0
       return node
     })
-    let prev: AudioNode = source
+    let prev: AudioNode = head
     for (const node of nodes) {
       prev.connect(node)
       prev = node
@@ -140,11 +208,15 @@ function ensureEqChain(settings: Settings): void {
     audioContext = ctx
     eqNodes = nodes
     analyserNode = an
+    void sourceNode
   } catch (e) {
     console.warn('EQ init failed', e)
     audioContext = null
     eqNodes = []
     analyserNode = null
+    pitchNode = null
+    pitchReady = false
+    pitchFailed = true
   }
 }
 
@@ -244,6 +316,8 @@ interface PlayerState {
   /** 升降 n 个半音 */
   stepPitch(delta: number): void
   playAt(index: number): void
+  /** 队列内拖拽排序(from -> to);不改变当前播放 */
+  moveInQueue(from: number, to: number): void
   removeFromQueue(index: number): void
   clearQueue(): void
   /** 用一首歌替换队列当前曲目并播放(换源等场景) */
@@ -398,8 +472,8 @@ export const useStore = create<PlayerState>((set, get) => {
       const semi = st?.pitchSemitones ?? 0
       const baseRate = st?.playbackRate ?? 1
       applyRatePitch(el, baseRate, semi, st?.preservePitch ?? true)
-      // 建立音频图(频谱可视化 + 均衡器)
-      if (st) ensureEqChain(st)
+      // 建立音频图(变调 + 频谱可视化 + 均衡器);异步装载不阻塞播放起播
+      if (st) void ensureEqChain(st)
       try {
         await el.play()
         // play() 是异步的:等它 resolve 期间用户可能已经点了下一首,需再判一次
@@ -1189,9 +1263,13 @@ export const useStore = create<PlayerState>((set, get) => {
     },
 
     async updateSetting(key, value) {
-      const settings = await api.librarySetSetting(key, value)
+      // 先本地乐观更新再落盘:一次操作里连改多项(如重置倍速+音调)时,
+      // 后一项读 settings 不会读到前一项的旧值
       const lib = get().library
-      if (lib) set({ library: { ...lib, settings } })
+      if (lib) set({ library: { ...lib, settings: { ...lib.settings, [key]: value } } })
+      const settings = await api.librarySetSetting(key, value)
+      const lib2 = get().library
+      if (lib2) set({ library: { ...lib2, settings } })
     },
 
     async resetSettings(sections?: string[]) {
@@ -1208,6 +1286,20 @@ export const useStore = create<PlayerState>((set, get) => {
       triedHtml5For = null
       set({ queueIndex: index })
       void startPlayback(queue[index])
+    },
+
+    /** 队列内拖拽排序:trackIndex 跟随移动,当前曲的 index 保持指向同一首歌 */
+    moveInQueue(from, to) {
+      const { queue, queueIndex } = get()
+      if (from === to || from < 0 || to < 0 || from >= queue.length || to >= queue.length) return
+      const q = [...queue]
+      const [moved] = q.splice(from, 1)
+      q.splice(to, 0, moved)
+      let ni = queueIndex
+      if (from === queueIndex) ni = to
+      else if (from < queueIndex && to >= queueIndex) ni = queueIndex - 1
+      else if (from > queueIndex && to <= queueIndex) ni = queueIndex + 1
+      set({ queue: q, queueIndex: ni })
     },
 
     removeFromQueue(index) {
@@ -1286,7 +1378,8 @@ export const useStore = create<PlayerState>((set, get) => {
 /** 应用均衡器增益(设置变化时调用) */
 export function applyEqSettings(settings: Settings): void {
   if (settings.eqEnabled && !audioContext) {
-    ensureEqChain(settings)
+    void ensureEqChain(settings)
+    return
   }
   eqNodes.forEach((n, i) => {
     n.gain.value = settings.eqEnabled ? (settings.eqGains[i] ?? 0) : 0

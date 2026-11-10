@@ -1093,7 +1093,7 @@ export function NowPlaying() {
                       </MenuPopover>
                     </Menu>
                     <MenuItem icon={<GaugeRegular />} onClick={() => setDlg('ratePitch')}>
-                      倍速与音调 ({rate}x, {pitch === 0 ? '原调' : `${pitch > 0 ? '+' : ''}${pitch}半音`})
+                      倍速与音调 ({parseFloat(rate.toFixed(2))}x, {Math.abs(pitch) < 0.05 ? '原调' : `${parseFloat((2 ** (pitch / 12)).toFixed(2))}x`})
                     </MenuItem>
                     <MenuItem icon={<SettingsRegular />} onClick={() => setDlg('eq')}>
                       均衡器

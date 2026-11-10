@@ -164,6 +164,16 @@ function createWindow(): void {
     mainWindow.loadFile(join(__dirname, '../renderer/index.html'))
   }
 
+  // 开发模式:渲染进程 console 转发到主进程 stdout,便于无人值守调试
+  if (process.env.ELECTRON_RENDERER_URL) {
+    mainWindow.webContents.on('console-message', (_e, level, message, line, sourceId) => {
+      const tag = ['LOG', 'WARN', 'ERROR'][level] ?? String(level)
+      if (message.includes('[Lumiere]') || message.includes('[Hanabi]') || message.includes('[Sonnet]') || level >= 2) {
+        console.log(`[renderer:${tag}] ${message} (${sourceId}:${line})`)
+      }
+    })
+  }
+
   mainWindow.on('closed', () => {
     mainWindow = null
     // 主窗口关闭即退出(悬浮窗随之销毁),避免后台留一个无主小窗

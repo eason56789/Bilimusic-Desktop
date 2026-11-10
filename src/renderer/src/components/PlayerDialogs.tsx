@@ -27,6 +27,7 @@ import {
   DeleteRegular,
   DismissRegular,
   InfoRegular,
+  LocationRegular,
   PlayRegular,
   SearchRegular
 } from '@fluentui/react-icons'
@@ -864,7 +865,14 @@ export function LyricReplaceDialog({
 }
 
 
-/** 倍速与音调:两者都无极调节;可切换音调是否随倍速变化 */
+/** 音调半音 <-> 倍率换算:1x=原调,2x=升八度(存储仍是半音,老数据无缝兼容) */
+const semisToPitch = (semis: number) => Math.pow(2, semis / 12)
+const pitchToSemis = (pitch: number) => 12 * Math.log2(pitch)
+
+/** 数值文案:去掉多余的 0(1.25x / 1.5x / 2x) */
+const fmtX = (v: number) => `${parseFloat(v.toFixed(2))}x`
+
+/** 倍速与音调:居中对称排版,倍速 0.25~2x,音调 0.5~2x(1x=原调) */
 export function RatePitchDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
   const rate = useStore((s) => s.library?.settings.playbackRate ?? 1)
   const semis = useStore((s) => s.library?.settings.pitchSemitones ?? 0)
@@ -873,62 +881,74 @@ export function RatePitchDialog({ open, onClose }: { open: boolean; onClose: () 
   const setPitch = useStore((s) => s.setPitch)
   const setPreserve = useStore((s) => s.setPreservePitch)
 
-  const rateText = rate === 1 ? '正常' : `${rate.toFixed(2).replace(/0+$/, '').replace(/.$/, '')}x`
-  const pitchText = semis === 0 ? '原调' : `${semis > 0 ? '+' : ''}${semis.toFixed(1)} 半音`
+  const pitch = semisToPitch(semis)
 
   return (
     <Dialog open={open} onOpenChange={(_, d) => !d.open && onClose()}>
-      <DialogSurface style={{ maxWidth: 520, width: '90vw' }}>
+      <DialogSurface style={{ maxWidth: 420, width: '90vw' }}>
         <DialogBody>
           <DialogTitle>倍速与音调</DialogTitle>
-          <DialogContent>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
-              <Text weight="semibold">播放倍速</Text>
-              <Text size={400} weight="semibold">{rateText}</Text>
+          <DialogContent style={{ textAlign: 'center' }}>
+            {/* 播放倍速 */}
+            <div style={{ fontSize: 32, fontWeight: 600, lineHeight: '40px', marginTop: 4 }}>
+              {fmtX(rate)}
             </div>
+            <Text size={200} style={{ color: tokens.colorNeutralForeground3, display: 'block', marginBottom: 10 }}>
+              播放倍速
+            </Text>
             <Slider
               min={0.25}
-              max={2.5}
+              max={2}
               step={0.05}
-              value={rate}
+              value={Math.min(2, Math.max(0.25, rate))}
               onChange={(_, d) => setRate(d.value)}
             />
-            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', margin: '4px 0 18px' }}>
-              {[0.5, 0.75, 1, 1.25, 1.5, 2].map((r) => (
-                <Button key={r} size="small" appearance={Math.abs(rate - r) < 0.001 ? 'primary' : 'subtle'} onClick={() => setRate(r)}>
-                  {r}x
-                </Button>
-              ))}
+            <div style={{ display: 'flex', justifyContent: 'space-between', margin: '2px 0 16px', color: tokens.colorNeutralForeground3, fontSize: tokens.fontSizeBase200 }}>
+              <span>0.25x</span><span>1x</span><span>2x</span>
             </div>
 
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
-              <Text weight="semibold">音调</Text>
-              <Text size={400} weight="semibold">{pitchText}</Text>
+            {/* 音调 */}
+            <div style={{ fontSize: 32, fontWeight: 600, lineHeight: '40px' }}>
+              {Math.abs(semis) < 0.05 ? '原调' : fmtX(pitch)}
             </div>
-            <Slider
-              min={-12}
-              max={12}
-              step={0.1}
-              value={semis}
-              onChange={(_, d) => setPitch(d.value)}
-            />
-            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', margin: '4px 0 14px' }}>
-              {[-12, -6, -1, -0.5, 0, 0.5, 1, 6, 12].map((v) => (
-                <Button key={v} size="small" appearance={Math.abs(semis - v) < 0.001 ? 'primary' : 'subtle'} onClick={() => setPitch(v)}>
-                  {v === 0 ? '原调' : `${v > 0 ? '+' : ''}${v}`}
-                </Button>
-              ))}
-            </div>
-
-            <Switch
-              checked={!preservePitch}
-              label="音调随倍速变化"
-              onChange={(_, d) => setPreserve(!d.checked)}
-            />
-            <Text size={200} style={{ color: tokens.colorNeutralForeground3, display: 'block', marginTop: 4 }}>
-              关闭时变速保持音调(默认);手动调过音调后按音调偏移生效。
+            <Text size={200} style={{ color: tokens.colorNeutralForeground3, display: 'block', marginBottom: 10 }}>
+              音调
             </Text>
+            <Slider
+              min={0.5}
+              max={2}
+              step={0.05}
+              value={Math.min(2, Math.max(0.5, pitch))}
+              onChange={(_, d) => setPitch(pitchToSemis(d.value))}
+            />
+            <div style={{ display: 'flex', justifyContent: 'space-between', margin: '2px 0 20px', color: tokens.colorNeutralForeground3, fontSize: tokens.fontSizeBase200 }}>
+              <span>0.5x</span><span>原调</span><span>2x</span>
+            </div>
+
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: 10,
+                paddingTop: 12,
+                borderTop: `1px solid ${tokens.colorNeutralStroke2}`
+              }}
+            >
+              <Switch checked={!preservePitch} label="音调随倍速变化" onChange={(_, d) => setPreserve(!d.checked)} />
+            </div>
           </DialogContent>
+          <DialogActions>
+            <Button
+              onClick={() => {
+                setRate(1)
+                setPitch(0)
+              }}
+            >
+              重置
+            </Button>
+            <Button appearance="primary" onClick={onClose}>完成</Button>
+          </DialogActions>
         </DialogBody>
       </DialogSurface>
     </Dialog>
@@ -986,22 +1006,58 @@ export function LyricOffsetDialog({ open, onClose }: { open: boolean; onClose: (
   )
 }
 
-/** 播放队列抽屉 */
+/** 播放队列抽屉:拖拽排序 + 双击定位当前曲 + 剩余时长统计 */
 export function QueueDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
   const styles = useStyles()
   const queue = useStore((s) => s.queue)
   const queueIndex = useStore((s) => s.queueIndex)
+  const moveInQueue = useStore((s) => s.moveInQueue)
+
+  const listRef = useRef<HTMLDivElement>(null)
+  const [dragFrom, setDragFrom] = useState<number | null>(null)
+  const [dragOver, setDragOver] = useState<number | null>(null)
+
   const { playAt, removeFromQueue, clearQueue } = useStore.getState()
+
+  /** 剩余时长:当前曲从头到尾;当前未播放时为整表 */
+  const remainSec = useMemo(
+    () => queue.slice(Math.max(queueIndex, 0)).reduce((acc, s) => acc + (s.duration || 0), 0),
+    [queue, queueIndex]
+  )
+
+  /** 打开时把当前曲滚进视野(仅首次展开,列表变动不抢滚动条) */
+  const didScroll = useRef(false)
+  useEffect(() => {
+    if (open && !didScroll.current && queueIndex >= 0) {
+      didScroll.current = true
+      requestAnimationFrame(() => {
+        listRef.current?.querySelector('[data-qi="1"]')?.scrollIntoView({ block: 'center' })
+      })
+    }
+    if (!open) didScroll.current = false
+  }, [open, queueIndex])
+
+  const endDrag = () => {
+    setDragFrom(null)
+    setDragOver(null)
+  }
 
   return (
     <Dialog open={open} onOpenChange={(_, d) => !d.open && onClose()}>
-      <DialogSurface style={{ width: 420, maxWidth: '92vw', height: '100%', maxHeight: '100%', borderRadius: 0 }}>
+      <DialogSurface style={{ width: 430, maxWidth: '92vw', height: '100%', maxHeight: '100%', borderRadius: 0 }}>
         <DialogBody style={{ height: '100%' }}>
           <DialogTitle>
             当前播放 ({queue.length})
           </DialogTitle>
           <DialogContent style={{ height: '100%', overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
-            <div className={styles.list} style={{ flex: 1, maxHeight: 'none' }}>
+            <div
+              className={styles.muted}
+              style={{ flexShrink: 0, marginBottom: 6, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}
+            >
+              <span>拖动歌曲排序,点击播放</span>
+              <span>剩余 {formatTime(remainSec)}</span>
+            </div>
+            <div ref={listRef} className={styles.list} style={{ flex: 1, maxHeight: 'none', position: 'relative' }}>
               {queue.length === 0 && (
                 <div className={styles.center}>
                   <Text style={{ color: tokens.colorNeutralForeground3 }}>队列为空</Text>
@@ -1009,11 +1065,38 @@ export function QueueDialog({ open, onClose }: { open: boolean; onClose: () => v
               )}
               {queue.map((s, i) => {
                 const active = i === queueIndex
+                const isDragging = dragFrom === i
+                const isOver = dragOver === i && dragFrom !== null && dragFrom !== i
                 return (
                   <div
                     key={`${s.id}-${i}`}
+                    data-qi={active ? '1' : undefined}
                     className={styles.row}
-                    style={{ cursor: 'pointer', ...(active ? { background: `var(--bm-surface-3, ${tokens.colorNeutralBackground3})` } : {}) }}
+                    draggable
+                    onDragStart={(e) => {
+                      setDragFrom(i)
+                      e.dataTransfer.effectAllowed = 'move'
+                    }}
+                    onDragOver={(e) => {
+                      e.preventDefault()
+                      e.dataTransfer.dropEffect = 'move'
+                      setDragOver(i)
+                    }}
+                    onDrop={(e) => {
+                      e.preventDefault()
+                      if (dragFrom !== null && dragFrom !== i) moveInQueue(dragFrom, i)
+                      endDrag()
+                    }}
+                    onDragEnd={endDrag}
+                    style={{
+                      cursor: 'grab',
+                      opacity: isDragging ? 0.4 : 1,
+                      borderTop: isOver
+                        ? `2px solid ${tokens.colorBrandForeground1}`
+                        : '2px solid transparent',
+                      marginTop: isOver ? -2 : 0,
+                      ...(active ? { background: `var(--bm-surface-3, ${tokens.colorNeutralBackground3})` } : {})
+                    }}
                     onClick={() => playAt(i)}
                   >
                     <span style={{ width: 24, color: active ? tokens.colorBrandForeground1 : tokens.colorNeutralForeground3, textAlign: 'center', flexShrink: 0 }}>
@@ -1035,6 +1118,24 @@ export function QueueDialog({ open, onClose }: { open: boolean; onClose: () => v
                       </Text>
                       <span className={styles.muted}>{s.artist}</span>
                     </div>
+                    <span className={styles.muted} style={{ flexShrink: 0, alignSelf: 'center', fontSize: tokens.fontSizeBase200 }}>
+                      {formatTime(s.duration)}
+                    </span>
+                    {active && (
+                      <Tooltip content="定位到当前播放" relationship="label">
+                        <Button
+                          appearance="subtle"
+                          size="small"
+                          icon={<LocationRegular />}
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            listRef.current
+                              ?.querySelector('[data-qi="1"]')
+                              ?.scrollIntoView({ block: 'center', behavior: 'smooth' })
+                          }}
+                        />
+                      </Tooltip>
+                    )}
                     <Button
                       appearance="subtle"
                       size="small"
