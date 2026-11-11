@@ -33,6 +33,7 @@ import type { Song } from '@shared/types'
 import { useStore } from '../store'
 import { Cover } from './Cover'
 import { AddToPlaylistDialog } from './AddToPlaylistDialog'
+import { useRevealGroup } from '../lib/RevealList'
 import { api } from '../lib/api'
 import { pagesToSongs } from '../lib/pages'
 import { badgeOf } from '../lib/sourceBadge'
@@ -185,6 +186,11 @@ export function SongList({
   const ctxAnchorRef = useRef<HTMLSpanElement>(null)
   const [selMode, setSelMode] = useState(false)
   const [selected, setSelected] = useState<Set<string>>(new Set())
+  /**
+   * 逐项入场。这里不传滚动容器:页面各处的滚动区不在本组件内,
+   * 而 root=null 时浏览器会把中间滚动容器的裁剪一并算进去,判定依然准确。
+   */
+  const reveal = useRevealGroup()
 
   useEffect(() => {
     if (!selMode) return
@@ -386,7 +392,9 @@ export function SongList({
           return (
             <div
               key={`${song.id}-${i}`}
-              className={`song-row ${styles.row} ${active ? styles.rowActive : ''}`}
+              ref={(n) => reveal.register(n, i, `${song.id}-${i}`)}
+              data-bm-reveal=""
+              className={`song-row ${styles.row} ${active ? `${styles.rowActive} bm-row-playing` : ''}`}
               style={selMode && checked ? { background: tokens.colorBrandBackground2 } : undefined}
               onClick={selMode ? () => toggleSel(song.id) : () => playNow(i)}
               onContextMenu={selMode ? undefined : (e) => onRowContextMenu(e, song, i)}

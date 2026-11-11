@@ -55,6 +55,7 @@ import { SongList } from '../components/SongList'
 import { AddToPlaylistDialog } from '../components/AddToPlaylistDialog'
 import { Cover } from '../components/Cover'
 import { formatCount } from '../lib/format'
+import { useRevealGroup } from '../lib/RevealList'
 import { toastError, toastSuccess } from '../lib/toast'
 
 const useStyles = makeStyles({
@@ -173,6 +174,8 @@ export function SearchPage() {
   const [srcPreviewImporting, setSrcPreviewImporting] = useState(false)
   /** 音源加载中:预览页的播放键同样要屏蔽 */
   const playerLoading = useStore((s) => s.loading)
+  /** 推荐位/结果网格的逐项入场(搜索页各处网格共用一组) */
+  const reveal = useRevealGroup()
   const searchTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const lastQuery = useRef('')
   const userPickedSource = useRef(false)
@@ -990,9 +993,11 @@ export function SearchPage() {
                   </Text>
                 </div>
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: 8, marginBottom: 8 }}>
-                  {recSongs.map((s) => (
+                  {recSongs.map((s, i) => (
                     <div
                       key={s.id}
+                    ref={(n) => reveal.register(n, i, String(s.id))}
+                    data-bm-reveal=""
                       className={styles.chip}
                       style={{ display: 'flex', gap: 10, alignItems: 'center', padding: 8, borderRadius: 10, boxSizing: 'border-box', cursor: 'pointer' }}
                       onClick={() => playQueue([...recSongs], recSongs.indexOf(s))}
@@ -1027,9 +1032,11 @@ export function SearchPage() {
             </div>
             {recList.length > 0 ? (
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: 12 }}>
-                {recList.map((p) => (
+                {recList.map((p, i) => (
                   <div
                     key={p.id}
+                    ref={(n) => reveal.register(n, i, String(p.id))}
+                    data-bm-reveal=""
                     className={styles.chip}
                     style={{ display: 'flex', gap: 12, alignItems: 'center', padding: 10, borderRadius: 12, boxSizing: 'border-box', cursor: 'pointer' }}
                     onClick={() => openPlaylistPreview(p)}
@@ -1214,9 +1221,11 @@ export function SearchPage() {
             )}
             {nePlaylists.length > 0 ? (
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: 12 }}>
-                {nePlaylists.map((p) => (
+                {nePlaylists.map((p, i) => (
                   <div
                     key={p.id}
+                    ref={(n) => reveal.register(n, i, String(p.id))}
+                    data-bm-reveal=""
                     className={styles.chip}
                     style={{ display: 'flex', gap: 12, alignItems: 'center', padding: 12, borderRadius: 12, boxSizing: 'border-box' }}
                     onClick={() => openPlaylistPreview(p)}
@@ -1274,9 +1283,11 @@ export function SearchPage() {
             )}
             {qqPlaylists.length > 0 ? (
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: 12 }}>
-                {qqPlaylists.map((p) => (
+                {qqPlaylists.map((p, i) => (
                   <div
                     key={p.id}
+                    ref={(n) => reveal.register(n, i, String(p.id))}
+                    data-bm-reveal=""
                     className={styles.chip}
                     style={{ display: 'flex', gap: 12, alignItems: 'center', padding: 12, borderRadius: 12, boxSizing: 'border-box' }}
                     onClick={() => void openSourcePreview({ kind: 'playlist', platform: 'qq', brief: p })}
@@ -1314,9 +1325,11 @@ export function SearchPage() {
             )}
             {qqArtists.length > 0 ? (
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: 12 }}>
-                {qqArtists.map((a) => (
+                {qqArtists.map((a, i) => (
                   <div
                     key={a.id}
+                    ref={(n) => reveal.register(n, i, String(a.id))}
+                    data-bm-reveal=""
                     className={styles.chip}
                     style={{ display: 'flex', flexDirection: 'column', gap: 8, alignItems: 'center', padding: 16, borderRadius: 12, boxSizing: 'border-box' }}
                     onClick={() => useStore.getState().openArtistPage('qq', a.id)}
@@ -1385,9 +1398,11 @@ export function SearchPage() {
             )}
             {kgPlaylists.length > 0 ? (
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: 12 }}>
-                {kgPlaylists.map((p) => (
+                {kgPlaylists.map((p, i) => (
                   <div
                     key={p.id}
+                    ref={(n) => reveal.register(n, i, String(p.id))}
+                    data-bm-reveal=""
                     className={styles.chip}
                     style={{ display: 'flex', gap: 12, alignItems: 'center', padding: 12, borderRadius: 12, boxSizing: 'border-box' }}
                     onClick={() => void openSourcePreview({ kind: 'playlist', platform: 'kugou', brief: p })}
@@ -1425,9 +1440,11 @@ export function SearchPage() {
             )}
             {kgArtists.length > 0 ? (
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: 12 }}>
-                {kgArtists.map((a) => (
+                {kgArtists.map((a, i) => (
                   <div
                     key={a.id}
+                    ref={(n) => reveal.register(n, i, String(a.id))}
+                    data-bm-reveal=""
                     className={styles.chip}
                     style={{ display: 'flex', flexDirection: 'column', gap: 8, alignItems: 'center', padding: 16, borderRadius: 12, boxSizing: 'border-box' }}
                     onClick={() => useStore.getState().openArtistPage('kugou', a.id)}
@@ -1461,9 +1478,11 @@ export function SearchPage() {
             )}
             {neArtists.length > 0 ? (
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: 12 }}>
-                {neArtists.map((a) => (
+                {neArtists.map((a, i) => (
                   <div
                     key={a.id}
+                    ref={(n) => reveal.register(n, i, String(a.id))}
+                    data-bm-reveal=""
                     className={styles.chip}
                     style={{ display: 'flex', flexDirection: 'column', gap: 8, alignItems: 'center', padding: 16, borderRadius: 12, boxSizing: 'border-box' }}
                     onClick={() => openArtistDetail(a)}

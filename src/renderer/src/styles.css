@@ -6,6 +6,44 @@ body,
   overflow: hidden;
 }
 
+/* ==================================================================
+   设计层:半径 / 高度(阴影) / 动效变量
+   深色主题下阴影要更暗更散,否则在白底上成立的层次在深底上会发灰。
+   ================================================================== */
+:root {
+  --bm-r-sm: 8px;
+  --bm-r-md: 12px;
+  --bm-r-lg: 16px;
+  --bm-r-xl: 22px;
+
+  /* 高度阶梯:三级柔和投影 */
+  --bm-e1: 0 1px 2px rgba(0, 0, 0, 0.06), 0 2px 8px rgba(0, 0, 0, 0.05);
+  --bm-e2: 0 2px 4px rgba(0, 0, 0, 0.07), 0 6px 18px rgba(0, 0, 0, 0.08);
+  --bm-e3: 0 4px 10px rgba(0, 0, 0, 0.09), 0 14px 38px rgba(0, 0, 0, 0.13);
+
+  /* 动效变量默认值(applyMotionVars 会覆盖;此处用于首帧与极端兜底) */
+  --bm-mo-on: 1;
+  --bm-mo-dur-item: 420ms;
+  --bm-mo-dur-page-in: 300ms;
+  --bm-mo-dur-page-out: 180ms;
+  --bm-mo-dur-hover: 160ms;
+  --bm-mo-dur-cover: 260ms;
+  --bm-mo-stagger: 36ms;
+  --bm-mo-lift: 10px;
+  --bm-mo-blur: 6px;
+  --bm-mo-delay: 0ms;
+
+  /* 统一缓动族(与既有页面切换曲线保持同一手感) */
+  --bm-ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --bm-ease-in-out: cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+html[data-bm-theme='dark'] {
+  --bm-e1: 0 1px 2px rgba(0, 0, 0, 0.3), 0 2px 8px rgba(0, 0, 0, 0.28);
+  --bm-e2: 0 2px 6px rgba(0, 0, 0, 0.36), 0 8px 22px rgba(0, 0, 0, 0.34);
+  --bm-e3: 0 6px 14px rgba(0, 0, 0, 0.42), 0 18px 46px rgba(0, 0, 0, 0.46);
+}
+
 /* 玻璃模式:页面背景透明,让窗口材质透出 */
 html,
 body {
@@ -63,14 +101,105 @@ button:active:not(:disabled) {
     transform: scale(1);
   }
 }
+/* 退场:与入场同一族曲线,时长更短(退场要快,否则拖沓) */
+@keyframes page-fade-out {
+  to {
+    opacity: 0;
+  }
+}
+@keyframes page-slide-out {
+  to {
+    opacity: 0;
+    transform: translateX(-18px);
+  }
+}
+@keyframes page-scale-out {
+  to {
+    opacity: 0;
+    transform: scale(0.985);
+  }
+}
 .page-anim-fade {
-  animation: page-fade 0.26s cubic-bezier(0.16, 1, 0.3, 1);
+  animation: page-fade var(--bm-mo-dur-page-in) var(--bm-ease-out) both;
 }
 .page-anim-slide {
-  animation: page-slide 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+  animation: page-slide var(--bm-mo-dur-page-in) var(--bm-ease-out) both;
 }
 .page-anim-scale {
-  animation: page-scale 0.28s cubic-bezier(0.16, 1, 0.3, 1);
+  animation: page-scale var(--bm-mo-dur-page-in) var(--bm-ease-out) both;
+}
+.page-exit-fade {
+  animation: page-fade-out var(--bm-mo-dur-page-out) var(--bm-ease-in-out) both;
+}
+.page-exit-slide {
+  animation: page-slide-out var(--bm-mo-dur-page-out) var(--bm-ease-in-out) both;
+}
+.page-exit-scale {
+  animation: page-scale-out var(--bm-mo-dur-page-out) var(--bm-ease-in-out) both;
+}
+/* 退场中的旧页面叠在上层,不吃点击,避免与已挂载的新页面抢事件 */
+.page-leaving {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 3;
+}
+
+/* ============ 列表逐个入场(模糊淡入 + 上浮) ============ */
+/* 初始态由 [data-bm-reveal] 给;揭示后由 [data-revealed] 覆盖到终态。
+   off 档 --bm-mo-on=0 时直接无初始态,第一次渲染就是可见的。
+
+   注意:初始隐藏用 animation 而非纯静态声明 —— animation 会在 3s 后自动
+   进入终态(animation-fill-mode 结束后回到默认样式),即使 JS 因任何原因
+   没能标记 data-revealed,内容也不会被永久藏住。 */
+[data-bm-reveal]:not([data-revealed='true']) {
+  opacity: 0;
+  transform: translateY(var(--bm-mo-lift));
+  filter: blur(var(--bm-mo-blur));
+  will-change: opacity, transform, filter;
+  /* 兜底:3s 后强制可见(覆盖上面的初始态)。正常路径会在几十~几百 ms 内
+     就加上 data-revealed,不会走到这里。 */
+  animation: bm-reveal-failsafe 1ms linear 3s forwards;
+}
+@keyframes bm-reveal-failsafe {
+  to {
+    opacity: 1;
+    transform: none;
+    filter: none;
+  }
+}
+[data-bm-reveal][data-revealed='true'] {
+  opacity: 1;
+  transform: none;
+  filter: none;
+  transition:
+    opacity var(--bm-mo-dur-item) var(--bm-ease-out) var(--bm-mo-delay),
+    transform var(--bm-mo-dur-item) var(--bm-ease-out) var(--bm-mo-delay),
+    filter var(--bm-mo-dur-item) var(--bm-ease-out) var(--bm-mo-delay);
+  will-change: auto;
+}
+/* 关闭档:一行关掉,规避任何一帧隐藏 */
+html[data-bm-motion='off'] [data-bm-reveal] {
+  opacity: 1 !important;
+  transform: none !important;
+  filter: none !important;
+  transition: none !important;
+}
+
+/* ============ 封面渐显 ============ */
+.bm-cover-loading {
+  filter: blur(10px) saturate(0.6);
+  transform: scale(1.06);
+  opacity: 0.55;
+}
+.bm-cover-loaded {
+  filter: none;
+  transform: none;
+  opacity: 1;
+  transition:
+    filter var(--bm-mo-dur-cover) var(--bm-ease-out),
+    transform var(--bm-mo-dur-cover) var(--bm-ease-out),
+    opacity var(--bm-mo-dur-cover) var(--bm-ease-out);
 }
 
 /* ============ 全屏播放页开关动画 ============ */
@@ -152,18 +281,24 @@ button:active:not(:disabled) {
   }
 }
 
+/* 滚动条:平时近乎隐形,悬停在滚动区域内才显形 —— 减少视觉噪音 */
 *::-webkit-scrollbar {
-  width: 10px;
-  height: 10px;
+  width: 8px;
+  height: 8px;
 }
 *::-webkit-scrollbar-thumb {
-  background: rgba(128, 128, 128, 0.4);
-  border-radius: 5px;
+  background: rgba(128, 128, 128, 0.22);
+  border-radius: 4px;
   border: 2px solid transparent;
+  background-clip: content-box;
+  transition: background 0.2s ease;
+}
+*:hover::-webkit-scrollbar-thumb {
+  background: rgba(128, 128, 128, 0.45);
   background-clip: content-box;
 }
 *::-webkit-scrollbar-thumb:hover {
-  background: rgba(128, 128, 128, 0.7);
+  background: rgba(128, 128, 128, 0.72);
   background-clip: content-box;
 }
 *::-webkit-scrollbar-track {
@@ -519,4 +654,332 @@ body.bm-uibg .fui-DialogSurface {
    垂直滑杆(仅 EQ)在组件上以内联 width:auto 压回默认,避免轨道被横向拉长 */
 .fui-Slider {
   width: 100%;
+}
+
+/* ==================================================================
+   视觉重构层
+   全部以 body 下的类名/属性选择器覆盖,不改组件结构;
+   想整体回退只需删掉这一层,组件本身的 Griffel 样式仍完整。
+   ================================================================== */
+
+/* ---------- 侧边栏:胶囊导航 + 强调色指示条 ---------- */
+.bm-nav-tab {
+  position: relative;
+  border-radius: var(--bm-r-md) !important;
+  transition:
+    background var(--bm-mo-dur-hover) var(--bm-ease-out),
+    color var(--bm-mo-dur-hover) var(--bm-ease-out),
+    padding-left var(--bm-mo-dur-hover) var(--bm-ease-out);
+}
+/* 选中项的左侧强调色指示条:scaleY 弹入比 width 渐变更轻 */
+.bm-nav-tab::before {
+  content: '';
+  position: absolute;
+  left: 2px;
+  top: 50%;
+  width: 3px;
+  height: 18px;
+  margin-top: -9px;
+  border-radius: 2px;
+  background: var(--colorBrandBackground, #0f6cbd);
+  transform: scaleY(0);
+  opacity: 0;
+  transition:
+    transform 0.26s var(--bm-ease-out),
+    opacity 0.2s ease;
+  pointer-events: none;
+}
+.bm-nav-tab[aria-selected='true']::before {
+  transform: scaleY(1);
+  opacity: 1;
+}
+/* hover 时图标轻微右移,像被"拉"向内容区 */
+.bm-nav-tab svg {
+  transition: transform var(--bm-mo-dur-hover) var(--bm-ease-out);
+}
+.bm-nav-tab:hover svg {
+  transform: translateX(2px);
+}
+
+/* 侧边栏品牌区:挂载时轻微上浮淡入 */
+.bm-brand-in {
+  animation: bm-brand-in var(--bm-mo-dur-item) var(--bm-ease-out) both;
+}
+@keyframes bm-brand-in {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* ---------- 卡片:统一圆角/阴影 + 悬停抬升 ----------
+   .bm-card 有两种用法:直接挂在原生元素上,或作为 RevealItem 的 wrapper
+   包住 Fluent Card(Fluent 会丢弃外部 className)。后者需要让内层卡片撑满。 */
+.bm-card {
+  border-radius: var(--bm-r-lg) !important;
+  transition:
+    transform var(--bm-mo-dur-hover) var(--bm-ease-out),
+    box-shadow var(--bm-mo-dur-hover) var(--bm-ease-out);
+}
+/* wrapper 形态:作为 grid 直接子项,用 grid 而非 flex 撑满单元格。
+   flex 会让 wrapper 的交叉轴高度随内容走,与旁边的原生卡片高度不一致,行内出现错位。 */
+.bm-card:has(> .fui-Card) {
+  display: grid;
+  min-width: 0;
+}
+.bm-card > .fui-Card {
+  width: 100%;
+  height: 100%;
+  box-sizing: border-box;
+  /* 内层不再自己位移,抬升统一交给 wrapper */
+  transform: none !important;
+  border-radius: var(--bm-r-lg) !important;
+  box-shadow: var(--bm-e1) !important;
+  transition: box-shadow var(--bm-mo-dur-hover) var(--bm-ease-out);
+}
+.bm-card:hover {
+  transform: translateY(-3px);
+}
+.bm-card:hover > .fui-Card {
+  box-shadow: var(--bm-e3) !important;
+}
+/* 直接挂在原生元素上时自己出阴影 */
+.bm-card:not(:has(> .fui-Card)) {
+  box-shadow: var(--bm-e1);
+}
+.bm-card:not(:has(> .fui-Card)):hover {
+  box-shadow: var(--bm-e3);
+}
+/* 卡片内封面在悬停时轻微放大,由 .bm-card 统一带动。
+   封面自己的 transform 由 .bm-cover-* 管,这里排除掉,避免两处 scale 互相覆盖 */
+.bm-card img:not(.bm-cover-img) {
+  transition: transform 320ms var(--bm-ease-out);
+}
+.bm-card:hover img:not(.bm-cover-img) {
+  transform: scale(1.06);
+}
+
+/* ---------- 歌曲行:渐变悬停 + 播放中强调条 ---------- */
+.song-row {
+  position: relative;
+  border-radius: var(--bm-r-sm) !important;
+  transition:
+    background var(--bm-mo-dur-hover) var(--bm-ease-out),
+    box-shadow var(--bm-mo-dur-hover) var(--bm-ease-out);
+}
+/* 悬停底色交给 ::before 渐变,压掉 Griffel 的纯色 hover,避免两层叠加发浑 */
+.song-row:hover {
+  background: transparent !important;
+}
+/* 悬停底色从左侧淡淡铺开(比纯色块更轻) */
+.song-row::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: linear-gradient(
+    90deg,
+    var(--bm-surface-3h, rgba(128, 128, 128, 0.2)) 0%,
+    var(--bm-surface-3, rgba(128, 128, 128, 0.1)) 60%,
+    transparent 100%
+  );
+  opacity: 0;
+  transition: opacity var(--bm-mo-dur-hover) var(--bm-ease-out);
+  pointer-events: none;
+}
+.song-row:hover::before {
+  opacity: 1;
+}
+/* 行内容浮在渐变层之上 */
+.song-row > * {
+  position: relative;
+  z-index: 1;
+}
+/* 播放中的行:左侧 2px 强调条 + 呼吸光晕 */
+.song-row.bm-row-playing::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 50%;
+  width: 2px;
+  height: 60%;
+  margin-top: -30%;
+  border-radius: 2px;
+  background: var(--colorBrandBackground, #0f6cbd);
+  animation: bm-row-glow 2.4s ease-in-out infinite;
+  pointer-events: none;
+  z-index: 2;
+}
+@keyframes bm-row-glow {
+  0%,
+  100% {
+    opacity: 0.55;
+    box-shadow: 0 0 0 0 rgba(15, 108, 189, 0);
+  }
+  50% {
+    opacity: 1;
+    box-shadow: 0 0 10px 1px rgba(15, 108, 189, 0.45);
+  }
+}
+
+/* ---------- 播放条:悬浮岛 ---------- */
+/* 外层只负责留白,背景留空让页面透出,岛才有"浮起来"的观感;
+   若外层也用同一个玻璃色,两边会连成一片看不见边界。
+   padding 必须与侧边栏/内容区的边距同族,左右才会视觉对称。 */
+.bm-player-dock {
+  flex-shrink: 0;
+  box-sizing: border-box;
+  padding: 8px 12px 12px;
+  background: transparent;
+}
+.bm-player-island {
+  border-radius: var(--bm-r-xl) !important;
+  /* 去掉原通栏的上边框,改由 1px 细描边勾出岛形 */
+  border: 1px solid var(--colorNeutralStroke1) !important;
+  /* 岛面比外侧略亮一档,才有层次 */
+  background: var(--bm-surface-1h, var(--app-player-bg)) !important;
+  box-shadow: var(--bm-e3) !important;
+  overflow: hidden;
+  transition:
+    box-shadow var(--bm-mo-dur-hover) var(--bm-ease-out),
+    transform var(--bm-mo-dur-hover) var(--bm-ease-out);
+}
+/* ---------- 播放条:经典通栏(还原旧版) ---------- */
+/* 去掉留白与外描边,恢复成贴满窗口宽度的一条,只保留顶边分割线 */
+.bm-player-dock--classic {
+  padding: 0;
+}
+.bm-player-island--classic {
+  border: none !important;
+  border-top: 1px solid var(--colorNeutralStroke1) !important;
+  border-radius: 0 !important;
+  box-shadow: none !important;
+  background: var(--app-player-bg) !important;
+}
+
+/* 进度条填充走品牌色渐变 */
+.bm-progress-fill {
+  background: linear-gradient(
+    90deg,
+    var(--colorBrandBackground, #0f6cbd),
+    var(--colorBrandBackgroundHover, #2b88d8)
+  ) !important;
+  border-radius: 999px;
+}
+
+/* ---------- 焦点环:键盘可达性 ---------- */
+:focus-visible {
+  outline: 2px solid var(--colorBrandStroke1, #0f6cbd);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+/* Fluent 组件已自带焦点环,避免叠加成双圈 */
+.fui-Button:focus-visible,
+.fui-Tab:focus-visible {
+  outline: none;
+}
+
+/* ---------- 页头 ---------- */
+.bm-page-header {
+  animation: bm-header-in var(--bm-mo-dur-item) var(--bm-ease-out) both;
+}
+@keyframes bm-header-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.bm-header-icon {
+  border-radius: 14px !important;
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.12) inset,
+    0 4px 14px rgba(0, 0, 0, 0.16);
+}
+
+/* ---------- 弹层内列表:打开时一次性依次浮入 ---------- */
+.bm-float-in {
+  animation: bm-float-in var(--bm-mo-dur-item) var(--bm-ease-out) both;
+  animation-delay: var(--bm-mo-delay, 0ms);
+}
+@keyframes bm-float-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+    filter: blur(4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+    filter: none;
+  }
+}
+
+/* ============ 减少动效兜底:系统级设置时压掉本层所有位移/模糊 ============ */
+@media (prefers-reduced-motion: reduce) {
+  html:not([data-bm-motion='full']) .bm-card:hover,
+  html:not([data-bm-motion='full']) .bm-card:hover img {
+    transform: none;
+  }
+  .song-row.bm-row-playing::after {
+    animation: none;
+    opacity: 0.9;
+  }
+}
+
+/* ==================================================================
+   弹层内一次性错开入场
+   弹层打开时整列表可见,不需要滚动监听;用 nth-child 排延迟即可,
+   不写任何 inline style,也不会影响列表的拖拽/滚动逻辑。
+   ================================================================== */
+.bm-stagger-in > * {
+  animation: bm-float-in var(--bm-mo-dur-item) var(--bm-ease-out) both;
+}
+.bm-stagger-in > *:nth-child(1) { animation-delay: calc(var(--bm-mo-stagger) * 0); }
+.bm-stagger-in > *:nth-child(2) { animation-delay: calc(var(--bm-mo-stagger) * 1); }
+.bm-stagger-in > *:nth-child(3) { animation-delay: calc(var(--bm-mo-stagger) * 2); }
+.bm-stagger-in > *:nth-child(4) { animation-delay: calc(var(--bm-mo-stagger) * 3); }
+.bm-stagger-in > *:nth-child(5) { animation-delay: calc(var(--bm-mo-stagger) * 4); }
+.bm-stagger-in > *:nth-child(6) { animation-delay: calc(var(--bm-mo-stagger) * 5); }
+.bm-stagger-in > *:nth-child(7) { animation-delay: calc(var(--bm-mo-stagger) * 6); }
+.bm-stagger-in > *:nth-child(8) { animation-delay: calc(var(--bm-mo-stagger) * 7); }
+.bm-stagger-in > *:nth-child(9) { animation-delay: calc(var(--bm-mo-stagger) * 8); }
+.bm-stagger-in > *:nth-child(10) { animation-delay: calc(var(--bm-mo-stagger) * 9); }
+.bm-stagger-in > *:nth-child(11) { animation-delay: calc(var(--bm-mo-stagger) * 10); }
+.bm-stagger-in > *:nth-child(12) { animation-delay: calc(var(--bm-mo-stagger) * 11); }
+/* 第 13 项起不再递增,避免长队列的延迟累到好几秒 */
+.bm-stagger-in > *:nth-child(n + 13) { animation-delay: calc(var(--bm-mo-stagger) * 12); }
+
+/* 关闭档:一次性静态,不留任何延迟动画 */
+html[data-bm-motion='off'] .bm-stagger-in > * {
+  animation: none !important;
+}
+
+
+/* ==================================================================
+   Fluent tabster 焦点哨兵(<i data-tabster-dummy>)的布局修正
+   它们是 position:fixed 的 1×1 隐藏节点,但在 grid/flex 容器里仍算一个子项,
+   会把卡片挤到下一行(表现为"第一行只有一张卡 + 一大片空白")。
+   让它们彻底退出布局流。
+   ================================================================== */
+[data-tabster-dummy] {
+  /* 绝对定位的 grid/flex 子项不参与布局计算,这是让哨兵"消失但不失效"的关键。
+     它原本就是 position:fixed + 1×1,改成 absolute 后视觉上仍不可见。 */
+  position: absolute !important;
+  top: 0 !important;
+  left: 0 !important;
+  width: 0 !important;
+  height: 0 !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  border: 0 !important;
+  overflow: hidden !important;
+  pointer-events: none !important;
 }

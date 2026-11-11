@@ -441,7 +441,7 @@ export function PagesDialog({
           <DialogTitle>选择分P(共 {pages.length} 个)</DialogTitle>
           <DialogContent>
             {loading && <div className={styles.center}><Spinner /></div>}
-            <div className={styles.list}>
+            <div className={`${styles.list} bm-stagger-in`}>
               {pages.map((p) => {
                 const active = p.page === current.page
                 return (
@@ -951,7 +951,7 @@ export function LyricReplaceDialog({
               </Button>
             </div>
             {loading && <div className={styles.center}><Spinner /></div>}
-            <div className={styles.list}>
+            <div className={`${styles.list} bm-stagger-in`}>
               {results.map((s) => (
                 <div
                   key={s.id}
@@ -1585,7 +1585,7 @@ export function SourceSwitchDialog({
 
             {tab !== 'local' && loading && <div className={styles.center}><Spinner /></div>}
             {tab !== 'local' && !loading && (
-              <div className={styles.list} style={{ maxHeight: '320px' }}>
+              <div className={`${styles.list} bm-stagger-in`} style={{ maxHeight: '320px' }}>
                 {results.length === 0 && (
                   <div className={styles.center}>
                     <Text style={{ color: tokens.colorNeutralForeground3 }}>输入关键词搜索音源</Text>

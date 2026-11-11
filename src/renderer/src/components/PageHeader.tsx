@@ -37,10 +37,10 @@ export function PageHeader({
 }) {
   const styles = useStyles()
   return (
-    <div className={styles.header}>
-      <div className={styles.iconBox}>{icon}</div>
+    <div className={`${styles.header} bm-page-header`}>
+      <div className={`${styles.iconBox} bm-header-icon`}>{icon}</div>
       <div className={styles.titles}>
-        <Text size={600} weight="semibold">
+        <Text size={700} weight="semibold">
           {title}
         </Text>
         {subtitle ? (

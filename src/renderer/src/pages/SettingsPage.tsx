@@ -24,7 +24,7 @@ import {
   makeStyles,
   tokens
 } from '@fluentui/react-components'
-import { DeleteRegular, ColorRegular, InfoRegular, SettingsRegular, ArrowClockwiseRegular, SaveRegular, SearchRegular } from '@fluentui/react-icons'
+import { DeleteRegular, ColorRegular, InfoRegular, SettingsRegular, ArrowClockwiseRegular, SaveRegular, SearchRegular, ChevronDownRegular, ChevronUpRegular } from '@fluentui/react-icons'
 import { api } from '../lib/api'
 import { useStore, applyEqSettings, EQ_FREQS } from '../store'
 import { ACCENTS } from '../lib/theme'
@@ -32,6 +32,8 @@ import { BiliLoginDialog, NeteaseLoginDialog, KugouLoginDialog, QishuiLoginDialo
 import { PageLayout } from '../components/PageHeader'
 import { GithubLogo, BiliLogo } from '../components/BrandLogos'
 import { toastSuccess, toastError } from '../lib/toast'
+import { DEFAULT_FINE, computeDurations, normalizeFine, useMotionLevel } from '../lib/motion'
+import type { MotionFine } from '../lib/motion'
 import { TEMPERA_ENTER_OPTIONS } from '../lib/tempera'
 import type { DisguisePresetInfo, KugouPlatform, Settings } from '@shared/types'
 
@@ -192,6 +194,21 @@ function SectionTitle({ children }: { children: React.ReactNode }) {
 }
 
 /** 设置分区索引(供设置页顶部搜索过滤用) */
+/** 详细速率面板的通道定义:label/hint 给人看,actual 指向 computeDurations 的字段 */
+const FINE_CHANNELS: {
+  key: keyof MotionFine
+  label: string
+  hint: string
+  /** 该通道影响的实际时长字段(用于展示毫秒数) */
+  actual: 'item' | 'stagger' | 'pageIn' | 'hover' | 'cover'
+}[] = [
+  { key: 'list', label: '列表入场', hint: '每个列表项自身的淡入时长', actual: 'item' },
+  { key: 'stagger', label: '错开间隔', hint: '相邻项之间的延迟差', actual: 'stagger' },
+  { key: 'page', label: '页面过渡', hint: '切页的淡入与退场', actual: 'pageIn' },
+  { key: 'hover', label: '悬停反馈', hint: '按钮/卡片的即时响应', actual: 'hover' },
+  { key: 'cover', label: '封面渐显', hint: '封面由模糊到清晰', actual: 'cover' }
+]
+
 const SETTING_SECTIONS: { name: string; keywords: string }[] = [
   { name: '账号', keywords: '账号 登录 退出 b站 哔哩哔哩 bilibili 网易云 qq音乐 qq 酷狗 概念版 扫码 cookie 授权' },
   { name: '外观', keywords: '主题 深色 浅色 强调色 窗口材质 云母 亚克力 玻璃 不透明度 界面大小 密度 css 自定义样式 模块显隐 页面切换 动画 toast 轻提示' },
@@ -502,6 +519,22 @@ export function SettingsPage() {  const styles = useStyles()
 
   if (!library) return null
   const s = library.settings
+  /** 动画速率倍率(老配置可能没有该字段,按 1 处理) */
+  const speed = typeof s.motionSpeed === 'number' ? s.motionSpeed : 1
+  /** 分通道速率(规整缺字段/越界值) */
+  const fine: MotionFine = normalizeFine(s.motionFine)
+  /** 详细速率面板展开状态 */
+  const [fineOpen, setFineOpen] = useState(false)
+  /** 实际生效的档位(会被系统「减少动态效果」降级),用它算出来的毫秒数才与真实一致 */
+  const effectiveLevel = useMotionLevel()
+  /** 当前各通道实际时长 —— 与 applyMotionVars 共用同一份计算,显示值与真实生效严格一致 */
+  const computed = computeDurations(effectiveLevel, speed, fine)
+  /** 是否有通道偏离标准值 */
+  const fineDirty = FINE_CHANNELS.some((c) => Math.abs(fine[c.key] - 1) > 0.001)
+  /** 只改一个通道,其余保持不变(必须传完整对象:主进程按整体覆盖) */
+  const patchFine = (key: keyof MotionFine, value: number): void => {
+    void update('motionFine', { ...fine, [key]: value })
+  }
 
   // ===== 设置搜索:按关键词过滤分区 =====
   const q = query.trim().toLowerCase()
@@ -851,6 +884,166 @@ export function SettingsPage() {  const styles = useStyles()
             <Radio value="scale" label="缩放" />
           </RadioGroup>
         </div>
+
+        {/* 动效强度:一个总开关管住全应用的位移/模糊/错开入场 */}
+        <div className={styles.row}>
+          <Text size={300}>动效强度:</Text>
+          <RadioGroup
+            layout="horizontal"
+            value={s.motionLevel ?? 'full'}
+            onChange={(_, d) => update('motionLevel', d.value as Settings['motionLevel'])}
+          >
+            <Radio value="full" label="完整" />
+            <Radio value="calm" label="舒缓" />
+            <Radio value="off" label="关闭" />
+          </RadioGroup>
+        </div>
+        <Text size={200} style={{ color: tokens.colorNeutralForeground3, marginTop: -4 }}>
+          完整:列表逐项模糊淡入、页面缓入缓出、卡片悬停抬升。
+          舒缓:去掉模糊、位移减半,适合低配机或晕动敏感。
+          关闭:全局静止。系统「减少动态效果」开启时会自动按舒缓表现。
+        </Text>
+
+        {/* 动画速率:只改时间轴(时长/错开间隔),不改位移与模糊幅度 */}
+        <div className={styles.row} style={{ maxWidth: 460 }}>
+          <Text size={300} style={{ minWidth: 96 }}>
+            动画速率 {speed.toFixed(1)}×
+          </Text>
+          <Slider
+            min={0.5}
+            max={2}
+            step={0.1}
+            value={speed}
+            style={{ flex: 1 }}
+            disabled={s.motionLevel === 'off'}
+            onChange={(_, d) => update('motionSpeed', d.value)}
+          />
+          <Button
+            size="small"
+            appearance="subtle"
+            disabled={Math.abs(speed - 1) < 0.001}
+            onClick={() => update('motionSpeed', 1)}
+          >
+            复位
+          </Button>
+        </div>
+        <Text size={200} style={{ color: tokens.colorNeutralForeground3, marginTop: -4 }}>
+          1.0× 为标准速度。往右调更快(时长与列表错开间隔同步缩短),往左调更慢;
+          位移与模糊幅度不受影响。动效强度为「关闭」时此项不生效。
+        </Text>
+
+        {/* ===== 详细速率:按通道分别微调,并实时显示换算后的毫秒数 ===== */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 4 }}>
+          <Button
+            size="small"
+            appearance="subtle"
+            icon={fineOpen ? <ChevronUpRegular /> : <ChevronDownRegular />}
+            onClick={() => setFineOpen((v) => !v)}
+          >
+            {fineOpen ? '收起详细速率' : '详细速率调节'}
+          </Button>
+          <Text size={200} style={{ color: tokens.colorNeutralForeground3 }}>
+            按通道微调;数值为当前档位与全局速率换算后的实际时长
+          </Text>
+        </div>
+
+        {fineOpen && (
+          <div
+            style={{
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 10,
+              padding: '12px 14px',
+              borderRadius: 10,
+              background: tokens.colorNeutralBackground2,
+              maxWidth: 560
+            }}
+          >
+            {FINE_CHANNELS.map((ch) => {
+              const cur = fine[ch.key]
+              const actual = computed[ch.actual]
+              return (
+                <div key={ch.key} style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                  <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
+                    <Text size={300} style={{ minWidth: 82 }}>
+                      {ch.label}
+                    </Text>
+                    <Text size={200} style={{ color: tokens.colorNeutralForeground3 }}>
+                      {ch.hint}
+                    </Text>
+                    <div style={{ flex: 1 }} />
+                    <Text
+                      size={200}
+                      style={{
+                        fontVariantNumeric: 'tabular-nums',
+                        color: tokens.colorNeutralForeground2,
+                        minWidth: 56,
+                        textAlign: 'right'
+                      }}
+                    >
+                      {actual} ms
+                    </Text>
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <Slider
+                      min={0.5}
+                      max={2}
+                      step={0.1}
+                      value={cur}
+                      style={{ flex: 1 }}
+                      disabled={s.motionLevel === 'off'}
+                      onChange={(_, d) => patchFine(ch.key, d.value)}
+                    />
+                    <Text
+                      size={200}
+                      style={{
+                        minWidth: 42,
+                        textAlign: 'right',
+                        fontVariantNumeric: 'tabular-nums',
+                        color:
+                          Math.abs(cur - 1) < 0.001
+                            ? tokens.colorNeutralForeground3
+                            : tokens.colorBrandForeground1
+                      }}
+                    >
+                      {cur.toFixed(1)}×
+                    </Text>
+                  </div>
+                </div>
+              )
+            })}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 2 }}>
+              <Text size={200} style={{ color: tokens.colorNeutralForeground3, flex: 1 }}>
+                各通道 1.0× 表示只跟随全局速率;往右更快,往左更慢。
+              </Text>
+              <Button
+                size="small"
+                appearance="subtle"
+                disabled={!fineDirty}
+                onClick={() => update('motionFine', { ...DEFAULT_FINE })}
+              >
+                全部复位
+              </Button>
+            </div>
+          </div>
+        )}
+
+        {/* 播放条外观:悬浮岛 / 经典通栏 */}
+        <div className={styles.row}>
+          <Text size={300}>播放条外观:</Text>
+          <RadioGroup
+            layout="horizontal"
+            value={s.playerBarStyle ?? 'island'}
+            onChange={(_, d) => update('playerBarStyle', d.value as Settings['playerBarStyle'])}
+          >
+            <Radio value="island" label="悬浮岛" />
+            <Radio value="classic" label="经典通栏" />
+          </RadioGroup>
+        </div>
+        <Text size={200} style={{ color: tokens.colorNeutralForeground3, marginTop: -4 }}>
+          悬浮岛:两侧留白 + 圆角阴影,层次更轻。
+          经典通栏:贴满窗口宽度、顶部一条分割线,即旧版样式。
+        </Text>
 
         {/* ===== 轻提示(toast):出现位置 / 视觉样式 / 停留时长 / 图标 ===== */}
         <Text size={300} weight="semibold" style={{ marginTop: 6 }}>

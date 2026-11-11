@@ -88,7 +88,7 @@ export function AddToPlaylistDialog({
         <DialogBody>
           <DialogTitle>添加 {songs.length} 首歌曲到歌单</DialogTitle>
           <DialogContent>
-            <div className={styles.list}>
+            <div className={`${styles.list} bm-stagger-in`}>
               {library.playlists.map((p) => (
                 <div key={p.id} className={styles.item} onClick={() => add(p.id)}>
                   <span>{p.name}</span>

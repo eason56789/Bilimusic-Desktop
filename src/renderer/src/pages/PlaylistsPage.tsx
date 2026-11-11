@@ -55,6 +55,7 @@ import { SongList } from '../components/SongList'
 import { Cover } from '../components/Cover'
 import { PageLayout, PageHeader } from '../components/PageHeader'
 import { BiliLoginDialog, NeteaseLoginDialog } from '../components/LoginDialogs'
+import { RevealItem, useRevealGroup } from '../lib/RevealList'
 import { toastError, toastSuccess } from '../lib/toast'
 
 const useStyles = makeStyles({
@@ -594,6 +595,11 @@ export function PlaylistsPage() {
   const playQueue = useStore((s) => s.playQueue)
   const anim = useStore((s) => s.library?.settings.pageAnimation ?? 'scale')
   const animCls = anim !== 'none' ? `page-anim-${anim}` : undefined
+  /** 歌单网格逐项入场 */
+  const reveal = useRevealGroup()
+  /** 在线卡片分散在同一网格里渲染;每次渲染前归零,保证错开顺序从 0 起 */
+  const onlineSeqRef = useRef(0)
+  onlineSeqRef.current = 0
   const [selected, setSelected] = useState<Playlist | null>(null)
   const [createOpen, setCreateOpen] = useState(false)
   const [newName, setNewName] = useState('')
@@ -795,8 +801,14 @@ export function PlaylistsPage() {
       : undefined
     const busy = onlineImporting === key
     return (
-      <Card
+      <RevealItem
         key={`online-${key}`}
+        api={reveal}
+        index={onlineSeqRef.current++}
+        itemKey={key}
+        className="bm-card"
+      >
+      <Card
         className={styles.card}
         onClick={() => {
           if (localPl) {
@@ -842,6 +854,7 @@ export function PlaylistsPage() {
           {busy ? <Spinner size="tiny" /> : null}
         </div>
       </Card>
+      </RevealItem>
     )
   }
 
@@ -1522,9 +1535,10 @@ export function PlaylistsPage() {
           </div>
         </Card>
         )}
-        {visiblePlaylists.map((pl) => (
+        {visiblePlaylists.map((pl, i) => (
+          // Fluent Card 不透传 className/data-*,入场与视觉都放在外层 wrapper 上
+          <RevealItem key={pl.id} api={reveal} index={i} itemKey={pl.id} className="bm-card">
           <Card
-            key={pl.id}
             className={styles.card}
             onClick={() => setSelected(pl)}
             onContextMenu={(e) => onCardContextMenu(e, pl)}
@@ -1549,6 +1563,7 @@ export function PlaylistsPage() {
               </div>
             </div>
           </Card>
+          </RevealItem>
         ))}
 
         {/* B站在线条目:登录即出现,打开才拉数据 */}
@@ -1589,9 +1604,9 @@ export function PlaylistsPage() {
                 </div>
               </div>
             </Card>
-            {(biliFolders ?? []).map((f) => (
+            {(biliFolders ?? []).map((f, i) => (
+              <RevealItem key={`bili-fav-${f.id}`} api={reveal} index={100 + i} itemKey={`bili-${f.id}`} className="bm-card">
               <Card
-                key={`bili-fav-${f.id}`}
                 className={styles.card}
                 onClick={() =>
                   setRemoteView({ kind: 'fav', id: f.id, title: f.title, coverUrl: f.coverUrl, count: f.songCount })
@@ -1617,6 +1632,7 @@ export function PlaylistsPage() {
                   </div>
                 </div>
               </Card>
+              </RevealItem>
             ))}
             {biliFolders === null && (
               <div style={{ padding: 12 }}>
@@ -1782,7 +1798,7 @@ export function PlaylistsPage() {
                   <Spinner />
                 </div>
               ) : (
-                <div style={{ maxHeight: 320, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 4 }}>
+                <div className="bm-stagger-in" style={{ maxHeight: 320, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 4 }}>
                   {nePlaylists.map((p) => (
                     <div
                       key={p.id}
@@ -1820,7 +1836,7 @@ export function PlaylistsPage() {
                   <Spinner />
                 </div>
               ) : (
-                <div style={{ maxHeight: 320, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 4 }}>
+                <div className="bm-stagger-in" style={{ maxHeight: 320, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 4 }}>
                   {qqPlaylists.map((p) => (
                     <div
                       key={p.id}

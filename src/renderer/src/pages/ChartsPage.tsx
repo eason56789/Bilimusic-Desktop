@@ -16,6 +16,7 @@ import { api } from '../lib/api'
 import { useStore } from '../store'
 import { SongList } from '../components/SongList'
 import { Cover } from '../components/Cover'
+import { useRevealGroup } from '../lib/RevealList'
 import { toastError } from '../lib/toast'
 
 const useStyles = makeStyles({
@@ -120,6 +121,11 @@ export function ChartsPage() {
   // 目录与曲目各用一个计数器 —— 共用的话,目录完成后 setChartId 触发的曲目请求
   // 会把序号推高,导致目录的 finally 永远认不出自己而卡住 spinner。
   const catalogSeq = useRef(0)
+  /** 榜单目录逐项入场 */
+  const reveal = useRevealGroup()
+  /** 目录是分组渲染的,用递增序号维持跨组的错开顺序 */
+  const chartSeqRef = useRef(0)
+  chartSeqRef.current = 0
   const detailSeq = useRef(0)
 
   // 平台切换 → 拉目录,并自动选第一个榜
@@ -234,6 +240,8 @@ export function ChartsPage() {
                   <button
                     key={c.id}
                     type="button"
+                    ref={(n) => reveal.register(n, chartSeqRef.current++, c.id)}
+                    data-bm-reveal=""
                     className={`${styles.chartItem} ${c.id === chartId ? styles.chartItemActive : ''}`}
                     onClick={() => setChartId(c.id)}
                   >

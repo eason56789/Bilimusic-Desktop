@@ -106,6 +106,41 @@ export interface Settings {
   glassAlpha: number
   /** 页面切换动画 */
   pageAnimation: 'none' | 'fade' | 'slide' | 'scale'
+  /**
+   * 动效强度:
+   * - 'full' 完整(默认):全部动效,含模糊与位移
+   * - 'calm' 舒缓:去掉模糊、位移减半,适合低配机/晕动敏感
+   * - 'off'  关闭:全局静止,零动画开销
+   * 系统「减少动态效果」开启时,'full' 会自动按 'calm' 表现。
+   */
+  motionLevel: 'full' | 'calm' | 'off'
+  /**
+   * 动画速率倍率 0.5~2(1=标准)。
+   * 同时缩放所有动效的时长与错开间隔;只改时间轴,不改位移/模糊幅度。
+   */
+  motionSpeed: number
+  /**
+   * 分通道速率微调(各自 0.5~2,1=跟随全局)。
+   * 与 motionSpeed 相乘:最终时长 = 基准 × 档位 ÷ motionSpeed ÷ 通道值。
+   * - list:    列表单项入场时长
+   * - stagger: 相邻项错开间隔
+   * - page:    页面切换(进+出)
+   * - hover:   悬停/按压反馈
+   * - cover:   封面渐显
+   */
+  motionFine: {
+    list: number
+    stagger: number
+    page: number
+    hover: number
+    cover: number
+  }
+  /**
+   * 播放条外观:
+   * - 'island'  悬浮岛(默认):两侧留白 + 圆角 + 阴影
+   * - 'classic' 经典通栏:顶边一条细分隔线,贴满窗口宽度
+   */
+  playerBarStyle: 'island' | 'classic'
   /** 歌词偏移 ms,正值=歌词提前 */
   lyricOffsetMs: number
   /** 歌词对齐:居中 / 靠左(手机端样式) */

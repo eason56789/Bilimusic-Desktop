@@ -91,12 +91,15 @@ export function Cover({
   const styles = useStyles()
   const [failed, setFailed] = useState(false)
   const [src, setSrc] = useState(() => coverSrc(url, quality === 'thumb' ? size : undefined))
+  /** 图片是否已解码:未解码时用模糊低饱和占位,解码后过渡到清晰(封面渐显) */
+  const [loaded, setLoaded] = useState(false)
   // URL/quality 变化时重置(列表复用组件节点的场景)
   const [lastKey, setLastKey] = useState(`${url}|${quality}`)
   if (`${url}|${quality}` !== lastKey) {
     setLastKey(`${url}|${quality}`)
     setSrc(coverSrc(url, quality === 'thumb' ? size : undefined))
     setFailed(false)
+    setLoaded(false)
   }
   if (!src || failed) {
     return (
@@ -110,9 +113,10 @@ export function Cover({
   }
   return (
     <img
-      className={styles.img}
+      className={`${styles.img} bm-cover-img ${loaded ? 'bm-cover-loaded' : 'bm-cover-loading'}`}
       src={src}
       loading="lazy"
+      onLoad={() => setLoaded(true)}
       onError={() => {
         // 缩略图 CDN 规则失败 → 回退原图一次
         const raw = coverSrc(url, undefined)

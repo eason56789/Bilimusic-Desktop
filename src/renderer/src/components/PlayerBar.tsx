@@ -121,7 +121,7 @@ const useStyles = makeStyles({
   }
 })
 
-export function PlayerBar() {
+export function PlayerBar({ style = 'island' }: { style?: 'island' | 'classic' }) {
   const styles = useStyles()
   const current = useStore((s) => s.current)
   const playing = useStore((s) => s.playing)
@@ -198,7 +198,7 @@ export function PlayerBar() {
   }
 
   return (
-    <div className={styles.bar}>
+    <div className={`${styles.bar} bm-player-island bm-player-island--${style}`}>
       <div className={styles.progressRow}>
         <span className={styles.time}>{formatTime(position)}</span>
         <NiceSlider

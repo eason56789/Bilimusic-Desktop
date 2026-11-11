@@ -32,6 +32,7 @@ import { useStore } from '../store'
 import { Cover } from '../components/Cover'
 import { PageLayout } from '../components/PageHeader'
 import { AddToPlaylistDialog } from '../components/AddToPlaylistDialog'
+import { useRevealGroup } from '../lib/RevealList'
 import { toastSuccess } from '../lib/toast'
 
 const useStyles = makeStyles({
@@ -77,6 +78,8 @@ export function DownloadsPage() {
   const [addTarget, setAddTarget] = useState<Song[] | null>(null)
   const [ctx, setCtx] = useState<CtxState | null>(null)
   const ctxAnchorRef = useRef<HTMLSpanElement>(null)
+  /** 下载记录逐项入场 */
+  const reveal = useRevealGroup()
   if (!library) return null
 
   const records = library.downloads
@@ -214,9 +217,11 @@ export function DownloadsPage() {
           <Text size={300}>在搜索结果中点击下载按钮添加</Text>
         </div>
       ) : (
-        records.map((r) => (
+        records.map((r, i) => (
           <div
             key={r.id}
+            ref={(n) => reveal.register(n, i, r.id)}
+            data-bm-reveal=""
             className={`dl-row ${styles.row}`}
             onContextMenu={(e) => onRowContextMenu(e, r)}
             onClick={() => r.status === 'completed' && playLocal(r)}
