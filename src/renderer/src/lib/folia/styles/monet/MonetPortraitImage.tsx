@@ -1,6 +1,7 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { animate, motion, useMotionValue, type MotionValue } from 'framer-motion';
 import { progressSince } from '../../_missing/handoffProgress';
+import { httpsImageUrl } from '../../../imageUrl';
 import {
     dropLeavingMonetPortraitLayers,
     endMonetPortraitHandoff,
@@ -75,10 +76,13 @@ const MonetPortraitImage: React.FC<MonetPortraitImageProps> = ({ src, fadeMs = M
     const [layers, setLayers] = useState<MonetPortraitLayer[]>([]);
     const layerKeyRef = useRef(0);
     const progressRef = useRef(progress);
+    // CSP 只放行 https 图源(见 lib/imageUrl):在这里统一升级一次,
+    // 保证"解码用的 URL"和"叠上去的那一层 URL"是同一个,解码缓存不会被拆成两份
+    const safeSrc = src ? httpsImageUrl(src) : src;
     // The cover asked for, as the hand-off's end reads it: before the effects of the same commit.
-    const srcRef = useRef(src);
+    const srcRef = useRef(safeSrc);
     useLayoutEffect(() => {
-        srcRef.current = src;
+        srcRef.current = safeSrc;
     });
     useEffect(() => {
         progressRef.current = progress;
@@ -88,7 +92,7 @@ const MonetPortraitImage: React.FC<MonetPortraitImageProps> = ({ src, fadeMs = M
     }, [progress]);
 
     useEffect(() => {
-        if (!src) {
+        if (!safeSrc) {
             return undefined;
         }
         let cancelled = false;
@@ -99,14 +103,14 @@ const MonetPortraitImage: React.FC<MonetPortraitImageProps> = ({ src, fadeMs = M
             // One that decodes once the hand-off has come to its end fades in on the clock.
             const handoffAt = progressRef.current?.get();
             const along = handoffAt !== undefined && handoffAt < 1 ? Math.max(0, handoffAt) : undefined;
-            setLayers(current => pushMonetPortraitLayer(current, src, key, along));
+            setLayers(current => pushMonetPortraitLayer(current, safeSrc, key, along));
         };
 
         // Decoded on a detached element so the frame keeps showing the old cover until this one can
         // be painted whole. The rendered <img> below then hits the same decoded entry.
         const loader = new Image();
         loader.decoding = 'async';
-        loader.src = src;
+        loader.src = safeSrc;
         if (typeof loader.decode === 'function') {
             // A rejection is a cover that cannot be shown - a dead blob URL, a 404, a truncated
             // body. Swallowed on purpose: the stack is left as it is, which keeps the cover that is

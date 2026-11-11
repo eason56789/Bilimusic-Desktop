@@ -10,7 +10,7 @@ probe/
 .DS_Store
 Thumbs.db
 # 历史误建文件(文件名含反引号),永不入库
-{`r`n
+[{]`r`n
 
 # CLI 本地配置
 .zcode/

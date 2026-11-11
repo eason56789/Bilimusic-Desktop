@@ -26,6 +26,7 @@ import { getSongUrl } from './api/netease'
 import { getQqSongUrl } from './api/qqmusic'
 import { getKugouSongUrl } from './api/kugou'
 import { getAudioUrl as getQishuiAudioUrl } from './api/qishui'
+import { AUDIO_CACHE_MAX_BYTES, pruneAudioCacheDir } from './audioCache'
 import { getStore } from './store'
 
 let cacheDir = ''
@@ -117,9 +118,14 @@ async function handleBMedia(req: Request): Promise<Response> {
       const target = url.searchParams.get('url') ?? ''
       if (!target) return new Response('missing url', { status: 400 })
       if (!isAllowedProxyTarget(target)) return new Response('bad url', { status: 400 })
-      const resp = await fetch(target, {
-        headers: { 'User-Agent': 'Mozilla/5.0', Referer: 'https://www.bilibili.com/' }
-      })
+      const fetchHeaders = { 'User-Agent': 'Mozilla/5.0', Referer: 'https://www.bilibili.com/' }
+      let resp = await fetch(target, { headers: fetchHeaders })
+      // 渲染层为了绕开 CSP 已把 http 封面升级成 https(见 renderer/lib/imageUrl);
+      // 个别图床没有 https,主进程不受 CSP 约束,这里用原始 http 地址兜底再试一次。
+      if (!resp.ok && target.startsWith('https://')) {
+        const fallback = `http://${target.slice('https://'.length)}`
+        if (isAllowedProxyTarget(fallback)) resp = await fetch(fallback, { headers: fetchHeaders })
+      }
       const headers = corsHeaders({
         'Content-Type': resp.headers.get('content-type') ?? 'image/jpeg',
         'Cache-Control': 'public, max-age=86400'
@@ -501,18 +507,25 @@ async function prepareAudioInner(
     const cid = await getCidForPage(bvid, page)
     if (cid <= 0) throw new Error('no-cid')
     const suffix = page > 1 ? `_p${page}` : ''
-    const ext = html5Fallback ? 'mp4' : 'm4s'
-    const cachePath = join(cacheDir, `${bvid}${suffix}.${ext}`)
-    if (existsSync(cachePath) && statSync(cachePath).size > 10240) {
+    // 缓存命中不看后缀,两种都试:同一首以前可能走 html5 兜底存成 .mp4,现在默认走 DASH 纯音频,
+    // 只按当前后缀找会白跑一次下载。按 .m4s → .mp4 顺序取先命中的那个。
+    const cached = [`${bvid}${suffix}.m4s`, `${bvid}${suffix}.mp4`]
+      .map((n) => join(cacheDir, n))
+      .find((p) => existsSync(p) && statSync(p).size > 10240)
+    if (cached) {
       onProgress?.({ stage: 'done' })
       return {
-        url: `bmedia://local/?path=${encodeURIComponent(cachePath)}`,
-        cachePath,
-        quality: ext === 'mp4' ? '标准 128k' : 'B站音频'
+        url: `bmedia://local/?path=${encodeURIComponent(cached)}`,
+        cachePath: cached,
+        quality: cached.endsWith('.mp4') ? '标准 128k' : 'B站音频'
       }
     }
     const resolved = await resolvePlayUrl(bvid, cid, { preferHtml5: html5Fallback })
     if (!resolved) throw new Error('no-audio-url')
+    // 落盘后缀跟**真实容器**走,而不是跟"是不是 html5 兜底"走:
+    // durl / html5 拿到的是整段 MP4(视频轨 + 音频轨),只有 dashAudio 才是纯音频。
+    // 以前整段视频会被存成 .m4s,后缀与容器不符,后续按后缀判断容器必然出错。
+    const cachePath = join(cacheDir, `${bvid}${suffix}.${resolved.hasVideo ? 'mp4' : 'm4s'}`)
     // 取消后立刻退出:不再落到下面的"边播边代理",那样旧歌仍会占着流
     if (signal.aborted) throw new Error('aborted')
     const ok = await downloadToCache(
@@ -525,6 +538,13 @@ async function prepareAudioInner(
     if (signal.aborted) throw new Error('aborted')
     if (ok && existsSync(cachePath) && statSync(cachePath).size > 10240) {
       onProgress?.({ stage: 'done' })
+      // 落盘成功后顺手把缓存压回上限以内(原先只有手动清空,长期使用只增不减)
+      const pruned = pruneAudioCache()
+      if (pruned > 0) {
+        console.warn(
+          `[Audio] cache pruned ${pruned} file(s) to stay under ${Math.round(AUDIO_CACHE_MAX_BYTES / 1048576)}MB`
+        )
+      }
       return {
         url: `bmedia://local/?path=${encodeURIComponent(cachePath)}`,
         cachePath,
@@ -558,6 +578,14 @@ export function coverProxyUrl(cover: string | null | undefined): string | null {
   if (!cover) return null
   if (cover.startsWith('bmedia://') || cover.startsWith('data:')) return cover
   return `bmedia://img/?url=${encodeURIComponent(cover)}`
+}
+
+/**
+ * 把缓存压到上限以内。真正的淘汰实现在 audioCache.ts(纯 fs,可被脚本直接验证),
+ * 这里只负责把当前 cacheDir 传进去 —— audio.ts 顶层依赖 electron,不宜被测试脚本 import。
+ */
+export function pruneAudioCache(maxBytes = AUDIO_CACHE_MAX_BYTES): number {
+  return pruneAudioCacheDir(cacheDir, maxBytes)
 }
 
 export async function clearAudioCache(): Promise<number> {

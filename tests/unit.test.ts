@@ -1,6 +1,10 @@
 /**
  * 纯函数单元测试:同步增量 / 链接解析 / 分P构造
- * 运行:npx esbuild tests/unit.test.ts --bundle --platform=node --alias:@shared=./src/shared --outfile=tests/.out/unit.test.js && node tests/.out/unit.test.js
+ * 运行:npx esbuild tests/unit.test.ts --bundle --platform=node --alias:@shared=./src/shared --external:electron --outfile=tests/.out/unit.test.js && node tests/.out/unit.test.js
+ *
+ * 为什么必须带 --external:electron:import 链里会间接拉进 electron 包,包进产物后
+ * electron/index.js 读的是产物目录下的 path.txt,自然读不到,于是报
+ * "Electron failed to install correctly"(其实装得好好的)。把它留给 node 自己 require 即可。
  */
 import { computeSyncPlan } from '../src/main/syncDelta'
 import { parsePlaylistLink } from '../src/main/api/linkImport'
@@ -57,10 +61,23 @@ function eq(actual: unknown, expected: unknown, name: string): void {
   eq(p.added, 1, 'sync: 不完整 added=1')
 }
 {
-  // 5) 首次同步(无快照):全部视为手动,只增不删
+  // 5) 首次同步(无快照):只增不删;顺序以远端为准,手工加的歌整体留在末尾
   const p = computeSyncPlan(['manual'], [], ['x'], true)
-  eq(p.songIds, ['manual', 'x'], 'sync: 无快照保护已有歌')
+  eq(p.songIds, ['x', 'manual'], 'sync: 无快照保护已有歌(顺序跟远端)')
   eq(p.removed, 0, 'sync: 无快照不删')
+}
+{
+  // 6) 完整拉取:顺序必须跟远端一致(以前是"本地旧序 + 远端新增"拼接,顺序会被打乱)
+  const p = computeSyncPlan(['a', 'b', 'c'], ['a', 'b', 'c'], ['c', 'a', 'd'], true)
+  eq(p.songIds, ['c', 'a', 'd'], 'sync: 顺序跟随远端')
+  eq(p.added, 1, 'sync: 顺序跟随远端 added=1(d)')
+  eq(p.removed, 1, 'sync: 顺序跟随远端 removed=1(b 被源删掉)')
+}
+{
+  // 7) 自己额外加的歌排在远端之后,不因"远端没有"而被删
+  const p = computeSyncPlan(['a', 'mine'], ['a'], ['a', 'n'], true)
+  eq(p.songIds, ['a', 'n', 'mine'], 'sync: 手工歌保留在末尾')
+  eq(p.removed, 0, 'sync: 手工歌不删')
 }
 
 // ===== parsePlaylistLink =====
@@ -120,12 +137,13 @@ function eq(actual: unknown, expected: unknown, name: string): void {
   eq(parsePlaylistLink('https://y.qq.com/n/ryqq/songDetail/003'), null, 'parse: QQ歌曲链接拒绝')
   eq(
     parsePlaylistLink('https://www.kugou.com/yy/#/playlist?id=1199981095'),
-    { platform: 'kugou', id: '1199981095' },
+    // specialId 不是多余字段:概念版歌单要靠它去取列表(见 linkImport 的 fetchKugouCollectionPlaylist)
+    { platform: 'kugou', id: '1199981095', specialId: '1199981095' },
     'parse: 酷狗 web 歌单'
   )
   eq(
     parsePlaylistLink('https://www.kugou.com/yy/special/single/9277467.html'),
-    { platform: 'kugou', id: '9277467' },
+    { platform: 'kugou', id: '9277467', specialId: '9277467' },
     'parse: 酷狗 special 分享链接(实测形态)'
   )
   eq(

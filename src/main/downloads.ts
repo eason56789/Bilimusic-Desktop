@@ -65,10 +65,11 @@ async function resolveDownloadUrl(
     const page = song.page || pageFromSongId(song.id)
     const cid = await getCidForPage(bvid, page)
     if (cid <= 0) return null
-    // 优先 DASH 纯音频(文件小)
+    // 优先 DASH 纯音频(文件小)。后缀按真实容器定:durl / html5 是整段 MP4(含视频轨),
+    // 用 fragmented 判断会把"有视频轨的 durl"误标成 m4a,下载列表里显示的体积也会对不上。
     const resolved = await resolvePlayUrl(bvid, cid)
     if (!resolved) return null
-    const ext = resolved.fragmented ? 'm4a' : 'mp4'
+    const ext = resolved.hasVideo ? 'mp4' : 'm4a'
     return { url: resolved.url, referer: 'https://www.bilibili.com/', ext }
   }
   // LOCAL 无远程地址:由 processOne 直接复制文件,不走网络下载

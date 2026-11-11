@@ -1,5 +1,6 @@
 import type { MonetBackgroundImage, MonetBackgroundTuning, Theme } from '../../bridge';
 import type { MonetBackgroundPaintReply, MonetBackgroundPaintRequest } from './monetBackground.worker';
+import { httpsImageUrl } from '../../../imageUrl';
 
 // src/components/visualizer/monet/monetBackgroundPipeline.ts
 // Builds and caches the static Monet poster background so the visualizer only recomputes when inputs change.
@@ -45,7 +46,7 @@ const loadImage = async (src: string): Promise<HTMLImageElement> => {
         image.onerror = () => reject(new Error(`Failed to load image: ${src}`));
     });
 
-    image.src = src;
+    image.src = httpsImageUrl(src);
 
     try {
         await image.decode();

@@ -1,6 +1,7 @@
 ﻿/** 歌单页:本地歌单管理 + B站收藏夹/网易云歌单导入 + 最近播放 */
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { MouseEvent as ReactMouseEvent } from 'react'
+import { motion } from 'framer-motion'
 import {
   Button,
   Card,
@@ -56,6 +57,13 @@ import { Cover } from '../components/Cover'
 import { PageLayout, PageHeader } from '../components/PageHeader'
 import { BiliLoginDialog, NeteaseLoginDialog } from '../components/LoginDialogs'
 import { RevealItem, useRevealGroup } from '../lib/RevealList'
+import {
+  EASE_IN_OUT,
+  EASE_IN_OUT_BEZIER,
+  computeDurations,
+  useMotionFine,
+  useMotionLevel
+} from '../lib/motion'
 import { toastError, toastSuccess } from '../lib/toast'
 
 const useStyles = makeStyles({
@@ -69,6 +77,8 @@ const useStyles = makeStyles({
   card: { padding: '12px', cursor: 'pointer', ':hover': { transform: 'translateY(-2px)' } },
   actionsRow: { display: 'flex', gap: '8px', flexWrap: 'wrap' },
   header: { display: 'flex', alignItems: 'center', gap: '16px' },
+  /** 搜索框 + 歌曲列表这一整块:简介到位时要整块一起位移,所以包成一层 */
+  body: { display: 'flex', flexDirection: 'column', gap: '16px', flex: 1, minHeight: 0 },
   empty: {
     display: 'flex',
     flexDirection: 'column',
@@ -117,6 +127,17 @@ type OnlineBrief = {
 /**
  * 歌单详情主体:头部(封面/名称/描述)+ 网易云元信息(播放量/创建时间/创作者/标签)
  * + 页内搜索 + 歌曲列表。
+ *
+ * 关于"打开歌单时下面的内容突然瞬移":网易云的简介/元信息是打开后才异步拉的
+ * (neteasePlaylistMeta),它们一到就顶出十几到上百像素,下面的搜索框和列表瞬间被推下去。
+ * 这里把这段迟到的布局变化做成一条动画:
+ *  - 简介/信息块自己做"放大 + 模糊 + 淡入";
+ *  - 它们的外框从 0 高度长到真实高度,下面的搜索框和列表就被这个高度变化推下去;
+ *  - 两边共用同一个时长与同一条曲线(都取自动效系统),
+ *    并且下面的位移是真实布局变化,不是 transform 平移 ——
+ *    平移那种"整块刚性滑动"的观感很硬,曲线再软也救不回来。
+ * 时长不在这里写死:走 lib/motion 的「歌单信息」通道,
+ * 于是设置里的动画速率、详细速率、动效强度档位都能直接调到这段动画。
  */
 function PlaylistDetailBody({
   playlist,
@@ -162,6 +183,71 @@ function PlaylistDetailBody({
     }
   }, [neteaseId])
 
+  /**
+   * 迟到信息块入场的时长/曲线,全部来自动效系统,组件里不写死数字:
+   * 设置里的「动画速率」×「详细速率 → 歌单信息」× 动效强度档位,最终都落到 metaInMs 上。
+   * 信息块的淡入与下方内容的位移必须用同一个值,否则会出现"一个追另一个"的错位。
+   */
+  const motionLevel = useMotionLevel()
+  const motionSpeed = useStore((s) => s.library?.settings.motionSpeed ?? 1)
+  const motionFine = useMotionFine()
+  const metaDurations = computeDurations(motionLevel, motionSpeed, motionFine)
+  /** 淡入与"撑开"共用的时长(ms);「关闭」档为 0,即直接到位 */
+  const metaInMs = metaDurations.meta
+  /**
+   * 曲线用进/退场那条对称缓动 cubic-bezier(.4, 0, .2, 1),不用页面切换那种强 ease-out:
+   * 这段位移是"从静止到静止",起手和收尾都要有加速度过渡,否则看着就是"跳下去"。
+   */
+  const metaInTransition = { duration: metaInMs / 1000, ease: EASE_IN_OUT_BEZIER }
+  /**
+   * 模糊幅度跟随档位(舒缓档为 0px);但 12px 的小字上 6px 太糊,这里封顶 4px ——
+   * 否则"由糊突然变清晰"本身就很硬
+   */
+  const metaInBlur = `blur(${Math.min(metaDurations.blur, 4)}px)`
+
+  /**
+   * 简介/信息块的"外框":它们从 0 高度长到内容真实高度,下面的搜索框和列表就是被
+   * 这个真实的高度变化推下去的 —— 不是整块做 transform 平移。这样做的好处:
+   *  - 位移和淡入天然是同一条曲线、同一段时长,不存在两套动画互相追;
+   *  - 没有"整块滑动"的刚性感,也不会出现文字和歌曲行重叠的中间帧;
+   *  - 底部不会因为平移而露出空白。
+   */
+  const infoGrowRef = useRef<HTMLDivElement | null>(null)
+  const descGrowRef = useRef<HTMLDivElement | null>(null)
+  useLayoutEffect(() => {
+    // 「关闭」档时长 0:不铺任何过渡,直接以自然高度呈现
+    if (metaInMs < 1) return
+    for (const el of [infoGrowRef.current, descGrowRef.current]) {
+      if (!el) continue
+      // 已经撑开过就不再重播(改设置会让这个 effect 重跑)
+      if (el.style.height) continue
+      // 先量内容真实高度(此刻外框还没有限高),再把高度压回 0 起跑
+      const target = el.scrollHeight
+      if (target < 1) continue
+      // 这块是插进父容器的"新子元素",会额外多出一条 flex gap(gap 是按子元素条数算的)。
+      // 用等量负 margin 抵掉,让它从"净占位 0"开始长,否则第一帧内容就会被那条 gap 顶下去。
+      const gapPx = parseFloat(getComputedStyle(el.parentElement ?? el).rowGap || '0') || 0
+      el.style.transition = 'none'
+      el.style.height = '0px'
+      el.style.marginBottom = `${-gapPx}px`
+      void el.offsetHeight // 提交 0 高度这一帧,否则下面这条过渡拿不到起点
+      el.style.transition = `height ${metaInMs}ms ${EASE_IN_OUT}, margin-bottom ${metaInMs}ms ${EASE_IN_OUT}`
+      el.style.height = `${target}px`
+      el.style.marginBottom = '0px'
+      // 收尾交还 auto:留着固定 px 的话,窗口缩放或字体变化后内容会被截断
+      el.addEventListener(
+        'transitionend',
+        () => {
+          if (el.style.height === `${target}px`) {
+            el.style.height = 'auto'
+            el.style.marginBottom = ''
+          }
+        },
+        { once: true }
+      )
+    }
+  }, [meta, metaInMs])
+
   const filtered = kw.trim()
     ? songs.filter((s) => {
         const q = kw.trim().toLowerCase()
@@ -204,9 +290,16 @@ function PlaylistDetailBody({
                 .join(' · ')}
             </Text>
           </div>
-          {/* 网易云歌单附加信息:创作者 / 播放量 / 创建时间 / 标签 */}
+          {/* 网易云歌单附加信息:创作者 / 播放量 / 创建时间 / 标签(异步到达:外框撑开 + 放大模糊淡入) */}
           {meta && (
-            <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginTop: 4 }}>
+            <div ref={infoGrowRef} style={{ overflow: 'hidden', flexShrink: 0 }}>
+              <motion.div
+                initial={{ opacity: 0, scale: 0.97, filter: metaInBlur }}
+                animate={{ opacity: 1, scale: 1, filter: 'blur(0px)' }}
+                transition={metaInTransition}
+                // 间距用 padding 而不是 margin:margin 不算进 scrollHeight,量出来的高度会差 4px
+                style={{ display: 'flex', gap: 10, flexWrap: 'wrap', paddingTop: 4 }}
+              >
               {meta.creator && (
                 <Text size={200} style={{ color: tokens.colorNeutralForeground3 }}>
                   创建者:{meta.creator}
@@ -232,6 +325,7 @@ function PlaylistDetailBody({
                   标签:{meta.tags.join(' / ')}
                 </Text>
               )}
+              </motion.div>
             </div>
           )}
         </div>
@@ -270,47 +364,61 @@ function PlaylistDetailBody({
         </Tooltip>
       </div>
 
-      {/* 网易云歌单描述(整块宽行) */}
+      {/* 网易云歌单描述(整块宽行):外框撑开 + 放大模糊淡入,同样异步到达 */}
       {meta?.description && (
-        <Text
-          size={200}
-          style={{
-            color: tokens.colorNeutralForeground3,
-            whiteSpace: 'pre-line',
-            lineHeight: 1.7,
-            maxWidth: 900,
-            maxHeight: 96,
-            overflowY: 'auto'
-          }}
-        >
-          {meta.description}
-        </Text>
+        <div ref={descGrowRef} style={{ overflow: 'hidden', flexShrink: 0 }}>
+          <motion.div
+            initial={{ opacity: 0, scale: 0.97, filter: metaInBlur }}
+            animate={{ opacity: 1, scale: 1, filter: 'blur(0px)' }}
+            transition={metaInTransition}
+            // Text 渲染出来是 span,套一层后要用 flex 收口,它才会按块级参与布局
+            // (maxHeight / overflowY 在纯 inline 上是无效的)
+            style={{ display: 'flex', flexDirection: 'column' }}
+          >
+          <Text
+            size={200}
+            style={{
+              color: tokens.colorNeutralForeground3,
+              whiteSpace: 'pre-line',
+              lineHeight: 1.7,
+              maxWidth: 900,
+              maxHeight: 96,
+              overflowY: 'auto'
+            }}
+          >
+            {meta.description}
+          </Text>
+          </motion.div>
+        </div>
       )}
 
-      {/* 页内搜索 */}
-      <Input
-        placeholder="在歌单内搜索歌曲(标题 / 歌手 / 专辑)"
-        value={kw}
-        onChange={(_, d) => setKw(d.value)}
-        contentBefore={<SearchRegular />}
-        style={{ maxWidth: 420 }}
-      />
+      {/* 搜索框 + 歌曲列表:自己不铺位移,上面的信息块长高就把它们推下去(曲线/时长完全同步) */}
+      <div className={styles.body}>
+        {/* 页内搜索 */}
+        <Input
+          placeholder="在歌单内搜索歌曲(标题 / 歌手 / 专辑)"
+          value={kw}
+          onChange={(_, d) => setKw(d.value)}
+          contentBefore={<SearchRegular />}
+          style={{ maxWidth: 420 }}
+        />
 
-      <div className={styles.scroll}>
-        {filtered.length > 0 ? (
-          <SongList songs={filtered} onRemove={onRemoveSong} />
-        ) : songs.length > 0 ? (
-          <div className={styles.empty}>
-            <SearchRegular fontSize={36} />
-            <Text size={400}>没有匹配的歌曲</Text>
-          </div>
-        ) : (
-          <div className={styles.empty}>
-            <MusicNote2Regular fontSize={40} />
-            <Text size={400}>歌单还是空的</Text>
-            <Text size={300}>去搜索页添加歌曲,或导入B站收藏夹/网易云歌单</Text>
-          </div>
-        )}
+        <div className={styles.scroll}>
+          {filtered.length > 0 ? (
+            <SongList songs={filtered} onRemove={onRemoveSong} />
+          ) : songs.length > 0 ? (
+            <div className={styles.empty}>
+              <SearchRegular fontSize={36} />
+              <Text size={400}>没有匹配的歌曲</Text>
+            </div>
+          ) : (
+            <div className={styles.empty}>
+              <MusicNote2Regular fontSize={40} />
+              <Text size={400}>歌单还是空的</Text>
+              <Text size={300}>去搜索页添加歌曲,或导入B站收藏夹/网易云歌单</Text>
+            </div>
+          )}
+        </div>
       </div>
     </div>
   )

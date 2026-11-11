@@ -496,7 +496,7 @@ function MainApp() {
   useEffect(() => {
     applyMotionVars(motionLevel, motionSpeed, motionFine)
     // motionFine 是每次渲染新建的对象,用各通道值做依赖才能正确触发
-  }, [motionLevel, motionSpeed, motionFine.list, motionFine.stagger, motionFine.page, motionFine.hover, motionFine.cover])
+  }, [motionLevel, motionSpeed, motionFine.list, motionFine.stagger, motionFine.page, motionFine.hover, motionFine.cover, motionFine.meta])
 
   // 界面样式注入:预设(大小/歌词字号/密度) + 用户自定义 CSS
   useEffect(() => {

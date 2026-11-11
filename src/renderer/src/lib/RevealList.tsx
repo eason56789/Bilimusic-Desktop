@@ -1,9 +1,14 @@
 /**
- * 列表逐个入场原语:元素首次进入视口时,按同批顺序错开播「模糊淡入 + 上浮」。
+ * 列表逐个入场原语:元素首次进入视口时,按「版面阅读顺序」错开播「模糊淡入 + 上浮」。
  *
  * 为什么要共享一个 observer:
  * 歌单/收藏可能有上千行,每项各建一个 IntersectionObserver 会直接卡死主线程。
  * 这里用一个 observer 观察所有已注册节点,回调里按「同批」分组排延迟。
+ *
+ * 为什么顺序按位置而不是注册时给的 index:
+ * 同一个 grid 里往往混排多个区块(本地歌单 0..n / B站收藏夹 100+i / 在线卡片
+ * 每次渲染归零的计数器),三套编号互不相干,按编号排延迟就会「下排先浮入」。
+ * 只有 getBoundingClientRect 给出的真实位置能保证先上后下、同排先左后右。
  *
  * 为什么只播一次:
  * 滚动回看时不重播。元素一进入视口就写 data-revealed,后续 observer 直接忽略;
@@ -14,7 +19,8 @@
  * 视觉上仍是「滚到才有」,但不会出现「滚到底还要等 5 秒才淡完」。
  *
  * 关闭档:
- * level === 'off' 时 observer 根本不创建,元素立刻置终态,零动画开销。
+ * level === 'off' 或调用方按元素数量主动关掉(见 SongList)时,observer 根本不创建,
+ * 元素立刻置终态,零动画开销 —— 这是长歌单打开不再卡顿的关键。
  */
 import { useCallback, useEffect, useMemo, useRef } from 'react'
 import type { CSSProperties, ReactNode } from 'react'
@@ -29,7 +35,9 @@ export interface RevealApi {
   /** 挂到滚动容器上;作为 observer 的 root。不挂则以视口为 root */
   rootRef: (node: HTMLElement | null) => void
   /**
-   * 列表项注册。index 决定同批内错开顺序。
+   * 列表项注册。
+   * `index` 只作为「同位置」的稳定标识保留,不参与排序 —— 错开顺序由版面位置决定,
+   * 调用方给 0 或错位编号都不会让动画顺序变乱。
    * `key` 用于识别「同一个 DOM 节点换了内容」:React 复用节点时 key 会变,
    * 此时应当重新播放入场;key 不变(如播放状态刷新导致的整体重渲)则不重播。
    */
@@ -41,11 +49,10 @@ export function useRevealGroup(enabled = true): RevealApi {
   const active = enabled && level !== 'off'
   const observerRef = useRef<IntersectionObserver | null>(null)
   const rootNodeRef = useRef<HTMLElement | null>(null)
-  /** 已注册但尚未揭示的节点 → 同批顺序 */
+  /** 已注册但尚未揭示的节点(排序改看版面位置后,连同 register 的 index 一起留作待揭示队列的标记) */
   const pendingRef = useRef<Map<Element, number>>(new Map())
   /** 已注册过的节点 → 该节点上次承载的内容 key(用于识别节点复用) */
   const seenRef = useRef<Map<Element, string>>(new Map())
-  const safetyRef = useRef<number | null>(null)
 
   /** 建/重建 observer。root 变化必须重建,否则视口判定仍按旧容器算 */
   const ensureObserver = useCallback((): IntersectionObserver | null => {
@@ -53,16 +60,20 @@ export function useRevealGroup(enabled = true): RevealApi {
     observerRef.current?.disconnect()
     const obs = new IntersectionObserver(
       (entries) => {
-        const hit = entries
-          .filter((e) => e.isIntersecting)
-          .map((e) => ({ el: e.target as HTMLElement, idx: pendingRef.current.get(e.target) ?? 0 }))
+        const hit = entries.filter((e) => e.isIntersecting).map((e) => e.target as HTMLElement)
         if (hit.length === 0) return
-        hit.sort((a, b) => a.idx - b.idx)
+        /**
+         * 错开顺序按「版面阅读顺序」算:先上后下的行,同一行里先左后右。
+         * 不能用 register 传进来的 index —— 歌单页里本地歌单(0,1,2…)、B站收藏夹(100+i)、
+         * 在线歌单卡片(每次渲染归零的计数器)分属三套互不相干的编号,它们混排在同一个
+         * grid 里,按编号排延迟就会出现「下排比上排先浮入」。位置才是唯一的真凭据。
+         */
+        hit.sort(byReadingOrder)
         const step = staggerMs()
         hit.forEach((item, order) => {
-          revealNow(item.el, order < BATCH_LIMIT ? order * step : 0)
-          pendingRef.current.delete(item.el)
-          obs.unobserve(item.el)
+          revealNow(item, order < BATCH_LIMIT ? order * step : 0)
+          pendingRef.current.delete(item)
+          obs.unobserve(item)
         })
       },
       {
@@ -148,6 +159,22 @@ export function useRevealGroup(enabled = true): RevealApi {
     })
   }, [active])
 
+  /** 待揭示队列里已经在视口内、却没被 observer 命中的(零尺寸节点/容器异常):直接放出。
+   *  只扫 pendingRef(未揭示的),不扫全文档,代价与列表总长度无关。 */
+  const sweepPending = useCallback((): void => {
+    if (!active) return
+    pendingRef.current.forEach((_, el) => {
+      const node = el as HTMLElement
+      const rect = node.getBoundingClientRect()
+      const inView = rect.top < window.innerHeight + 400 && rect.bottom > -400
+      if (inView && node.dataset.revealed !== 'true') {
+        revealNow(node, 0)
+        pendingRef.current.delete(node)
+        observerRef.current?.unobserve(node)
+      }
+    })
+  }, [active])
+
   useEffect(() => {
     if (!active) return
     // 首帧后扫一次(等布局稳定),之后每 1.2s 补扫,直到页面稳定
@@ -159,26 +186,22 @@ export function useRevealGroup(enabled = true): RevealApi {
     }
   }, [active, sweepUnrevealed])
 
+  /**
+   * 兜底放出:只在挂载后补扫有限几次。
+   * 之前是永久 2.5s 轮询,长列表下每次都把几十上百个待揭示元素做一遍
+   * getBoundingClientRect(强制同步布局),页面开着就一直有周期性卡顿,
+   * 而它的职责只是「防止内容被永久藏住」——那点风险在前几秒就查完了。
+   * 之后滚到哪一行,observer 自己会揭示,不需要轮询兜底。
+   */
   useEffect(() => {
     if (!active) return
-    safetyRef.current = window.setInterval(() => {
-      pendingRef.current.forEach((_, el) => {
-        const node = el as HTMLElement
-        // 已经进入过视口但没被回调命中的(如零尺寸节点),直接放出
-        const rect = node.getBoundingClientRect()
-        const inView = rect.top < window.innerHeight + 400 && rect.bottom > -400
-        if (inView && node.dataset.revealed !== 'true') {
-          revealNow(node, 0)
-          pendingRef.current.delete(node)
-          observerRef.current?.unobserve(node)
-        }
-      })
-    }, SAFETY_MS)
+    const timers = [SAFETY_MS, SAFETY_MS * 2, SAFETY_MS * 3].map((at) =>
+      window.setTimeout(sweepPending, at)
+    )
     return () => {
-      if (safetyRef.current != null) window.clearInterval(safetyRef.current)
-      safetyRef.current = null
+      timers.forEach((id) => window.clearTimeout(id))
     }
-  }, [active])
+  }, [active, sweepPending])
 
   useEffect(() => {
     return () => {
@@ -195,6 +218,26 @@ export function useRevealGroup(enabled = true): RevealApi {
 function staggerMs(): number {  const raw = getComputedStyle(document.documentElement).getPropertyValue('--bm-mo-stagger')
   const n = parseFloat(raw)
   return Number.isFinite(n) && n > 0 ? n : 36
+}
+
+/** 同行的判定粒度(px):网格同一行的卡片 top 完全一致,量化到这里避免亚像素抖动拆成两行 */
+const ROW_BUCKET_PX = 8
+
+/**
+ * 阅读顺序比较器:先行(上下)后列(左右)。
+ * 用 top 量化出的行号做一级键、left 做二级键,是一个严格的全序(不会出现
+ * 「a 在 b 前、b 在 c 前、c 又在 a 前」这种让 sort 结果不确定的情形)。
+ * 待揭示元素此刻都带同一个 translateY 初始位移,相对位置不变,不影响判定。
+ */
+function byReadingOrder(a: HTMLElement, b: HTMLElement): number {
+  if (a === b) return 0
+  const ra = a.getBoundingClientRect()
+  const rb = b.getBoundingClientRect()
+  const rowA = Math.floor(ra.top / ROW_BUCKET_PX)
+  const rowB = Math.floor(rb.top / ROW_BUCKET_PX)
+  if (rowA !== rowB) return rowA - rowB
+  if (ra.left !== rb.left) return ra.left - rb.left
+  return ra.top - rb.top
 }
 
 /** 排延迟后揭示。双 rAF 保证初始态先提交一帧,否则 transition 会与首帧合并丢掉 */

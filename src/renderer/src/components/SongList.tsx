@@ -51,6 +51,14 @@ export function formatTime(sec: number): string {
 
 const useStyles = makeStyles({
   list: { display: 'flex', flexDirection: 'column', gap: '2px' },
+  /** 列表尾部的「还有更多」提示兼哨兵位;对用户是提示,对代码是触发点 */
+  more: {
+    padding: '12px 0 16px',
+    textAlign: 'center',
+    fontSize: tokens.fontSizeBase200,
+    color: tokens.colorNeutralForeground3,
+    flexShrink: 0
+  },
   row: {
     display: 'flex',
     alignItems: 'center',
@@ -131,6 +139,26 @@ const useStyles = makeStyles({
   }
 })
 
+/**
+ * 超过这个行数就不再播入场动画。
+ * 上千行同时挂 blur(6px) 初始态 + will-change,浏览器要为每一行准备一个带模糊的
+ * 合成层,打开歌单会直接卡好几秒;而「第一个音符已经在播了、列表还在逐行浮现」
+ * 本身也没有意义。列表短的时候动画照旧。
+ */
+const REVEAL_MAX_ROWS = 80
+
+/**
+ * 长列表分批渲染:首屏只挂 SHOW_PAGE 行,用户往下滑到接近底部时再追加一批。
+ * 594 行的歌单意味着 594 个行组件 ×(封面 + 收藏 + 多按钮 + 菜单)≈ 数千个节点
+ * 一次性提交,React 与布局都得一次吃下去 —— 那正是「打开歌单卡几秒」里
+ * 与动画无关的那一半。分批之后首屏只付一屏的钱,滚多少付多少。
+ */
+const SHOW_PAGE = 60
+/** 每次追加的行数 */
+const SHOW_STEP = 60
+/** 哨兵提前多远触发:留出一屏多的余量,正常滑动时看不到空白 */
+const SHOW_ROOT_MARGIN = '0px 0px 240px 0px'
+
 function EqBars() {
   const styles = useStyles()
   return (
@@ -189,8 +217,47 @@ export function SongList({
   /**
    * 逐项入场。这里不传滚动容器:页面各处的滚动区不在本组件内,
    * 而 root=null 时浏览器会把中间滚动容器的裁剪一并算进去,判定依然准确。
+   * 行数过多时直接关掉(见 REVEAL_MAX_ROWS):既省掉上千个模糊合成层,
+   * 也不再做上千次注册/观察 —— 这是打开大歌单不再卡顿的关键。
    */
-  const reveal = useRevealGroup()
+  const revealOn = songs.length <= REVEAL_MAX_ROWS
+  const reveal = useRevealGroup(revealOn)
+
+  /**
+   * 分批渲染游标。用「列表首曲 id」当内容指纹:切歌单 / 换搜索词 / 换榜单时首曲必变,
+   * 这时回到第一批;而在同一个歌单里删掉某首歌时指纹不变,不该把已经滑出来的
+   * 那一屏又收回去(那会让滚动位置凭空跳掉)。
+   * 不用数组引用:父组件每次渲染都会给新数组,拿引用当 key 就永远只看得到第一批。
+   */
+  const listKey = songs[0]?.id ?? ''
+  const [shownCount, setShownCount] = useState(SHOW_PAGE)
+  const sentinelRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    setShownCount(SHOW_PAGE)
+  }, [listKey])
+  const shown = Math.min(shownCount, songs.length)
+  const hasMore = shown < songs.length
+
+  /**
+   * 底部「加载更多」那一行同时是哨兵:它进入视口就追加一批。
+   * 依赖里必须带 shownCount —— 追加完它通常还在视口内(列表变长了),
+   * 不重建 observer 就收不到下一次回调,链条会停在第一批。
+   */
+  useEffect(() => {
+    if (!hasMore) return
+    const el = sentinelRef.current
+    if (!el) return
+    const obs = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((e) => e.isIntersecting)) {
+          setShownCount((c) => Math.min(songs.length, c + SHOW_STEP))
+        }
+      },
+      { root: null, rootMargin: SHOW_ROOT_MARGIN, threshold: 0 }
+    )
+    obs.observe(el)
+    return () => obs.disconnect()
+  }, [hasMore, shownCount, songs.length])
 
   useEffect(() => {
     if (!selMode) return
@@ -385,15 +452,16 @@ export function SongList({
         </div>
       )}
 
-      <div className={styles.list}>
-        {songs.map((song, i) => {
+      {/* data-bm-longlist 让离屏行走 content-visibility(见 styles.css),长列表滚动只算看得见的那几行 */}
+      <div className={styles.list} data-bm-longlist={revealOn ? undefined : ''}>
+        {songs.slice(0, shown).map((song, i) => {
           const active = current?.id === song.id
           const checked = selected.has(song.id)
           return (
             <div
               key={`${song.id}-${i}`}
-              ref={(n) => reveal.register(n, i, `${song.id}-${i}`)}
-              data-bm-reveal=""
+              ref={revealOn ? (n) => reveal.register(n, i, `${song.id}-${i}`) : undefined}
+              data-bm-reveal={revealOn ? '' : undefined}
               className={`song-row ${styles.row} ${active ? `${styles.rowActive} bm-row-playing` : ''}`}
               style={selMode && checked ? { background: tokens.colorBrandBackground2 } : undefined}
               onClick={selMode ? () => toggleSel(song.id) : () => playNow(i)}
@@ -491,6 +559,12 @@ export function SongList({
             </div>
           )
         })}
+        {/* 哨兵兼提示:滑到这里就追加下一批(SHOW_STEP 行) */}
+        {hasMore && (
+          <div className={styles.more} ref={sentinelRef}>
+            下滑加载更多 · 已显示 {shown} / {songs.length}
+          </div>
+        )}
       </div>
 
       {/* 右键菜单(受控,锚点跟随鼠标) */}

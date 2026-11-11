@@ -283,16 +283,52 @@ export function dashAudioQuality(id: number): string {
   }
 }
 
-/** 获取播放地址,返回 { url, fragmented, quality } */
+/**
+ * dash.audio 里的取优顺序:30280(320k) > 30232(132k) > 30216(64k)。
+ *
+ * 为什么不能直接取第一条:接口返回顺序没有任何保证,曾出现低码率排在首位的情况 ——
+ * 那样虽然还是纯音频,但音质会莫名掉到 64k。同一档位再按 bandwidth 降序兜一层。
+ */
+const AUDIO_ID_PRIORITY = [30280, 30232, 30216]
+
+/** 导出只为可验证:外面能直接喂一个乱序数组,确认取优不是靠"碰巧第一条就对" */
+export function pickBestDashAudio(audios: any[]): DashAudio | undefined {
+  const usable = audios.filter((a) => a && (a.baseUrl || a.base_url))
+  if (usable.length === 0) return undefined
+  const rank = (id: number): number => {
+    const i = AUDIO_ID_PRIORITY.indexOf(id)
+    return i < 0 ? AUDIO_ID_PRIORITY.length : i
+  }
+  const best = usable
+    .slice()
+    .sort((a, b) => rank(a.id) - rank(b.id) || (b.bandwidth ?? 0) - (a.bandwidth ?? 0))[0]
+  return {
+    id: best.id,
+    baseUrl: best.baseUrl ?? best.base_url,
+    bandwidth: best.bandwidth ?? 0,
+    size: best.size ?? 0
+  }
+}
+
+/**
+ * 获取播放地址,返回 { url, fragmented, quality, hasVideo }。
+ *
+ * `hasVideo` 是这次新加的**唯一可信的容器判据**:`durl`(老接口 / html5 兜底)拿到的是
+ * 整段 MP4,里面同时有视频轨和音频轨,只有 `dashAudio` 才是纯音频。
+ * 以前上层只能靠 `fragmented` 猜,而 `fragmented` 只说明"是不是 DASH 分片",
+ * 不说明容器里有没有视频 —— 结果整段视频被当成音频缓存成 `.m4s`(后缀和容器对不上)。
+ * `dashAudioQuality` 里的 30250/30251(杜比/Hi-Res)其实在 `dash.dolby.audio` /
+ * `dash.flac.audio` 里,`dash.audio` 永远不含,这两个分支实际不可达,保留只为兼容旧日志。
+ */
 export async function resolvePlayUrl(
   bvid: string,
   cid: number,
   opts: { preferHtml5?: boolean } = {}
-): Promise<{ url: string; fragmented: boolean; quality?: string } | null> {
-  // html5 完整 mp4(兼容性最好)
+): Promise<{ url: string; fragmented: boolean; quality?: string; hasVideo: boolean } | null> {
+  // html5 完整 mp4(兼容性最好,但体积最大:带视频轨)
   if (opts.preferHtml5) {
     const h5 = await fetchHtml5Url(bvid, cid)
-    if (h5) return { url: h5, fragmented: false, quality: '标准 128k' }
+    if (h5) return { url: h5, fragmented: false, quality: '标准 128k', hasVideo: true }
   }
   // DASH 纯音频 fnval=80 → 16 → html5 兜底
   for (const fnval of ['80', '16']) {
@@ -301,12 +337,14 @@ export async function resolvePlayUrl(
       return {
         url: dash.dashAudio.baseUrl,
         fragmented: true,
-        quality: dashAudioQuality(dash.dashAudio.id)
+        quality: dashAudioQuality(dash.dashAudio.id),
+        hasVideo: false
       }
-    if (dash?.durl) return { url: dash.durl, fragmented: false, quality: '标准' }
+    // 没有 dash 音频却给了 durl:这是整段 MP4,必须让上层知道它有视频轨
+    if (dash?.durl) return { url: dash.durl, fragmented: false, quality: '标准', hasVideo: true }
   }
   const h5 = await fetchHtml5Url(bvid, cid)
-  if (h5) return { url: h5, fragmented: false, quality: '标准 128k' }
+  if (h5) return { url: h5, fragmented: false, quality: '标准 128k', hasVideo: true }
   return null
 }
 
@@ -322,12 +360,10 @@ async function fetchPlayUrl(
       { Referer: `https://www.bilibili.com/video/${bvid}` }
     )
     if (json.code !== 0 || !json.data) return null
-    const rawAudio: any = json.data.dash?.audio?.find((a: any) => a.baseUrl || a.base_url)
+    const rawAudio = pickBestDashAudio(json.data.dash?.audio ?? [])
     const durl: string | undefined = json.data.durl?.find((d: any) => d.url)?.url
     return {
-      dashAudio: rawAudio
-        ? { id: rawAudio.id, baseUrl: rawAudio.baseUrl ?? rawAudio.base_url, bandwidth: rawAudio.bandwidth ?? 0, size: rawAudio.size ?? 0 }
-        : undefined,
+      dashAudio: rawAudio,
       durl
     }
   } catch (e) {

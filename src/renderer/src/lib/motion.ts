@@ -13,17 +13,20 @@
  *   最终时长 = 基准时长 × 档位倍率 ÷ 全局速率 ÷ 该通道速率
  *   1) 档位(motionLevel):决定有无动效、模糊/位移幅度
  *   2) 全局速率(motionSpeed):一把调快/调慢所有时间轴
- *   3) 通道速率(motionFine):分别微调 列表入场/错开/页面/悬停/封面
+ *   3) 通道速率(motionFine):分别微调 列表入场/错开/页面/悬停/封面/歌单信息
  */
 import { useEffect, useState } from 'react'
 import { useStore } from '../store'
 
 export type MotionLevel = 'full' | 'calm' | 'off'
 
-/** 统一缓动:出场(快速启动、长尾收束) */
-export const EASE_OUT = 'cubic-bezier(0.16, 1, 0.3, 1)'
-/** 统一缓动:进场/退场(对称、略柔和) */
-export const EASE_IN_OUT = 'cubic-bezier(0.4, 0, 0.2, 1)'
+/** 统一缓动:出场(快速启动、长尾收束)的数值形式,给需要自己插值的调用方(如 framer-motion) */
+export const EASE_OUT_BEZIER: [number, number, number, number] = [0.16, 1, 0.3, 1]
+/** 统一缓动:出场(快速启动、长尾收束);字符串由同一份数值生成,避免两处抄出偏差 */
+export const EASE_OUT = `cubic-bezier(${EASE_OUT_BEZIER.join(', ')})`
+/** 统一缓动:进场/退场(对称、略柔和);同样由数值生成字符串,保持单一出处 */
+export const EASE_IN_OUT_BEZIER: [number, number, number, number] = [0.4, 0, 0.2, 1]
+export const EASE_IN_OUT = `cubic-bezier(${EASE_IN_OUT_BEZIER.join(', ')})`
 
 /** 各场景基准时长(ms),除以各种倍率后写入 CSS 变量 */
 export const MOTION = {
@@ -39,6 +42,8 @@ export const MOTION = {
   hover: 160,
   /** 封面由模糊到清晰 */
   cover: 260,
+  /** 歌单信息(简介/元信息)迟到到达时的入场 —— 与下方内容的位移共用这一个时长 */
+  meta: 420,
   /** 位移基准(px),乘档位幅度 */
   lift: 10,
   /** 模糊基准(px),乘档位幅度 */
@@ -65,6 +70,8 @@ export interface MotionFine {
   hover: number
   /** 封面渐显 */
   cover: number
+  /** 歌单信息(简介/元信息)迟到到达时的入场 + 下方内容位移 */
+  meta: number
 }
 
 export const DEFAULT_FINE: MotionFine = {
@@ -72,7 +79,8 @@ export const DEFAULT_FINE: MotionFine = {
   stagger: 1,
   page: 1,
   hover: 1,
-  cover: 1
+  cover: 1,
+  meta: 1
 }
 
 /** 速率允许范围 */
@@ -93,7 +101,8 @@ export function normalizeFine(raw: unknown): MotionFine {
     stagger: clampSpeed(o.stagger, 1),
     page: clampSpeed(o.page, 1),
     hover: clampSpeed(o.hover, 1),
-    cover: clampSpeed(o.cover, 1)
+    cover: clampSpeed(o.cover, 1),
+    meta: clampSpeed(o.meta, 1)
   }
 }
 
@@ -105,6 +114,7 @@ export interface ComputedDurations {
   pageOut: number
   hover: number
   cover: number
+  meta: number
   lift: number
   blur: number
 }
@@ -128,6 +138,7 @@ export function computeDurations(
     pageOut: ms(MOTION.pageOut, cfg.dur, f.page),
     hover: ms(MOTION.hover, cfg.dur, f.hover),
     cover: ms(MOTION.cover, cfg.dur, f.cover),
+    meta: ms(MOTION.meta, cfg.dur, f.meta),
     lift: Number((MOTION.lift * cfg.lift).toFixed(2)),
     blur: Number((MOTION.blur * cfg.blur).toFixed(2))
   }
@@ -185,6 +196,7 @@ export function applyMotionVars(
   root.style.setProperty('--bm-mo-dur-page-out', `${d.pageOut}ms`)
   root.style.setProperty('--bm-mo-dur-hover', `${d.hover}ms`)
   root.style.setProperty('--bm-mo-dur-cover', `${d.cover}ms`)
+  root.style.setProperty('--bm-mo-dur-meta', `${d.meta}ms`)
   root.style.setProperty('--bm-mo-stagger', `${d.stagger}ms`)
   root.style.setProperty('--bm-mo-lift', `${d.lift.toFixed(2)}px`)
   root.style.setProperty('--bm-mo-blur', `${d.blur.toFixed(2)}px`)

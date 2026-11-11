@@ -12,6 +12,7 @@
  * 并把生成的颜色并回本项目 FoliaTheme,让歌词样式背景真正"跟封面走"。
  */
 import { parseColorChannels } from './shared/colorMix'
+import { httpsImageUrl } from '../imageUrl'
 import type { FoliaTheme } from './bridge'
 
 /* ===================== 色彩数学(上游 themeColorMath) ===================== */
@@ -515,7 +516,8 @@ export const loadCoverColors = async (coverUrl: string): Promise<string[] | null
         img.crossOrigin = 'anonymous'
         img.onload = () => resolve(img)
         img.onerror = () => reject(new Error('cover load failed'))
-        img.src = coverUrl
+        // CSP 只放行 https 图源;http 封面会被直接拦掉,取色静默失败(见 lib/imageUrl)
+        img.src = httpsImageUrl(coverUrl)
       })
       const size = Math.min(image.naturalWidth, image.naturalHeight, MAX_COVER_SAMPLE * 4)
       const canvas = document.createElement('canvas')

@@ -1,6 +1,6 @@
 /** 现代圆角进度/音量条:实心轨道 + 悬停放大手柄(替代 Fluent 默认虚线滑条) */
-import { useRef, useState } from 'react'
-import type { KeyboardEvent as ReactKeyboardEvent, PointerEvent as ReactPointerEvent } from 'react'
+import { forwardRef, useRef, useState } from 'react'
+import type { KeyboardEvent as ReactKeyboardEvent, MutableRefObject, PointerEvent as ReactPointerEvent } from 'react'
 import { makeStyles, tokens } from '@fluentui/react-components'
 import type { HighlightPoint } from '@shared/types'
 
@@ -54,19 +54,7 @@ const useStyles = makeStyles({
   }
 })
 
-export function NiceSlider({
-  value,
-  max,
-  onChange,
-  onCommit,
-  live = false,
-  trackHeight = 4,
-  hoverHeight = 8,
-  width,
-  disabled = false,
-  ariaLabel,
-  highlights
-}: {
+export interface NiceSliderProps {
   value: number
   max: number
   onChange: (v: number) => void
@@ -81,9 +69,38 @@ export function NiceSlider({
   ariaLabel?: string
   /** 高潮点(副歌/高潮段起点):毫秒时间点,轨道上画圆点 */
   highlights?: HighlightPoint[]
-}) {
+}
+
+/**
+ * 为什么是 forwardRef:Fluent 的 Tooltip 会给子元素挂 ref 去测量定位锚点。
+ * 普通函数组件接不了 ref,React 会报 "Function components cannot be given refs",
+ * 悬浮提示也拿不到锚点(位置会飘)。这里把外部 ref 转给底层那个可交互的 div。
+ */
+export const NiceSlider = forwardRef<HTMLDivElement, NiceSliderProps>(function NiceSlider(
+  {
+    value,
+    max,
+    onChange,
+    onCommit,
+    live = false,
+    trackHeight = 4,
+    hoverHeight = 8,
+    width,
+    disabled = false,
+    ariaLabel,
+    highlights
+  }: NiceSliderProps,
+  forwardedRef
+) {
   const styles = useStyles()
-  const ref = useRef<HTMLDivElement>(null)
+  const ref = useRef<HTMLDivElement | null>(null)
+  /** 内部量坐标与被 Tooltip 挂 ref 的是同一个元素,这里把两个 ref 合流 */
+  const setHitRef = (node: HTMLDivElement | null): void => {
+    ref.current = node
+    if (typeof forwardedRef === 'function') forwardedRef(node)
+    // React 把 ForwardedRef 收窄成只读 RefObject,这里要写入,显式转成可变 ref
+    else if (forwardedRef) (forwardedRef as MutableRefObject<HTMLDivElement | null>).current = node
+  }
   const [dragging, setDragging] = useState(false)
   const [hover, setHover] = useState(false)
   const [dragVal, setDragVal] = useState(0)
@@ -154,7 +171,7 @@ export function NiceSlider({
 
   return (
     <div
-      ref={ref}
+      ref={setHitRef}
       className={styles.hit}
       style={{ height: '18px', width: width ?? '100%', borderRadius: '999px' }}
       onPointerDown={down}
@@ -195,4 +212,4 @@ export function NiceSlider({
       </div>
     </div>
   )
-}
+})

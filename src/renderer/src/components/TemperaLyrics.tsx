@@ -26,6 +26,7 @@ import { makeStyles } from '@fluentui/react-components'
 import type { LyricLine } from '@shared/types'
 import { useStore, getAudioElement } from '../store'
 import { lyricPosMs } from '../lib/lyricClock'
+import { httpsImageUrl } from '../lib/imageUrl'
 import { lineEndTime, resolveCharTimes } from '../lib/karaoke'
 import { resolveTrans } from '../lib/transDecide'
 import {
@@ -814,7 +815,9 @@ function extractCoverColor(url: string): Promise<string | null> {
       }
     }
     img.onerror = () => done(null)
-    img.src = url
+    // 取色是绕过代理直连 CDN 的,所以同样要升级成 https:
+    // 否则 http 封面会被渲染层 CSP 拦掉(取色静默失败,凝彩只能用默认配色)
+    img.src = httpsImageUrl(url)
   })
 }
 

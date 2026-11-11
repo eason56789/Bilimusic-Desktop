@@ -1,6 +1,7 @@
 import { makeStyles, tokens } from '@fluentui/react-components'
 import { MusicNote2Regular } from '@fluentui/react-icons'
 import { useState } from 'react'
+import { httpsImageUrl } from '../lib/imageUrl'
 
 const useStyles = makeStyles({
   fallback: {
@@ -66,7 +67,9 @@ export function coverSrc(cover: string | null | undefined, thumbSize?: number): 
   if (!cover) return null
   if (cover.startsWith('data:')) return cover
   if (cover.startsWith('bmedia://')) return cover
-  let target = thumbSize ? resizeCoverUrl(cover, thumbSize) : cover
+  // 先升级成 https:代理目标仍是 http 时,CSP 之外还会让部分 CDN 走额外跳转
+  const https = httpsImageUrl(cover)
+  let target = thumbSize ? resizeCoverUrl(https, thumbSize) : https
   // 历史数据里可能残留 {size} 占位符(酷狗):原样请求会被 CDN 换成默认占位封面
   if (/\{size\}/i.test(target)) {
     target = target.replace(/\{size\}/gi, thumbSize ? '480' : '900')

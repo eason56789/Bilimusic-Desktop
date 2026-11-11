@@ -1,5 +1,5 @@
 /** 搜索页:B站视频 / 网易云/QQ/酷狗 歌曲·歌单·歌手 多源搜索 */
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import {
   Button,
   Dropdown,
@@ -39,6 +39,7 @@ import {
   CopyRegular,
   OpenRegular
 } from '@fluentui/react-icons'
+import { motion } from 'framer-motion'
 import type {
   NeteaseArtistBrief,
   NeteasePlaylistBrief,
@@ -56,6 +57,13 @@ import { AddToPlaylistDialog } from '../components/AddToPlaylistDialog'
 import { Cover } from '../components/Cover'
 import { formatCount } from '../lib/format'
 import { useRevealGroup } from '../lib/RevealList'
+import {
+  EASE_IN_OUT,
+  EASE_IN_OUT_BEZIER,
+  computeDurations,
+  useMotionFine,
+  useMotionLevel
+} from '../lib/motion'
 import { toastError, toastSuccess } from '../lib/toast'
 
 const useStyles = makeStyles({
@@ -548,6 +556,46 @@ export function SearchPage() {
       .catch(() => {})
   }, [])
 
+  /**
+   * 「推荐歌曲」比「网易云推荐」到得晚(热歌走的是搜索接口,多一次解析和封面),
+   * 而它排在下面那块的上面 —— 插入的瞬间就把「网易云推荐」整块顶下去,这就是主页那一下瞬移。
+   * 这里用和歌单详情同一套办法接住:外框从 0 高度长到真实高度,下方内容被真实的高度变化推下去,
+   * 布局变化与淡入共用同一个时长、同一条曲线(取自动效系统「歌单信息」通道)。
+   */
+  const motionLevel = useMotionLevel()
+  const motionSpeed = useStore((s) => s.library?.settings.motionSpeed ?? 1)
+  const motionFine = useMotionFine()
+  const recDurations = computeDurations(motionLevel, motionSpeed, motionFine)
+  /** 撑开与淡入共用的时长(ms);「关闭」档为 0,即直接到位 */
+  const recInMs = recDurations.meta
+  /** 对称缓动:这段位移是从静止到静止,起手和收尾都要有加速度过渡才不"跳" */
+  const recInTransition = { duration: recInMs / 1000, ease: EASE_IN_OUT_BEZIER }
+  /** 卡片上是 12px 小字,6px 模糊会把字糊成一团,同样封顶 4px */
+  const recInBlur = `blur(${Math.min(recDurations.blur, 4)}px)`
+  const recGrowRef = useRef<HTMLDivElement | null>(null)
+  useLayoutEffect(() => {
+    const el = recGrowRef.current
+    // 「关闭」档时长 0,或这块还没挂上,都直接以自然高度呈现
+    if (!el || recInMs < 1) return
+    // 已经撑开过就不再重播(改设置会让这个 effect 重跑)
+    if (el.style.height) return
+    const target = el.scrollHeight
+    if (target < 1) return
+    el.style.transition = 'none'
+    el.style.height = '0px'
+    void el.offsetHeight // 提交 0 高度这一帧,否则下面这条过渡拿不到起点
+    el.style.transition = `height ${recInMs}ms ${EASE_IN_OUT}`
+    el.style.height = `${target}px`
+    // 收尾交还 auto:留着固定 px 的话,窗口缩放或字体变化后卡片会被截断
+    el.addEventListener(
+      'transitionend',
+      () => {
+        if (el.style.height === `${target}px`) el.style.height = 'auto'
+      },
+      { once: true }
+    )
+  }, [recInMs, recSongs.length])
+
   /** 推荐歌曲右键菜单项(与 SongList 的行内菜单一致,播放按整组推荐队列算) */
   const recMenuItems = (song: Song) => {
     const isFav = faved(song.id)
@@ -985,14 +1033,21 @@ export function SearchPage() {
           <>
             {/* 主页:推荐歌曲(与手机端首页一致,歌单与歌曲并存) */}
             {recSongs.length > 0 && (
-              <>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+              // 外框负责"长高",里面的内容负责放大模糊淡入;间距一律用 padding 不用 margin,
+              // 因为 margin 不计入 scrollHeight,量出来的高度会和真实高度差 8px,收尾时会跳一下
+              <div ref={recGrowRef} style={{ overflow: 'hidden' }}>
+                <motion.div
+                  initial={{ opacity: 0, scale: 0.97, filter: recInBlur }}
+                  animate={{ opacity: 1, scale: 1, filter: 'blur(0px)' }}
+                  transition={recInTransition}
+                >
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', paddingBottom: 8 }}>
                   <Text weight="semibold">推荐歌曲</Text>
                   <Text size={200} style={{ color: tokens.colorNeutralForeground3 }}>
                     单击播放
                   </Text>
                 </div>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: 8, marginBottom: 8 }}>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: 8, paddingBottom: 8 }}>
                   {recSongs.map((s, i) => (
                     <div
                       key={s.id}
@@ -1022,8 +1077,9 @@ export function SearchPage() {
                       </div>
                     </div>
                   ))}
-                </div>
-              </>
+                  </div>
+                </motion.div>
+              </div>
             )}
 
             {/* 主页:网易云推荐歌单 */}

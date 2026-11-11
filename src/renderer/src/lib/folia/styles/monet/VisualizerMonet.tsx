@@ -6,7 +6,7 @@ import { Tooltip } from '../../_missing/settingsKitTooltip';
 import { SettingsKitThemeContext } from '../../_missing/settingsKitTheme';
 import { useElementWidth } from '../../_missing/useElementWidth';
 import { DEFAULT_MONET_TUNING } from '../../bridge';
-import { colorWithAlpha } from '../../shared/colorMix';
+import { colorWithAlpha, mixColors } from '../../shared/colorMix';
 import { type VisualizerSharedProps } from '../definition';
 import { useVisualizerRuntime } from '../../shared/runtime';
 import { useLyricRenderQuality } from '../../shared/renderQuality/useLyricRenderQuality';
@@ -213,6 +213,30 @@ const VisualizerMonet: React.FC<VisualizerMonetProps> = (props) => {
     const portraitUrl = monetTuning.portraitSource === 'custom'
         ? monetPortraitImage?.url ?? portraitCoverUrl
         : portraitCoverUrl ?? monetPortraitImage?.url;
+    /**
+     * 封面阴影用的"墨色"。
+     *
+     * 之前两处阴影都是拿 theme.backgroundColor 当阴影色 —— 那是封面推导出来的**纸色**(莫奈本来就浅),
+     * 打在同样偏浅的纸底上等于没有阴影,所以这块封面看起来像直接贴在画布上。
+     * 这里把主题墨色再压深一档:色相仍跟着封面走(换曲时和背景一起过渡,不突兀),
+     * 但明度恒定落在深色区间,任何封面上都有可见的落影。
+     */
+    const portraitShadowInk = mixColors(theme.primaryColor, '#141110', 0.86);
+
+    /**
+     * 封面的两段式落影:一段「四周包裹」+ 两段向下偏移的远/近投影。
+     *
+     * 为什么不能只给向下偏移的投影:莫奈的背景色是封面推出来的,封面右侧往往是中等偏深的色块,
+     * 纯向下的投影在那种底子上没有对比度(实测截图里完全看不出来),而且封面顶边/左边一点着色都没有,
+     * 整块就像直接贴上去的。包裹层负责让四条边都有一圈压暗,上下两段偏移层负责"厚度"和离开纸面的距离感。
+     * 颜色统一走 portraitShadowInk:换曲时随 background 一起过渡,不会突然有一块冷硬的黑色。
+     */
+    const portraitShadow = (far: number, near: number, wrap: number): string =>
+        [
+            `0 0 ${wrap}px ${colorWithAlpha(portraitShadowInk, 0.34)}`,
+            `0 ${far}px ${far * 2.4}px ${colorWithAlpha(portraitShadowInk, 0.5)}`,
+            `0 ${near}px ${near * 2.2}px ${colorWithAlpha(portraitShadowInk, 0.34)}`
+        ].join(', ');
 
     return (
         <VisualizerShell
@@ -536,13 +560,13 @@ const VisualizerMonet: React.FC<VisualizerMonetProps> = (props) => {
                                             </SettingsKitThemeContext.Provider>
                                         )}
 
-                                        {/* Square cover with enhanced shadow, no transparent border. Its theme
-                                            colours follow a theme change over a second, as the backdrop's do. */}
+                                        {/* 方形封面:两层落影(远、近)+ 一条极淡的描边把画框收住。
+                                            阴影色用 portraitShadowInk,跟随配色过渡(见上面的注释)。 */}
                                         {monetTuning.portraitStyle === 'square' ? (
                                             <div
                                                 className="relative w-full aspect-square overflow-hidden rounded-[2rem] bg-center transition-[box-shadow,background-color] duration-1000"
                                                 style={{
-                                                    boxShadow: `0 36px 80px ${colorWithAlpha(theme.backgroundColor, 0.45)}, 0 20px 42px ${colorWithAlpha(theme.accentColor, 0.22)}, 0 0 0 1px ${colorWithAlpha(theme.primaryColor, 0.06)}`,
+                                                    boxShadow: `${portraitShadow(36, 12, 26)}, 0 0 0 1px ${colorWithAlpha(theme.primaryColor, 0.06)}`,
                                                     backgroundColor: colorWithAlpha(theme.primaryColor, 0.08),
                                                 }}
                                             >
@@ -554,7 +578,9 @@ const VisualizerMonet: React.FC<VisualizerMonetProps> = (props) => {
                                                 style={{
                                                     borderColor: colorWithAlpha(theme.primaryColor, 0.1),
                                                     backgroundColor: colorWithAlpha(theme.backgroundColor, 0.15),
-                                                    boxShadow: `0 24px 60px ${colorWithAlpha(theme.backgroundColor, 0.35)}`,
+                                                    // 画框版(纵向海报)同样给两层落影:卡片和纸底之间要有距离感,
+                                                    // 只压一层浅色阴影时它看着是"印"在背景上的
+                                                    boxShadow: portraitShadow(30, 10, 22),
                                                 }}
                                             >
                                                 <div

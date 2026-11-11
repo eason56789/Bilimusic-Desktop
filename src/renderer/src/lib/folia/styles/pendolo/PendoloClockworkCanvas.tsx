@@ -10,6 +10,7 @@ import {
     readPendoloBeatTriggers,
 } from './pendoloBeatFx';
 import { getBeatEffectStrength } from '../../_missing/beatFxLive';
+import { httpsImageUrl } from '../../../imageUrl';
 import { BEAT_EFFECT_IDS } from '../../_missing/beatEffects';
 import {
     drawPendoloBeatFxOverlay2d,
@@ -185,7 +186,8 @@ const PendoloClockworkCanvas: React.FC<PendoloClockworkCanvasProps> = ({
                 if (crossOrigin) load(false);
                 else coverImageRef.current = null;
             };
-            next.src = coverUrl;
+            // CSP 只放行 https 图源:http 封面会被直接拦掉(见 lib/imageUrl)
+            next.src = httpsImageUrl(coverUrl);
             img = next;
         };
         load(true);

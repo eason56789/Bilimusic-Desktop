@@ -28,6 +28,7 @@ body,
   --bm-mo-dur-page-out: 180ms;
   --bm-mo-dur-hover: 160ms;
   --bm-mo-dur-cover: 260ms;
+  --bm-mo-dur-meta: 420ms;
   --bm-mo-stagger: 36ms;
   --bm-mo-lift: 10px;
   --bm-mo-blur: 6px;
@@ -156,7 +157,9 @@ button:active:not(:disabled) {
   opacity: 0;
   transform: translateY(var(--bm-mo-lift));
   filter: blur(var(--bm-mo-blur));
-  will-change: opacity, transform, filter;
+  /* 这里刻意不写 will-change:一个待揭示元素就是一个需要预合成的层,而每层还带
+     一层模糊纹理。几十个还行,上千行(大歌单)会把显存/合成线程压死,表现为
+     打开歌单卡好几秒。短动画不预提升的代价远小于这个。 */
   /* 兜底:3s 后强制可见(覆盖上面的初始态)。正常路径会在几十~几百 ms 内
      就加上 data-revealed,不会走到这里。 */
   animation: bm-reveal-failsafe 1ms linear 3s forwards;
@@ -184,6 +187,14 @@ html[data-bm-motion='off'] [data-bm-reveal] {
   transform: none !important;
   filter: none !important;
   transition: none !important;
+}
+
+/* 长列表(见 SongList 的 REVEAL_MAX_ROWS):离屏行直接跳过布局与绘制,
+   滚回来才算。上千行的歌单靠这一条把首屏和滚动的成本压到「一屏那么多行」。
+   contain-intrinsic-size 用 auto,记住实测高度,避免滚动条跳动。 */
+[data-bm-longlist] .song-row {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 52px;
 }
 
 /* ============ 封面渐显 ============ */

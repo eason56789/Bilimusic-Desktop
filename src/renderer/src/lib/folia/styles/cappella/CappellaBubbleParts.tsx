@@ -5,6 +5,7 @@ import type { CappellaIntensityConfig, CappellaMessage, ChatSide } from './cappe
 import { DEFAULT_CHAR_FADE_MS, LEFT_AVATAR_INDICES, RIGHT_AVATAR_INDEX } from './cappellaConstants';
 import { getCharacterRevealPlan } from './cappellaReveal';
 import { formatTimestamp, getAvatarPosition } from './cappellaMessageLayout';
+import { httpsImageUrl } from '../../../imageUrl';
 
 // src/components/visualizer/cappella/CappellaBubbleParts.tsx
 // 气泡内的小组件：头像、文字、时间戳、尺寸动画外框、逐字出现的正文与气泡 glow。
@@ -32,7 +33,8 @@ export const CappellaAvatar: React.FC<{
                 borderColor: 'rgba(255,255,255,0.24)',
                 backgroundColor: theme.secondaryColor,
                 backgroundImage: avatarUrl
-                    ? `url("${avatarUrl}")`
+                    // B站头像常是 http://,CSP 只放行 https(见 lib/imageUrl)
+                    ? `url("${httpsImageUrl(avatarUrl)}")`
                     : `linear-gradient(135deg, ${theme.primaryColor}, ${theme.accentColor})`,
                 backgroundClip: 'padding-box',
                 backgroundPosition: shouldUseAvatarGridCrop ? avatarPosition.backgroundPosition : 'center',

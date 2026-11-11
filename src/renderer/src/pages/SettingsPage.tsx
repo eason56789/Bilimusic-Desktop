@@ -200,18 +200,24 @@ const FINE_CHANNELS: {
   label: string
   hint: string
   /** 该通道影响的实际时长字段(用于展示毫秒数) */
-  actual: 'item' | 'stagger' | 'pageIn' | 'hover' | 'cover'
+  actual: 'item' | 'stagger' | 'pageIn' | 'hover' | 'cover' | 'meta'
 }[] = [
   { key: 'list', label: '列表入场', hint: '每个列表项自身的淡入时长', actual: 'item' },
   { key: 'stagger', label: '错开间隔', hint: '相邻项之间的延迟差', actual: 'stagger' },
   { key: 'page', label: '页面过渡', hint: '切页的淡入与退场', actual: 'pageIn' },
   { key: 'hover', label: '悬停反馈', hint: '按钮/卡片的即时响应', actual: 'hover' },
-  { key: 'cover', label: '封面渐显', hint: '封面由模糊到清晰', actual: 'cover' }
+  { key: 'cover', label: '封面渐显', hint: '封面由模糊到清晰', actual: 'cover' },
+  {
+    key: 'meta',
+    label: '歌单信息',
+    hint: '简介/播放量等信息到位时的淡入与下方位移',
+    actual: 'meta'
+  }
 ]
 
 const SETTING_SECTIONS: { name: string; keywords: string }[] = [
   { name: '账号', keywords: '账号 登录 退出 b站 哔哩哔哩 bilibili 网易云 qq音乐 qq 酷狗 概念版 扫码 cookie 授权' },
-  { name: '外观', keywords: '主题 深色 浅色 强调色 窗口材质 云母 亚克力 玻璃 不透明度 界面大小 密度 css 自定义样式 模块显隐 页面切换 动画 toast 轻提示' },
+  { name: '外观', keywords: '主题 深色 浅色 强调色 窗口材质 云母 亚克力 玻璃 不透明度 界面大小 密度 css 自定义样式 模块显隐 页面切换 动画 动效 强度 速率 简介 歌单信息 toast 轻提示' },
   { name: '播放', keywords: 'eq 均衡器 音质 倍速 音调 变调 变速 音量 渐弱 保留音调 睡眠定时 定时 停止 播放记忆 续播' },
   {
     name: '歌词',
@@ -929,7 +935,9 @@ export function SettingsPage() {  const styles = useStyles()
         </div>
         <Text size={200} style={{ color: tokens.colorNeutralForeground3, marginTop: -4 }}>
           1.0× 为标准速度。往右调更快(时长与列表错开间隔同步缩短),往左调更慢;
-          位移与模糊幅度不受影响。动效强度为「关闭」时此项不生效。
+          位移与模糊幅度不受影响。歌单详情里简介/信息的淡入与下方内容的位移也跟随这一档,
+          要单独调它就展开下面的「详细速率调节」,用「歌单信息」这一行。
+          动效强度为「关闭」时此项不生效。
         </Text>
 
         {/* ===== 详细速率:按通道分别微调,并实时显示换算后的毫秒数 ===== */}

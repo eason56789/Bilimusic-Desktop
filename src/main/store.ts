@@ -31,7 +31,7 @@ export const defaultSettings: Settings = {
   pageAnimation: 'scale',
   motionLevel: 'full',
   motionSpeed: 1,
-  motionFine: { list: 1, stagger: 1, page: 1, hover: 1, cover: 1 },
+  motionFine: { list: 1, stagger: 1, page: 1, hover: 1, cover: 1, meta: 1 },
   playerBarStyle: 'island',
   lyricOffsetMs: 0,
   lyricAlign: 'center',
@@ -511,8 +511,16 @@ export function addToPlaylist(playlistId: string, songs: Song[]): Playlist | nul
   const pl = data.playlists.find((p) => p.id === playlistId)
   if (!pl) return null
   for (const s of songs) data.songs[s.id] = s
-  const ids = songs.map((s) => s.id)
-  pl.songIds = [...pl.songIds, ...ids.filter((id) => !pl.songIds.includes(id))]
+  // 用集合记"已经在列表里的 id"并边加边登记:之前拿 pl.songIds.includes 判重,
+  // 同一批里重复出现的歌每判一次读到的都还是旧数组,于是整批重复项都被放进去
+  const existing = new Set(pl.songIds)
+  const toAppend: string[] = []
+  for (const s of songs) {
+    if (existing.has(s.id)) continue
+    existing.add(s.id)
+    toAppend.push(s.id)
+  }
+  pl.songIds = [...pl.songIds, ...toAppend]
   if (!pl.coverUrl && songs[0]?.coverUrl) pl.coverUrl = songs[0].coverUrl
   pl.updatedAt = Date.now()
   scheduleSave()

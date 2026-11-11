@@ -127,6 +127,7 @@ export interface Settings {
    * - page:    页面切换(进+出)
    * - hover:   悬停/按压反馈
    * - cover:   封面渐显
+   * - meta:    歌单信息(简介/播放量等)迟到到达时的入场与下方内容位移
    */
   motionFine: {
     list: number
@@ -134,6 +135,7 @@ export interface Settings {
     page: number
     hover: number
     cover: number
+    meta: number
   }
   /**
    * 播放条外观:
