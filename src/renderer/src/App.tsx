@@ -22,7 +22,7 @@ import { useStore } from './store'
 import type { PageKey } from './store'
 import { buildTheme } from './lib/theme'
 import { ToastHost } from './lib/toast'
-import { applyMotionVars, useMotionFine, useMotionLevel } from './lib/motion'
+import { applyMotionVars, useMotionFine, useMotionHifi, useMotionLevel } from './lib/motion'
 import brandIconUrl from './assets/brand.png'
 import type { Settings } from '@shared/types'
 import { PlayerBar } from './components/PlayerBar'
@@ -493,10 +493,22 @@ function MainApp() {
   const motionLevel = useMotionLevel()
   const motionSpeed = useStore((s) => s.library?.settings.motionSpeed ?? 1)
   const motionFine = useMotionFine()
+  /** 高端动画:关掉后由 CSS 属性选择器摘掉毛玻璃与悬停抬升,这里只负责写属性 */
+  const motionHifi = useMotionHifi()
   useEffect(() => {
-    applyMotionVars(motionLevel, motionSpeed, motionFine)
+    applyMotionVars(motionLevel, motionSpeed, motionFine, motionHifi)
     // motionFine 是每次渲染新建的对象,用各通道值做依赖才能正确触发
-  }, [motionLevel, motionSpeed, motionFine.list, motionFine.stagger, motionFine.page, motionFine.hover, motionFine.cover, motionFine.meta])
+  }, [
+    motionLevel,
+    motionSpeed,
+    motionHifi,
+    motionFine.list,
+    motionFine.stagger,
+    motionFine.page,
+    motionFine.hover,
+    motionFine.cover,
+    motionFine.meta
+  ])
 
   // 界面样式注入:预设(大小/歌词字号/密度) + 用户自定义 CSS
   useEffect(() => {

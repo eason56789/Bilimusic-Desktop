@@ -339,6 +339,7 @@ const SECTION_SETTING_KEYS: Record<string, (keyof Settings)[]> = {
     'motionLevel',
     'motionSpeed',
     'motionFine',
+    'motionHifi',
     'playerBarStyle',
     'uiScale',
     'density',

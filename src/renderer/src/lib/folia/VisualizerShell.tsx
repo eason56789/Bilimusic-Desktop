@@ -12,6 +12,7 @@
  */
 import React, { forwardRef } from 'react'
 import LatentBackground from './backgrounds/LatentBackground'
+import { useStore } from '../../store'
 
 export interface VisualizerShellSharedProps {
   [k: string]: any
@@ -36,7 +37,10 @@ export interface VisualizerShellProps {
 export const VisualizerShell = forwardRef<HTMLDivElement, VisualizerShellProps>(
   ({ theme, className, children, backdrop, sharedProps }, ref) => {
     // 隐现背景:开启时由它提供背景色,shell 不再画不透明底
-    const latent = sharedProps?.latentBackground as boolean | undefined
+    // 高端动画关闭档不再挂这张流光画布(它每帧跟随音频重绘,是歌词页最贵的一块),
+    // 退回 theme.backgroundColor 纯色底,歌词与封面照常显示
+    const hifi = useStore((s) => s.library?.settings.motionHifi !== false)
+    const latent = !!sharedProps?.latentBackground && hifi
     // 自定义底图:最底层用户图片(暗化后保证歌词可读);启用时优先于流光背景
     const customBg = sharedProps?.customBgImage as string | null | undefined
     const customOn = (sharedProps?.customBgEnabled as boolean | undefined) && !!customBg

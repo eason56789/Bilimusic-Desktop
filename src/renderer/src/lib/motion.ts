@@ -177,18 +177,31 @@ export function useMotionFine(): MotionFine {
 }
 
 /**
+ * 高端动画开关(默认开)。关掉后不再有毛玻璃背后模糊、卡片悬停抬升/封面放大、
+ * 歌词页流光背景这些开销大的层 —— 位移与淡入淡出照旧,只是少了那层"贵气"。
+ */
+export function useMotionHifi(): boolean {
+  return useStore((s) => s.library?.settings.motionHifi !== false)
+}
+
+/**
  * 把档位 + 全局速率 + 分通道速率写成 CSS 变量。
  * 挂在 documentElement 上,任何组件都能直接消费,用户自定义 CSS 也能覆盖。
  */
 export function applyMotionVars(
   level: MotionLevel,
   speed = 1,
-  fine: MotionFine = DEFAULT_FINE
+  fine: MotionFine = DEFAULT_FINE,
+  hifi = true
 ): ComputedDurations {
   const root = document.documentElement
   const d = computeDurations(level, speed, fine)
   const on = level !== 'off'
   root.setAttribute('data-bm-motion', level)
+  // 高端动画:属性 + 变量两条都写。CSS 用属性选择器批量关掉毛玻璃/悬停抬升,
+  // 需要自算强度的调用方(如 React 组件)读 --bm-hifi 即可
+  root.setAttribute('data-bm-hifi', hifi ? 'on' : 'off')
+  root.style.setProperty('--bm-hifi', hifi ? '1' : '0')
   root.style.setProperty('--bm-mo-on', on ? '1' : '0')
   root.style.setProperty('--bm-mo-speed', String(clampSpeed(speed)))
   root.style.setProperty('--bm-mo-dur-item', `${d.item}ms`)

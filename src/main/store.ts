@@ -32,6 +32,7 @@ export const defaultSettings: Settings = {
   motionLevel: 'full',
   motionSpeed: 1,
   motionFine: { list: 1, stagger: 1, page: 1, hover: 1, cover: 1, meta: 1 },
+  motionHifi: true,
   playerBarStyle: 'island',
   lyricOffsetMs: 0,
   lyricAlign: 'center',

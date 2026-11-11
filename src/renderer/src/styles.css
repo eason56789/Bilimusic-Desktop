@@ -774,6 +774,34 @@ body.bm-uibg .fui-DialogSurface {
   transform: scale(1.06);
 }
 
+/* ---------- 高端动画关闭档 ---------- */
+/* 只摘"贵"的那一层:毛玻璃背后模糊、卡片悬停抬升与封面放大。
+   位移/淡入淡出不在这里动 —— 那是动效强度档的职责,两处一起改会互相打架。
+   悬停阴影也退回 e1,否则卡片不动却还浮起来一块阴影,反而更怪。 */
+html[data-bm-hifi='off'] .bm-card:hover {
+  transform: none;
+}
+html[data-bm-hifi='off'] .bm-card:hover > .fui-Card {
+  box-shadow: var(--bm-e1) !important;
+}
+html[data-bm-hifi='off'] .bm-card:not(:has(> .fui-Card)):hover {
+  box-shadow: var(--bm-e1);
+}
+html[data-bm-hifi='off'] .bm-card:hover img:not(.bm-cover-img) {
+  transform: none;
+}
+/* 底图模式下的玻璃面板、以及玻璃 HUD 提示:去掉 backdrop-filter(核显上这一项最贵) */
+html[data-bm-hifi='off'] body.bm-uibg .fui-Card,
+html[data-bm-hifi='off'] body.bm-uibg .fui-Input,
+html[data-bm-hifi='off'] body.bm-uibg .fui-Dropdown,
+html[data-bm-hifi='off'] body.bm-uibg .fui-MenuPopover,
+html[data-bm-hifi='off'] body.bm-uibg .fui-DropdownListbox,
+html[data-bm-hifi='off'] body.bm-uibg .fui-DialogSurface,
+html[data-bm-hifi='off'] .bm-toast--hud {
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
 /* ---------- 歌曲行:渐变悬停 + 播放中强调条 ---------- */
 .song-row {
   position: relative;

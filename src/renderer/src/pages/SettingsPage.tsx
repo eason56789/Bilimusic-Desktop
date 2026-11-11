@@ -891,6 +891,22 @@ export function SettingsPage() {  const styles = useStyles()
           </RadioGroup>
         </div>
 
+        {/* 高端动画:与「动效强度」正交 —— 强度管有没有/多大位移,这一档管那层"贵"的观感 */}
+        <div className={styles.row}>
+          <Text size={300}>高端动画:</Text>
+          <Switch
+            checked={s.motionHifi !== false}
+            disabled={s.motionLevel === 'off'}
+            onChange={(_, d) => update('motionHifi', d.checked)}
+            label={s.motionHifi !== false ? '开启' : '关闭'}
+          />
+        </div>
+        <Text size={200} style={{ color: tokens.colorNeutralForeground3, marginTop: -4 }}>
+          开启:毛玻璃背后模糊、卡片悬停抬升与封面轻微放大、歌词页随音乐流动的背景。
+          关闭后这些层整体摘掉,只剩位移与淡入淡出,核显或低配显卡上明显更省。
+          与「动效强度」互不影响:强度为「关闭」时这一档不生效。
+        </Text>
+
         {/* 动效强度:一个总开关管住全应用的位移/模糊/错开入场 */}
         <div className={styles.row}>
           <Text size={300}>动效强度:</Text>
