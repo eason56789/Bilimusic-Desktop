@@ -1,6 +1,7 @@
 ﻿/** 歌单页:本地歌单管理 + B站收藏夹/网易云歌单导入 + 最近播放 */
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import type { MouseEvent as ReactMouseEvent } from 'react'
+import type { MouseEvent as ReactMouseEvent, ReactElement } from 'react'
+import { createPortal } from 'react-dom'
 import { motion } from 'framer-motion'
 import {
   Button,
@@ -123,6 +124,15 @@ type OnlineBrief = {
   count: number
   platform: 'netease' | 'qq' | 'qishui' | KugouPlatform
 }
+
+/**
+ * 非本地歌单卡(未导入的在线歌单 / B站收藏夹 / 播放记录 / 收藏歌曲)的右键菜单项。
+ *
+ * 这些卡片背后没有本地 Playlist 可供操作,菜单项只能在右键那一刻按卡片类型现构造:
+ * 之前只给「本地歌单」和「已导入的在线歌单」挂了 onContextMenu,同一个网格里
+ * 剩下几类卡片右键于是完全没有反应。这里把它们的菜单收敛到同一条 Menu 外观上。
+ */
+type QuickMenuItem = { key: string; label: string; icon: ReactElement; run: () => void }
 
 /**
  * 歌单详情主体:头部(封面/名称/描述)+ 网易云元信息(播放量/创建时间/创作者/标签)
@@ -740,7 +750,19 @@ export function PlaylistsPage() {
   const [category, setCategory] = useState<'all' | PlaylistCategory>('all')
   /** 歌单卡片右键菜单:目标歌单 + 跟随鼠标的定位锚点 */
   const [menuTarget, setMenuTarget] = useState<Playlist | null>(null)
-  const ctxAnchorRef = useRef<HTMLSpanElement | null>(null)
+  /**
+   * 两套右键菜单共用一个定位锚点。锚点必须 portal 到 body:页面容器带 page-anim-*
+   * 动画,而 fill-mode=both 会让终态的 transform: scale(1) 一直留在元素上,带 transform
+   * 的祖先又成了 position: fixed 的定位基准 —— 锚点留在页面里的话,fixed 坐标是按
+   * 页面容器左上角算的,菜单会整体偏出「侧边栏宽度 + 页面顶部偏移」那么多。
+   */
+  const menuAnchorRef = useRef<HTMLSpanElement | null>(null)
+  const [menuPos, setMenuPos] = useState<{ x: number; y: number }>({ x: 0, y: 0 })
+  /**
+   * 非本地卡片的右键菜单项(在线歌单 / B站收藏夹 / 播放记录 / 收藏歌曲)。
+   * 与上面本地歌单的菜单互斥:同一时刻只会有一个开着,两边都会把对方置空。
+   */
+  const [quickMenu, setQuickMenu] = useState<QuickMenuItem[] | null>(null)
   /** 重命名对话框的描述输入(与名称一起经 libraryUpdatePlaylist 保存) */
   const [descValue, setDescValue] = useState('')
   /** 歌单间移动歌曲对话框(add=把本歌单歌曲加到其他歌单 / remove=从其他歌单移除这些歌) */
@@ -833,9 +855,54 @@ export function PlaylistsPage() {
       if (pl.qqPlaylistId) s.add(`qq:${pl.qqPlaylistId}`)
       if (pl.kugouPlaylistId) s.add(`kugou:${pl.kugouPlaylistId}`)
       if (pl.qishuiPlaylistId) s.add(`qishui:${pl.qishuiPlaylistId}`)
+      // B站收藏夹也要登记,否则右键收藏夹卡片可以反复导入同一个夹子,堆出多份同名歌单
+      if (pl.favoriteFolderId) s.add(`bili:${pl.favoriteFolderId}`)
     }
     return s
   }, [library?.playlists])
+
+  /** 非本地卡片右键:记录鼠标位置并打开菜单(菜单项由调用方按卡片类型构造) */
+  const openQuickMenu = (e: ReactMouseEvent<HTMLElement>, items: QuickMenuItem[]): void => {
+    e.preventDefault()
+    setMenuPos({ x: e.clientX, y: e.clientY })
+    setMenuTarget(null)
+    setQuickMenu(items)
+  }
+
+  /**
+   * 打开在线歌单:网易云/QQ/汽水进预览页,酷狗没有预览页所以沿用「点一下即导入」。
+   * 卡片点击与右键菜单的「打开预览」共用这里,避免两处各写一份分支。
+   */
+  const openOnlineView = (b: OnlineBrief): void => {
+    if (b.platform === 'netease')
+      setRemoteView({ kind: 'netease-pl', id: Number(b.id), title: b.name, coverUrl: b.coverUrl, count: b.count })
+    else if (b.platform === 'qishui')
+      setRemoteView({ kind: 'qishui', id: String(b.id), title: b.name, coverUrl: b.coverUrl, count: b.count })
+    else if (b.platform === 'qq')
+      setRemoteView({ kind: 'qq-pl', id: String(b.id), title: b.name, coverUrl: b.coverUrl, count: b.count })
+    else void importOnline(b)
+  }
+
+  /** 打开B站收藏夹的在线列表(卡片点击与右键菜单共用) */
+  const openBiliFav = (f: { id: number; title: string; coverUrl?: string; songCount: number }): void => {
+    setRemoteView({ kind: 'fav', id: f.id, title: f.title, coverUrl: f.coverUrl, count: f.songCount })
+  }
+
+  /** 把B站收藏夹整体导入成本地歌单(右键菜单入口;导入后由 sourceOf 归到 bili 分类) */
+  const importBiliFav = async (f: { id: number; title: string; songCount: number }): Promise<void> => {
+    if (onlineImporting) return
+    setOnlineImporting(`bili:${f.id}`)
+    try {
+      const pl = await api.importBiliFavorites(f.id, f.title)
+      await refresh()
+      if (pl) toastSuccess('导入成功', `${f.title} · ${pl.songIds.length} 首`)
+      else toastError('导入失败', '内容为空或获取失败')
+    } catch (e) {
+      toastError('导入失败', String(e))
+    } finally {
+      setOnlineImporting(null)
+    }
+  }
 
   const importOnline = async (b: OnlineBrief): Promise<void> => {
     const key = `${sourceKeyPrefix(b.platform)}:${b.id}`
@@ -924,22 +991,27 @@ export function PlaylistsPage() {
             return
           }
           // 未导入:先打开预览(导入按钮在预览页,显式化,避免"点一下就生成歌单")
-          if (b.platform === 'netease')
-            setRemoteView({ kind: 'netease-pl', id: Number(b.id), title: b.name, coverUrl: b.coverUrl, count: b.count })
-          else if (b.platform === 'qishui')
-            setRemoteView({ kind: 'qishui', id: String(b.id), title: b.name, coverUrl: b.coverUrl, count: b.count })
-          else if (b.platform === 'qq')
-            setRemoteView({ kind: 'qq-pl', id: String(b.id), title: b.name, coverUrl: b.coverUrl, count: b.count })
-          else void importOnline(b)
+          openOnlineView(b)
         }}
-        onContextMenu={
-          localPl
-            ? (e) => {
-                // 已导入的在线歌单:右键直接对本地副本提供 编辑/同步/删除 等操作
-                onCardContextMenu(e, localPl)
-              }
-            : undefined
-        }
+        onContextMenu={(e) => {
+          // 已导入的在线歌单:右键直接对本地副本提供 编辑/同步/删除 等操作
+          if (localPl) {
+            onCardContextMenu(e, localPl)
+            return
+          }
+          // 未导入的在线歌单同样要能右键:打开预览 + 直接导入(酷狗没有预览页,只留导入)
+          openQuickMenu(e, [
+            ...(b.platform === 'netease' || b.platform === 'qq' || b.platform === 'qishui'
+              ? [{ key: 'open', label: '打开预览', icon: <OpenRegular />, run: () => openOnlineView(b) }]
+              : []),
+            {
+              key: 'import',
+              label: '导入到我的歌单',
+              icon: <CloudArrowDownRegular />,
+              run: () => void importOnline(b)
+            }
+          ])
+        }}
       >
         <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
           <Cover url={b.coverUrl} size={56} radius={8} iconSize={24} />
@@ -1115,14 +1187,11 @@ export function PlaylistsPage() {
   }
 
   // ===== 歌单卡片右键菜单 =====
-  /** 右键歌单卡片:记录目标并把隐藏锚点移到鼠标处(菜单定位用,与歌曲列表右键同款交互) */
+  /** 右键歌单卡片:记录目标与鼠标位置(菜单定位用,与歌曲列表右键同款交互) */
   const onCardContextMenu = (e: ReactMouseEvent<HTMLDivElement>, pl: Playlist): void => {
     e.preventDefault()
-    const anchor = ctxAnchorRef.current
-    if (anchor) {
-      anchor.style.left = `${e.clientX}px`
-      anchor.style.top = `${e.clientY}px`
-    }
+    setMenuPos({ x: e.clientX, y: e.clientY })
+    setQuickMenu(null)
     setMenuTarget(pl)
   }
 
@@ -1292,20 +1361,38 @@ export function PlaylistsPage() {
     </>
   )
 
+  /**
+   * 右键菜单的定位锚点:必须 portal 到 body。页面容器带 page-anim-* 动画,
+   * fill-mode=both 让终态 transform 常驻,于是容器成了 fixed 子元素的定位基准,
+   * 锚点写在这里就会按容器左上角算坐标,菜单整体偏移。portal 出去后才是真正的视口坐标。
+   * 两套菜单共用一个锚点:同一时刻只会有一套开着,不需要各带一份。
+   */
+  const menuAnchor = createPortal(
+    <span
+      ref={menuAnchorRef}
+      style={{
+        position: 'fixed',
+        left: menuPos.x,
+        top: menuPos.y,
+        width: 0,
+        height: 0,
+        pointerEvents: 'none'
+      }}
+      aria-hidden
+    />,
+    document.body
+  )
+
   /** 歌单卡片右键菜单(受控,锚点跟随鼠标;菜单项见 onCardContextMenu / menuTarget) */
   const playlistContextMenu = (
     <>
-      <span
-        ref={ctxAnchorRef}
-        style={{ position: 'fixed', width: 0, height: 0, pointerEvents: 'none' }}
-        aria-hidden
-      />
+      {menuAnchor}
       <Menu
         open={!!menuTarget}
         onOpenChange={(_, d) => {
           if (!d.open) setMenuTarget(null)
         }}
-        positioning={{ target: menuTarget ? ctxAnchorRef.current : undefined }}
+        positioning={{ target: menuTarget ? menuAnchorRef.current : undefined }}
       >
         <MenuTrigger disableButtonEnhancement>
           <span style={{ display: 'none' }} />
@@ -1388,6 +1475,42 @@ export function PlaylistsPage() {
               </MenuItem>
             </>
           )}
+        </MenuPopover>
+      </Menu>
+    </>
+  )
+
+  /**
+   * 非本地卡片的右键菜单:与上面本地歌单菜单同一套外观(Menu + 跟随鼠标的隐藏锚点),
+   * 差别只是菜单项来自 quickMenu —— 右键那一刻按卡片类型构造出来的。
+   */
+  const quickContextMenu = (
+    <>
+      <Menu
+        open={!!quickMenu}
+        onOpenChange={(_, d) => {
+          if (!d.open) setQuickMenu(null)
+        }}
+        positioning={{ target: quickMenu ? menuAnchorRef.current : undefined }}
+      >
+        <MenuTrigger disableButtonEnhancement>
+          <span style={{ display: 'none' }} />
+        </MenuTrigger>
+        <MenuPopover>
+          {(quickMenu ?? []).map((it) => (
+            <MenuItem
+              key={it.key}
+              icon={it.icon}
+              onClick={() => {
+                // 先关菜单再执行,免得菜单还盖在随后弹出的对话框上
+                const run = it.run
+                setQuickMenu(null)
+                run()
+              }}
+            >
+              {it.label}
+            </MenuItem>
+          ))}
         </MenuPopover>
       </Menu>
     </>
@@ -1607,6 +1730,11 @@ export function PlaylistsPage() {
           key="favorites"
           className={styles.card}
           onClick={() => setFavView(true)}
+          onContextMenu={(e) =>
+            openQuickMenu(e, [
+              { key: 'open', label: '打开收藏歌曲', icon: <HeartRegular />, run: () => setFavView(true) }
+            ])
+          }
         >
           <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
             <div
@@ -1677,7 +1805,16 @@ export function PlaylistsPage() {
         {/* B站在线条目:登录即出现,打开才拉数据 */}
         {showBiliSection && (library.biliProfile ? (
           <>
-            <Card key="bili-history" className={styles.card} onClick={() => setRemoteView({ kind: 'history' })}>
+            <Card
+              key="bili-history"
+              className={styles.card}
+              onClick={() => setRemoteView({ kind: 'history' })}
+              onContextMenu={(e) =>
+                openQuickMenu(e, [
+                  { key: 'open', label: '打开播放记录', icon: <HistoryRegular />, run: () => setRemoteView({ kind: 'history' }) }
+                ])
+              }
+            >
               <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
                 <div
                   style={{
@@ -1716,9 +1853,24 @@ export function PlaylistsPage() {
               <RevealItem key={`bili-fav-${f.id}`} api={reveal} index={100 + i} itemKey={`bili-${f.id}`} className="bm-card">
               <Card
                 className={styles.card}
-                onClick={() =>
-                  setRemoteView({ kind: 'fav', id: f.id, title: f.title, coverUrl: f.coverUrl, count: f.songCount })
-                }
+                onClick={() => openBiliFav(f)}
+                onContextMenu={(e) => {
+                  // 收藏夹卡片的右键:打开 + 还没导入过才给「导入到我的歌单」,避免同一夹子导入多次
+                  const imported = importedSourceIds.has(`bili:${f.id}`)
+                  openQuickMenu(e, [
+                    { key: 'open', label: '打开收藏夹', icon: <OpenRegular />, run: () => openBiliFav(f) },
+                    ...(imported
+                      ? []
+                      : [
+                          {
+                            key: 'import',
+                            label: '导入到我的歌单',
+                            icon: <CloudArrowDownRegular />,
+                            run: () => void importBiliFav(f)
+                          }
+                        ])
+                  ])
+                }}
               >
                 <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
                   <Cover url={f.coverUrl} size={56} radius={8} iconSize={24} />
@@ -1780,7 +1932,21 @@ export function PlaylistsPage() {
 
         {/* 网易云云端播放记录(听歌排行):登录即出现,打开才拉数据 */}
         {showNeteaseSection && library.neteaseProfile && (
-          <Card key="netease-record" className={styles.card} onClick={() => setRemoteView({ kind: 'netease-record' })}>
+          <Card
+            key="netease-record"
+            className={styles.card}
+            onClick={() => setRemoteView({ kind: 'netease-record' })}
+            onContextMenu={(e) =>
+              openQuickMenu(e, [
+                {
+                  key: 'open',
+                  label: '打开播放记录',
+                  icon: <HistoryRegular />,
+                  run: () => setRemoteView({ kind: 'netease-record' })
+                }
+              ])
+            }
+          >
             <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
               <div
                 style={{
@@ -1819,7 +1985,21 @@ export function PlaylistsPage() {
 
         {/* QQ音乐最近播放:登录即出现,打开才拉数据 */}
         {showQqSection && library.qqProfile && (
-          <Card key="qq-record" className={styles.card} onClick={() => setRemoteView({ kind: 'qq-record' })}>
+          <Card
+            key="qq-record"
+            className={styles.card}
+            onClick={() => setRemoteView({ kind: 'qq-record' })}
+            onContextMenu={(e) =>
+              openQuickMenu(e, [
+                {
+                  key: 'open',
+                  label: '打开播放记录',
+                  icon: <HistoryRegular />,
+                  run: () => setRemoteView({ kind: 'qq-record' })
+                }
+              ])
+            }
+          >
             <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
               <div
                 style={{
@@ -2014,6 +2194,8 @@ export function PlaylistsPage() {
       <NeteaseLoginDialog open={neLoginOpen} onClose={() => setNeLoginOpen(false)} />
       {/* 歌单卡片右键菜单 + 重命名/删除/移动歌曲对话框 */}
       {playlistContextMenu}
+      {/* 在线歌单/收藏夹/播放记录/收藏歌曲卡片的右键菜单 */}
+      {quickContextMenu}
       {editDialogs}
     </PageLayout>
     </div>

@@ -1,6 +1,8 @@
 /** 下载页:任务进度 + 历史(右键/更多菜单 + 单击播放本地文件) */
 import { useRef, useState } from 'react'
 import type { MouseEvent } from 'react'
+/** 右键菜单锚点 portal 到 body,避开页面动画容器的 transform 影响 fixed 定位 */
+import { createPortal } from 'react-dom'
 import {
   Button,
   Menu,
@@ -336,12 +338,15 @@ export function DownloadsPage() {
         ))
       )}
 
-      {/* 右键/更多菜单(受控,锚点定位) */}
-      <span
-        ref={ctxAnchorRef}
-        style={{ position: 'fixed', width: 0, height: 0, pointerEvents: 'none' }}
-        aria-hidden
-      />
+      {/* 右键/更多菜单(受控,锚点定位;锚点 portal 到 body 才不受页面动画 transform 影响) */}
+      {createPortal(
+        <span
+          ref={ctxAnchorRef}
+          style={{ position: 'fixed', width: 0, height: 0, pointerEvents: 'none' }}
+          aria-hidden
+        />,
+        document.body
+      )}
       <Menu
         open={!!ctx}
         onOpenChange={(_, d) => {

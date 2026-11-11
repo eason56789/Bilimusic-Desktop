@@ -1,5 +1,7 @@
 /** 搜索页:B站视频 / 网易云/QQ/酷狗 歌曲·歌单·歌手 多源搜索 */
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+/** 右键菜单锚点 portal 到 body,避开页面动画容器的 transform 影响 fixed 定位 */
+import { createPortal } from 'react-dom'
 import {
   Button,
   Dropdown,
@@ -1128,12 +1130,15 @@ export function SearchPage() {
               </div>
             )}
 
-            {/* 主页推荐卡片右键菜单(受控,锚点跟随鼠标) */}
-            <span
-              ref={recAnchorRef}
-              style={{ position: 'fixed', width: 0, height: 0, pointerEvents: 'none' }}
-              aria-hidden
-            />
+            {/* 主页推荐卡片右键菜单(受控,锚点跟随鼠标;锚点 portal 到 body 避开页面动画 transform) */}
+            {createPortal(
+              <span
+                ref={recAnchorRef}
+                style={{ position: 'fixed', width: 0, height: 0, pointerEvents: 'none' }}
+                aria-hidden
+              />,
+              document.body
+            )}
             <Menu
               open={!!recCtx}
               onOpenChange={(_, d) => {
@@ -1148,11 +1153,14 @@ export function SearchPage() {
                 <MenuList>{recCtx ? recMenuItems(recCtx.song) : null}</MenuList>
               </MenuPopover>
             </Menu>
-            <span
-              ref={plAnchorRef}
-              style={{ position: 'fixed', width: 0, height: 0, pointerEvents: 'none' }}
-              aria-hidden
-            />
+            {createPortal(
+              <span
+                ref={plAnchorRef}
+                style={{ position: 'fixed', width: 0, height: 0, pointerEvents: 'none' }}
+                aria-hidden
+              />,
+              document.body
+            )}
             <Menu
               open={!!plCtx}
               onOpenChange={(_, d) => {

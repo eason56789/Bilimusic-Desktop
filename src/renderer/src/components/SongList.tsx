@@ -1,6 +1,12 @@
 /** 通用歌曲列表(搜索结果/歌单/最近播放共用):单击播放 + 右键/更多菜单 + 多选模式 */
 import { useEffect, useRef, useState } from 'react'
 import type { MouseEvent } from 'react'
+/**
+ * 右键菜单锚点必须 portal 到 body:页面容器带 page-anim-* 动画,fill-mode=both 让终态
+ * transform 常驻,带 transform 的祖先会成为 position: fixed 的定位基准,锚点留在页面里
+ * 就会被整体偏移(侧边栏宽度那一档),右键菜单因此错位。
+ */
+import { createPortal } from 'react-dom'
 import {
   Button,
   Checkbox,
@@ -567,12 +573,15 @@ export function SongList({
         )}
       </div>
 
-      {/* 右键菜单(受控,锚点跟随鼠标) */}
-      <span
-        ref={ctxAnchorRef}
-        style={{ position: 'fixed', width: 0, height: 0, pointerEvents: 'none' }}
-        aria-hidden
-      />
+      {/* 右键菜单(受控,锚点跟随鼠标;锚点 portal 到 body 才不受页面动画 transform 影响) */}
+      {createPortal(
+        <span
+          ref={ctxAnchorRef}
+          style={{ position: 'fixed', width: 0, height: 0, pointerEvents: 'none' }}
+          aria-hidden
+        />,
+        document.body
+      )}
       <Menu
         open={!!ctxMenu}
         onOpenChange={(_, d) => {
