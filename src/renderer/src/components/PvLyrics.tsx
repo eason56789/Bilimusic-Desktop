@@ -16,6 +16,7 @@ import { Component, memo, useCallback, useEffect, useMemo, useRef, useState, typ
 import { makeStyles } from '@fluentui/react-components'
 import type { LyricLine } from '@shared/types'
 import { useStore, getAudioElement } from '../store'
+import { lyricPosMs } from '../lib/lyricClock'
 import { lineEndTime } from '../lib/karaoke'
 import { resolveTrans } from '../lib/transDecide'
 import { segmentLine } from '../lib/pvSegment'
@@ -237,7 +238,6 @@ const PvSceneView = memo(function PvSceneView({
   sizeH,
   motion,
   accent,
-  offset,
   onExited
 }: {
   scene: PvCompiled
@@ -245,12 +245,11 @@ const PvSceneView = memo(function PvSceneView({
   sizeH: number
   motion: number
   accent: string
-  offset: number
   onExited: (key: string) => void
 }): JSX.Element {
   const styles = useStyles()
-  const propsRef = useRef({ scene, sizeW, sizeH, motion, accent, offset, onExited })
-  propsRef.current = { scene, sizeW, sizeH, motion, accent, offset, onExited }
+  const propsRef = useRef({ scene, sizeW, sizeH, motion, accent, onExited })
+  propsRef.current = { scene, sizeW, sizeH, motion, accent, onExited }
   const stageRef = useRef<HTMLDivElement>(null)
   const glyphRefs = useRef<(HTMLSpanElement | null)[]>([])
   const exitedRef = useRef(false)
@@ -258,8 +257,8 @@ const PvSceneView = memo(function PvSceneView({
   useEffect(() => {
     let raf = 0
     const paint = (): void => {
-      const { scene: c, sizeW: w, sizeH: h, motion: mo, offset: off, onExited: done } = propsRef.current
-      const now = getAudioElement().currentTime * 1000 + 200 - off
+      const { scene: c, sizeW: w, sizeH: h, motion: mo, onExited: done } = propsRef.current
+      const now = lyricPosMs(getAudioElement().currentTime)
       const span = Math.max(w, h)
       const visMs = Math.max(400, c.unloadMs - c.startMs)
       const handoffMs = Math.min(1100, Math.max(400, visMs * 0.3))
@@ -350,7 +349,6 @@ const PvSceneView = memo(function PvSceneView({
 export function PvLyrics({ lines, activeIdx, smoothMs }: PvLyricsProps): JSX.Element {
   const styles = useStyles()
   const settings = useStore((s) => s.library?.settings)
-  const offset = settings?.lyricOffsetMs ?? 0
   const scale = settings?.pvScale ?? 1
   const decor = settings?.pvDecor !== false
   const motion = settings?.pvMotion ?? 1
@@ -511,7 +509,6 @@ export function PvLyrics({ lines, activeIdx, smoothMs }: PvLyricsProps): JSX.Ele
               sizeH={size.h}
               motion={motion}
               accent={accent}
-              offset={offset}
               onExited={pruneScene}
             />
           ))

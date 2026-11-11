@@ -201,6 +201,41 @@ export async function searchKugouArtists(
     .filter((s): s is SourceArtistBrief => s !== null)
 }
 
+/** 歌手资料(歌手主页用):名称/头像/简介/歌曲数 */
+export interface KugouArtistProfile {
+  name: string
+  avatar?: string
+  briefDesc?: string
+  musicCount?: number
+}
+
+export async function getKugouArtistProfile(singerId: string): Promise<KugouArtistProfile | null> {
+  try {
+    const url =
+      'http://mobilecdnbj.kugou.com/api/v3/singer/info?singerid=' +
+      encodeURIComponent(singerId) +
+      '&version=9108'
+    const resp = await fetch(url, {
+      headers: { 'User-Agent': UA, Referer: 'https://www.kugou.com/' },
+      signal: AbortSignal.timeout(15_000)
+    })
+    if (!resp.ok) throw new Error(`酷狗歌手资料 HTTP ${resp.status}`)
+    const json = (await resp.json()) as any
+    const d = json?.data ?? {}
+    const name = decodeEntities(String(d.singername ?? '').trim())
+    if (!name) return null
+    const songCount = Number(d.songcount ?? 0)
+    return {
+      name,
+      avatar: normalizeKugouCover(d.imgurl ?? d.singerimg) ?? undefined,
+      briefDesc: decodeEntities(String(d.profile ?? '').trim()) || undefined,
+      musicCount: songCount > 0 ? songCount : undefined
+    }
+  } catch {
+    return null
+  }
+}
+
 /** 歌手热门歌曲(sort=1 按热度) */
 export async function getKugouArtistSongs(
   singerId: string,

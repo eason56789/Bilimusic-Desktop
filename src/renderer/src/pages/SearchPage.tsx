@@ -300,18 +300,22 @@ export function SearchPage() {
   }
 
   /**
-   * 消费来自识曲页的关键词:识曲成功后跳到这里,自动填入并搜索。
-   * 只在挂载时消费一次 —— takePendingSearch 取走即清空,
-   * 因此之后用户手动切回搜索页不会又被旧关键词覆盖。
+   * 消费来自识曲页/歌曲详情(专辑名)的关键词:跳到这里自动填入并搜索。
+   * 订阅 pendingSearch:写入方(识曲页)总是跨页导航,挂载时消费即可;
+   * 但歌曲详情弹窗的「专辑」点击可能发生在用户已停留在搜索页时,
+   * 此时页面不会重挂载,必须响应式消费,否则搜索框不会填入。
+   * takePendingSearch 取走即清空,不会重复触发。
    */
+  const pendingSearch = useStore((s) => s.pendingSearch)
   useEffect(() => {
+    if (pendingSearch === null) return
     const q = useStore.getState().takePendingSearch()
     if (!q) return
     setQuery(q)
     void doSearch(q, 'songs', 'netease')
-    // 仅在首次挂载时执行;doSearch 每次渲染都是新引用,放进依赖会重复触发
+    // doSearch 每次渲染都是新引用,放进依赖会重复触发;由 pendingSearch 变化驱动
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, [pendingSearch])
 
   // 打开歌单预览(附带网易云元信息:播放量/创建时间/标签)
   const openPlaylistPreview = async (pl: NeteasePlaylistBrief) => {
@@ -350,7 +354,7 @@ export function SearchPage() {
 
   // 打开歌手主页(独立页面,替换旧的弹窗)
   const openArtistDetail = (a: NeteaseArtistBrief) => {
-    useStore.getState().openArtistPage(a.id)
+    useStore.getState().openArtistPage('netease', a.id)
   }
 
   /** 打开 QQ音乐/酷狗 歌单·歌手预览(整页视图,同网易云歌单预览布局) */
@@ -1315,7 +1319,7 @@ export function SearchPage() {
                     key={a.id}
                     className={styles.chip}
                     style={{ display: 'flex', flexDirection: 'column', gap: 8, alignItems: 'center', padding: 16, borderRadius: 12, boxSizing: 'border-box' }}
-                    onClick={() => void openSourcePreview({ kind: 'artist', platform: 'qq', brief: a })}
+                    onClick={() => useStore.getState().openArtistPage('qq', a.id)}
                   >
                     <Cover url={a.avatar} size={80} radius={40} iconSize={28} />
                     <Text weight="semibold" size={300} style={{ textAlign: 'center' }}>
@@ -1426,7 +1430,7 @@ export function SearchPage() {
                     key={a.id}
                     className={styles.chip}
                     style={{ display: 'flex', flexDirection: 'column', gap: 8, alignItems: 'center', padding: 16, borderRadius: 12, boxSizing: 'border-box' }}
-                    onClick={() => void openSourcePreview({ kind: 'artist', platform: 'kugou', brief: a })}
+                    onClick={() => useStore.getState().openArtistPage('kugou', a.id)}
                   >
                     <Cover url={a.avatar} size={80} radius={40} iconSize={28} />
                     <Text weight="semibold" size={300} style={{ textAlign: 'center' }}>

@@ -335,6 +335,16 @@ export function initStore(): void {
   s.floatFontScale = Math.min(1.6, Math.max(0.7, s.floatFontScale))
   if (typeof s.floatShowTrans !== 'boolean') s.floatShowTrans = true
   if (typeof s.floatShowNextLine !== 'boolean') s.floatShowNextLine = true
+  // 迁移:歌词偏移方向语义翻转(正值由"实际延后"改为文档标注的"提前"),
+  // 旧全局值取反一次,避免老用户调好的值翻转后反向。每歌记忆字段是新加的,无需迁移。
+  if (!data.lyricOffsetSignMigrated) {
+    if (typeof s.lyricOffsetMs === 'number' && s.lyricOffsetMs !== 0) {
+      s.lyricOffsetMs = -s.lyricOffsetMs
+    }
+    data.lyricOffsetSignMigrated = true
+    // 立即落盘:若等惰性保存,首次会话崩溃会导致下次启动重复取反
+    saveStore()
+  }
   // 启动时修剪不再被任何列表引用的歌曲元数据,防止 library.json 无限膨胀
   pruneSongs()
 }
@@ -526,6 +536,25 @@ export function addRecent(song: Song): void {
 export function setSetting<K extends keyof Settings>(key: K, value: Settings[K]): void {
   ;(data.settings as unknown as Record<string, unknown>)[key as string] = value
   scheduleSave()
+}
+
+/**
+ * 记住/清除某首歌的歌词偏移(ms,正值=提前)。
+ * 传 0 视为"这首歌不需要偏移",直接删条目保持 map 精简;null = 清除记忆(回退全局)。
+ */
+export function setLyricOffset(songId: string, ms: number | null): boolean {
+  if (typeof songId !== 'string' || !songId) return false
+  if (!data.lyricOffsets) data.lyricOffsets = {}
+  if (ms === null) {
+    delete data.lyricOffsets[songId]
+  } else {
+    if (typeof ms !== 'number' || !isFinite(ms)) return false
+    const v = Math.max(-10000, Math.min(10000, Math.round(ms)))
+    if (v === 0) delete data.lyricOffsets[songId]
+    else data.lyricOffsets[songId] = v
+  }
+  scheduleSave()
+  return true
 }
 
 export function addSearchHistory(q: string): void {

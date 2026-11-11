@@ -514,3 +514,9 @@ body.bm-uibg .fui-DropdownListbox,
 body.bm-uibg .fui-DialogSurface {
   backdrop-filter: blur(24px) saturate(1.2);
 }
+
+/* Fluent 滑杆默认 129px 固定宽(inline-grid 不撑满容器),统一拉到容器全宽;
+   垂直滑杆(仅 EQ)在组件上以内联 width:auto 压回默认,避免轨道被横向拉长 */
+.fui-Slider {
+  width: 100%;
+}

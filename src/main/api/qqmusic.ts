@@ -265,8 +265,16 @@ export async function getQqArtistSongs(
   return list.map(qqSongFromItem).filter((s): s is Song => s !== null)
 }
 
-/** 歌手粉丝数(歌曲详情页展示用) */
-export async function getQqArtistFans(singerMid: string): Promise<number | null> {
+/** 歌手资料(歌手主页用):名称/头像/别名/粉丝数/歌曲数 —— 一次请求取全 */
+export interface QqArtistProfile {
+  name: string
+  avatar?: string
+  alias?: string[]
+  fansCount?: number
+  musicCount?: number
+}
+
+export async function getQqArtistProfile(singerMid: string): Promise<QqArtistProfile | null> {
   try {
     const json = await postMusicu(
       {
@@ -276,11 +284,34 @@ export async function getQqArtistFans(singerMid: string): Promise<number | null>
       },
       { ct: '19', cv: '1859', uin: '0', format: 'json' }
     )
-    const fans = Number(json?.req?.data?.singer_info?.fans ?? 0)
-    return fans > 0 ? fans : null
+    const info = json?.req?.data?.singer_info
+    if (!info) return null
+    const fans = Number(info.fans ?? 0)
+    // 别名:other_name 为「;&quot;分隔的字符串
+    const other = decodeEntities(String(info.other_name ?? '')).trim()
+    const alias = other
+      ? other
+          .split(/[;；]/)
+          .map((s) => s.trim())
+          .filter((s) => s.length > 0)
+      : undefined
+    return {
+      // 字段名实测为 name(不是 singer_name)
+      name: decodeEntities(String(info.name ?? '').trim()),
+      // 歌手头像有固定规则:http://y.gtimg.cn/music/photo_new/T001R150x150M000{mid}.jpg
+      avatar: `https://y.gtimg.cn/music/photo_new/T001R150x150M000${singerMid}.jpg`,
+      alias: alias && alias.length > 0 ? alias : undefined,
+      fansCount: fans > 0 ? fans : undefined
+    }
   } catch {
     return null
   }
+}
+
+/** 歌手粉丝数(歌曲详情页展示用) */
+export async function getQqArtistFans(singerMid: string): Promise<number | null> {
+  const p = await getQqArtistProfile(singerMid).catch(() => null)
+  return p?.fansCount ?? null
 }
 
 /**

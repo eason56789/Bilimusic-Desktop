@@ -1,4 +1,4 @@
-/** 网易云歌手主页(独立页面,与歌单详情同构):头像/简介/粉丝数/热门歌曲/页内搜索 */
+/** 歌手主页(跨平台统一):头像/简介/粉丝数/热门歌曲/页内搜索 + 数据来源平台标识 */
 import { useEffect, useMemo, useState } from 'react'
 import {
   Button,
@@ -16,7 +16,7 @@ import {
   SearchRegular,
   DismissRegular
 } from '@fluentui/react-icons'
-import type { NeteaseArtistDetail, Song } from '@shared/types'
+import type { ArtistPlatform, Song, UnifiedArtistDetail } from '@shared/types'
 import { api } from '../lib/api'
 import { useStore } from '../store'
 import { SongList } from './SongList'
@@ -42,6 +42,15 @@ const useStyles = makeStyles({
     background: `var(--bm-surface-3, ${tokens.colorNeutralBackground3})`,
     color: tokens.colorNeutralForeground2
   },
+  /** 数据来源平台标识:与其它平台标签同形,用品牌色区分 */
+  platformChip: {
+    fontSize: tokens.fontSizeBase200,
+    padding: '3px 12px',
+    borderRadius: '999px',
+    background: 'var(--bm-surface-3, rgba(255,255,255,0.14))',
+    color: tokens.colorBrandForeground1,
+    fontWeight: 600
+  },
   desc: {
     color: tokens.colorNeutralForeground3,
     fontSize: tokens.fontSizeBase200,
@@ -49,31 +58,46 @@ const useStyles = makeStyles({
     whiteSpace: 'pre-line',
     maxWidth: '760px'
   },
-  songs: { minHeight: 0 }
+  /** 歌曲区:占满剩余高度并独立滚动(列表长时页面本身不动) */
+  songs: { flex: '1 1 auto', minHeight: 0, display: 'flex', flexDirection: 'column' },
+  /** 分隔线:Fluent Divider 默认 flex:1 会在列容器里被拉伸成大空白,必须锁死 */
+  divider: { flex: '0 0 auto', alignSelf: 'stretch' }
 })
+
+/** 平台中文名(顶部标识) */
+const PLATFORM_LABEL: Record<ArtistPlatform, string> = {
+  netease: '网易云音乐',
+  qq: 'QQ音乐',
+  kugou: '酷狗音乐',
+  qishui: '汽水音乐',
+  bilibili: '哔哩哔哩'
+}
 
 export function ArtistPage() {
   const styles = useStyles()
-  const id = useStore((s) => s.artistPageId)
+  const target = useStore((s) => s.artistPageId)
   const close = useStore((s) => s.closeArtistPage)
   const playQueue = useStore((s) => s.playQueue)
   /** 音源加载中禁用播放键 */
   const playerLoading = useStore((s) => s.loading)
-  const [detail, setDetail] = useState<NeteaseArtistDetail | null>(null)
+  const [detail, setDetail] = useState<UnifiedArtistDetail | null>(null)
   const [songs, setSongs] = useState<Song[] | null>(null)
   const [loading, setLoading] = useState(true)
   const [kw, setKw] = useState('')
   const [descOpen, setDescOpen] = useState(false)
 
+  const platform = target?.platform
+  const artistId = target?.id
+
   useEffect(() => {
-    if (!id) return
+    if (!platform || !artistId) return
     let cancelled = false
     setLoading(true)
     setDetail(null)
     setSongs(null)
     setKw('')
     setDescOpen(false)
-    Promise.all([api.neteaseArtistDetail(id), api.neteaseArtistSongs(id)])
+    Promise.all([api.artistDetail(platform, artistId), api.artistSongs(platform, artistId)])
       .then(([d, s]) => {
         if (cancelled) return
         if (d.ok && d.data) setDetail(d.data)
@@ -89,7 +113,7 @@ export function ArtistPage() {
     return () => {
       cancelled = true
     }
-  }, [id])
+  }, [platform, artistId])
 
   // 页内搜索:标题/专辑过滤(本地,立即响应)
   const filtered = useMemo(() => {
@@ -103,7 +127,7 @@ export function ArtistPage() {
     )
   }, [songs, kw])
 
-  if (!id) return null
+  if (!platform || !artistId) return null
 
   return (
     <div className={styles.root}>
@@ -128,10 +152,12 @@ export function ArtistPage() {
             </Text>
           )}
           <div className={styles.chips}>
+            {/* 数据来源平台:明确标示这条歌手信息是从哪个平台取的 */}
+            <span className={styles.platformChip}>{PLATFORM_LABEL[platform]}</span>
             {typeof detail?.fansCount === 'number' && (
               <span className={styles.chip}>粉丝 {formatCount(detail.fansCount)}</span>
             )}
-            {detail?.musicSize != null && <span className={styles.chip}>歌曲 {detail.musicSize}</span>}
+            {detail?.musicCount != null && <span className={styles.chip}>歌曲 {detail.musicCount}</span>}
             {detail?.albumSize != null && <span className={styles.chip}>专辑 {detail.albumSize}</span>}
             {detail?.mvSize != null && detail.mvSize > 0 && <span className={styles.chip}>MV {detail.mvSize}</span>}
           </div>
@@ -186,7 +212,8 @@ export function ArtistPage() {
         </div>
       </div>
 
-      <Divider />
+      {/* Divider 必须锁死高度:默认 flex:1 会在列布局里撑成大片空白(旧 bug) */}
+      <Divider className={styles.divider} />
 
       {/* 页内搜索 */}
       <Input
@@ -204,7 +231,7 @@ export function ArtistPage() {
             />
           ) : undefined
         }
-        style={{ maxWidth: 420 }}
+        style={{ maxWidth: 420, flex: '0 0 auto' }}
       />
 
       <div className={styles.songs}>

@@ -1,6 +1,7 @@
 /** 播放器 + 全局状态(zustand) */
 import { create } from 'zustand'
 import type {
+  ArtistPlatform,
   AudioLoadProgress,
   HighlightPoint,
   Library,
@@ -95,7 +96,9 @@ function getAudio(): HTMLAudioElement {
 const semisToRatio = (semis: number) => Math.pow(2, semis / 12)
 
 /** 下发移调比率到 worklet;未就绪则暂存 */
+let lastPitchRatio = 1
 function sendPitchRatio(ratio: number): void {
+  lastPitchRatio = ratio
   if (pitchNode) {
     pitchNode.port.postMessage(ratio)
   } else {
@@ -104,12 +107,15 @@ function sendPitchRatio(ratio: number): void {
 }
 
 /**
- * 统一应用倍速 + 音调:
- *   倍速 → el.playbackRate(纯速度);
- *   音调 → worklet 移调(纯音高,速度不变);worklet 不可用时退回 tape 式
- *   (音调乘进 playbackRate,速度随之变化——旧行为,至少可听)。
- * preservePitch 语义 = 「音调是否随倍速变化」的开关:开(不保持)时把音调
- * 比率乘进倍速一起变(随速度升降),关(保持)时音调固定不动。
+ * 统一应用倍速 + 音调(倍速与音调完全解耦):
+ *   倍速 → el.playbackRate,preservesPitch 恒为 true(浏览器时间拉伸,
+ *   变速不牵动音高,歌词/进度与真实时间保持一致);
+ *   音调 → bm-pitch worklet 独立移调(纯音高,速度不变)。
+ * preservePitch 语义 = 「音调是否随倍速变化」:true(默认)时音调只由半音滑杆
+ * 决定;false 时模拟磁带机——音调比率额外乘上倍速(升速=更高),但速度本身
+ * 仍由浏览器独立拉伸。
+ * worklet 初始化失败时退回 tape 模式:音调并进 playbackRate、关闭保持音调,
+ * 速度随音调一起变(无 worklet 时唯一可听的移调方式)。
  */
 function applyRatePitch(
   el: HTMLAudioElement,
@@ -117,35 +123,22 @@ function applyRatePitch(
   semitones: number,
   preservePitch: boolean
 ): void {
-  const manual = Math.abs(semitones) > 0.001
-  const ratio = semisToRatio(semitones)
-  let speed = rate
-  let pitchRatio = 1
-  if (manual) {
-    if (pitchReady) {
-      pitchRatio = preservePitch ? 1 : ratio  // 不保持:音调随速度走(并入倍速)
-      speed = preservePitch ? rate : rate * ratio
-      // 保持:worklet 独立移调;不保持:直接并进速度,worklet 直通
-    } else if (!pitchFailed) {
-      // worklet 还没就绪:先按保持音调的纯速度播放,就绪后 sendPitchRatio 补上
-      speed = preservePitch ? rate : rate * ratio
-      pitchRatio = 1
-      if (!preservePitch) pendingPitchRatio = 1
-    } else {
-      // worklet 初始化失败:退回 tape 式(音调乘速度)
-      speed = rate * ratio
-      pitchRatio = 1
-    }
-  } else {
-    speed = rate
-    pitchRatio = 1
-  }
-  el.playbackRate = Math.max(0.0625, Math.min(16, speed))
-  sendPitchRatio(pitchRatio)
   const pp = el as HTMLAudioElement & { preservesPitch?: boolean; webkitPreservesPitch?: boolean }
-  // 走 worklet 移调时,浏览器的"保持音调"重采样是多余的(它和移调叠加会二次校正);tape 模式下必须关掉它
-  pp.preservesPitch = manual && pitchReady ? true : preservePitch
-  pp.webkitPreservesPitch = manual && pitchReady ? true : preservePitch
+  if (pitchFailed) {
+    // 回退:磁带式,音调乘进速度(preservesPitch 关掉,音高才随速度走)
+    const ratio = semisToRatio(semitones)
+    const speed = Math.abs(semitones) > 0.001 ? rate * ratio : rate
+    el.playbackRate = Math.max(0.0625, Math.min(16, speed))
+    pp.preservesPitch = false
+    pp.webkitPreservesPitch = false
+    sendPitchRatio(1)
+    return
+  }
+  el.playbackRate = Math.max(0.0625, Math.min(16, rate))
+  pp.preservesPitch = true
+  pp.webkitPreservesPitch = true
+  // worklet 未就绪时 sendPitchRatio 暂存目标比率,装载完成后自动补上
+  sendPitchRatio(preservePitch ? semisToRatio(semitones) : semisToRatio(semitones) * rate)
 }
 
 /** 音频图:source → 变调(AudioWorklet) → EQ链 → 频谱分析 → 喇叭 */
@@ -175,8 +168,11 @@ async function ensureEqChain(settings: Settings): Promise<void> {
         node.port.postMessage(pendingPitchRatio)
         pendingPitchRatio = 1
       }
-      // 就绪后按当前设置重新应用一次(可能等模块期间设置已变)
-      const st = get().library?.settings
+      // 就绪后按当前设置重新应用一次(可能等模块期间设置已变)。
+      // 注意:本函数在模块作用域,拿不到 create() 的 get,必须走 useStore.getState()
+      // ——此前写成 get() 会抛 ReferenceError,被下方 catch 吞掉后 pitchFailed=true,
+      // 变调从此永久退回 tape 模式(变调滑杆失效的真正根因)。
+      const st = useStore.getState().library?.settings
       if (st) applyRatePitch(el, st.playbackRate ?? 1, st.pitchSemitones ?? 0, st.preservePitch ?? true)
     } catch (e) {
       console.warn('pitch worklet init failed, tape fallback', e)
@@ -250,6 +246,8 @@ interface PlayerState {
   muted: boolean
   mode: PlayMode
   lyrics: LyricsResult | null
+  /** 兜底链:当前播放音频是自动换源的,from=最初点播的原曲(歌曲详情弹窗展示原曲/兜底链接用) */
+  fallback: { from: Song; toId: string } | null
   nowPlayingOpen: boolean
   sleepTimerEnd: number | null
   /** 定时器已暂停 */
@@ -269,7 +267,8 @@ interface PlayerState {
   /** 进度条高潮点标记(酷狗原生 climax / 歌词副歌推导) */
   highlights: HighlightPoint[]
   /** 当前打开的网易云歌手主页 id(独立页面,与歌单详情同构) */
-  artistPageId: number | null
+  /** 歌手主页目标:带平台(网易云数字 id / QQ mid / 酷狗 singerid) */
+  artistPageId: { platform: ArtistPlatform; id: string } | null
   /** 发现的新版本(启动自动检查/手动检查命中后弹窗) */
   updateInfo: UpdateInfo | null
 
@@ -293,6 +292,11 @@ interface PlayerState {
   cycleMode(): void
   setNowPlayingOpen(open: boolean): void
   setLyrics(l: LyricsResult | null): void
+  /**
+   * 设置当前播放歌曲的歌词偏移记忆(ms,正值=提前;null=清除记忆回退全局)。
+   * 立即生效并持久化到曲库,下次播放同一首自动应用。
+   */
+  setSongLyricOffset(ms: number | null): void
   startSleepTimer(minutes: number): void
   /** 以毫秒启动定时(自定义时长/恢复) */
   startSleepTimerMs(ms: number): void
@@ -323,7 +327,7 @@ interface PlayerState {
   /** 用一首歌替换队列当前曲目并播放(换源等场景) */
   replaceCurrentAndPlay(song: Song): Promise<void>
   /** 打开网易云歌手主页(独立页) */
-  openArtistPage(id: number): void
+  openArtistPage(platform: ArtistPlatform, id: string | number): void
   /** 关闭歌手主页 */
   closeArtistPage(): void
 }
@@ -392,6 +396,10 @@ export const useStore = create<PlayerState>((set, get) => {
     // 会让进度条在 0 与断点之间反复横跳,VIP 歌曲尤其明显
     const resume = resumeAt > 3 ? resumeAt : 0
     const keepLyrics = keepMeta ? get().lyrics : null
+    // 兜底链维护:起播的歌既不是记录的原曲、也不是它的兜底目标 → 用户手动换了歌,清掉记录。
+    // (同曲重试 from.id 命中;兜底目标 toId 命中;都不命中才是真正的"切歌")
+    const fb = get().fallback
+    if (fb && fb.toId !== song.id && fb.from.id !== song.id) set({ fallback: null })
     set({
       current: song,
       loading: true,
@@ -468,7 +476,7 @@ export const useStore = create<PlayerState>((set, get) => {
       }
       el.src = prepared.url
       const st = get().library?.settings
-      // 音调优先:有升降调时用 tape 变速移调(关闭 pitch 保持),否则按倍速+保持音调
+      // 按当前设置应用倍速(playbackRate)+ 音调(worklet 移调),两者互不牵动
       const semi = st?.pitchSemitones ?? 0
       const baseRate = st?.playbackRate ?? 1
       applyRatePitch(el, baseRate, semi, st?.preservePitch ?? true)
@@ -695,15 +703,27 @@ export const useStore = create<PlayerState>((set, get) => {
       }
       triedHtml5For = null
       set({ playing: false, loading: false })
+      // 记录兜底链:多次兜底(bili→qq)只记最初的原曲;歌曲详情弹窗展示「原曲/兜底链接」用
+      const prevFb = get().fallback
+      if (!prevFb || prevFb.from.id === song.id) {
+        set({ fallback: { from: song, toId: audioOnly.id } })
+      }
       await startPlayback(audioOnly, false, resume)
       // 最近播放记录原曲(重播时重新走垫底逻辑,已登录用户可直接用网易云音源)
       api
         .libraryAddRecent(song)
         .then(() => get().refreshLibrary())
         .catch(() => {})
-      // 垫底发生在歌词请求之前:补拉原曲歌词
+      // 垫底发生在歌词请求之前:补拉歌词。
+      // 换源后音频时长与原曲差 >3s 时,B站兜底大概率不是同一版本(现场/切片),
+      // 原曲时间轴必然对不上 —— 改用兜底歌曲自己的元数据拉词(匹配它的实际版本);
+      // 时长一致则保留原曲歌词(元数据更干净,provider 也更可靠)。
+      const lyricSong =
+        audioOnly.duration > 0 && song.duration > 0 && Math.abs(audioOnly.duration - song.duration) > 3
+          ? audioOnly
+          : song
       api
-        .lyricsGet(song)
+        .lyricsGet(lyricSong)
         .then((ly) => {
           if (get().current?.id === audioOnly.id) {
             set({ lyrics: ly })
@@ -950,6 +970,7 @@ export const useStore = create<PlayerState>((set, get) => {
     muted: false,
     mode: 'loop',
     lyrics: null,
+    fallback: null,
     nowPlayingOpen: false,
     sleepTimerEnd: null,
     sleepPaused: false,
@@ -1161,6 +1182,23 @@ export const useStore = create<PlayerState>((set, get) => {
       if (cur) void refreshHighlights(cur, l)
     },
 
+    setSongLyricOffset(ms) {
+      const cur = get().current
+      if (!cur) return
+      const lib = get().library
+      if (!lib) return
+      // 乐观更新本歌记忆(0 视为无偏移,删条目保持 map 精简),再持久化
+      const next = { ...(lib.lyricOffsets ?? {}) }
+      if (ms === null) delete next[cur.id]
+      else {
+        const v = Math.max(-10000, Math.min(10000, Math.round(ms)))
+        if (v === 0) delete next[cur.id]
+        else next[cur.id] = v
+      }
+      set({ library: { ...lib, lyricOffsets: next } })
+      void api.lyricSetOffset(cur.id, ms)
+    },
+
     startSleepTimer(minutes) {
       get().startSleepTimerMs(Math.round(minutes * 60000))
     },
@@ -1333,11 +1371,9 @@ export const useStore = create<PlayerState>((set, get) => {
     },
 
     /**
-     * 音调(半音):
-     * 用 playbackRate 做 tape-style 变调(2^(n/12) 倍速),并关闭 preservesPitch
-     * 让音高随速度一起变——这正是"升调不变速"在浏览器里的等效做法需要反过来的地方:
-     * 这里播放速度会随音调变化,与手机端"音调"滑杆行为一致(升调=更快更高)。
-     * 倍速设置与音调相互独立:最终 rate = 倍速 × 2^(半音/12)。
+     * 音调(半音,-12 ~ +12):
+     * 由 bm-pitch worklet 独立移调,只改音高不动速度;倍速与音调相互独立。
+     * 「音调随倍速变化」打开时,音调比率会额外乘上当前倍速(磁带机行为)。
      */
     setPitch(semitones) {
       // 无极调节:保留一位小数,范围 -12 ~ +12 半音
@@ -1366,8 +1402,8 @@ export const useStore = create<PlayerState>((set, get) => {
       await startPlayback(song)
     },
 
-    openArtistPage(id) {
-      set({ artistPageId: id })
+    openArtistPage(platform, id) {
+      set({ artistPageId: { platform, id: String(id) } })
     },
     closeArtistPage() {
       set({ artistPageId: null })
@@ -1389,6 +1425,34 @@ export function applyEqSettings(settings: Settings): void {
 export function getAudioElement(): HTMLAudioElement {
   return getAudio()
 }
+
+/**
+ * 当前歌曲的生效歌词偏移(ms,正值=提前):
+ * 本歌记忆(library.lyricOffsets)优先,没有则回退全局设置 lyricOffsetMs。
+ * 歌词视图请通过 lib/lyricClock 的 lyricPosMs 使用,不要直接调它拼公式。
+ */
+export function getEffectiveLyricOffset(): number {
+  const st = useStore.getState()
+  const remembered = st.current ? st.library?.lyricOffsets?.[st.current.id] : undefined
+  if (typeof remembered === 'number') return remembered
+  return st.library?.settings.lyricOffsetMs ?? 0
+}
+
+/** 变调是否在生效(worklet 有 ~57ms 固定延迟,歌词时钟需要补偿;旁路时无延迟) */
+export function isPitchShiftingActive(): boolean {
+  return pitchReady && !pitchFailed && Math.abs(lastPitchRatio - 1) > 0.001
+}
+
+// 自检/排障:只读暴露音频管线状态,不参与业务逻辑(控制台 __bmAudioDebug() 调用)
+;(window as unknown as { __bmAudioDebug?: () => unknown }).__bmAudioDebug = () => ({
+  playbackRate: audio?.playbackRate ?? null,
+  preservesPitch: audio?.preservesPitch ?? null,
+  workletLoaded: pitchReady,
+  workletFailed: pitchFailed,
+  lastPitchRatio,
+  pendingPitchRatio,
+  audioGraphState: audioContext?.state ?? null
+})
 
 // ===== 听歌时长累计 =====
 // 每秒轮询播放态:播放中 +1s,每 10 秒与暂停(或切歌间隙)时冲刷到主进程;

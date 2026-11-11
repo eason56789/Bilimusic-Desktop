@@ -489,6 +489,10 @@ export interface Library {
   favoriteIds?: string[]
   /** 上次播放会话(重启后恢复当前歌曲与进度;暂停状态,点播放才取流) */
   resumePlayback?: PlaybackResume | null
+  /** 每首歌的歌词偏移记忆(songId → ms,正值=歌词提前;優先于全局 lyricOffsetMs) */
+  lyricOffsets?: Record<string, number>
+  /** 全局偏移方向语义翻转(正值改为提前)时的一次性迁移标记(用于取反旧值) */
+  lyricOffsetSignMigrated?: boolean
 }
 
 /** 重启恢复用的播放会话快照 */
@@ -590,6 +594,31 @@ export interface NeteaseArtistBrief {
   name: string
   avatar?: string
   musicCount?: number
+}
+
+/** 歌手主页数据来源平台(歌手主页顶部标识用) */
+export type ArtistPlatform = 'netease' | 'qq' | 'kugou' | 'qishui' | 'bilibili'
+
+/** 跨平台统一的歌手主页数据(各平台字段稀疏,缺失即不显示) */
+export interface UnifiedArtistDetail {
+  /** 平台 */
+  platform: ArtistPlatform
+  /** 平台内歌手 id(网易云数字 id;QQ mid;酷狗 singerid;汽水 id) */
+  id: string
+  name: string
+  avatar?: string
+  /** 别名/英文名 */
+  alias?: string[]
+  /** 简介 */
+  briefDesc?: string
+  /** 歌曲数 */
+  musicCount?: number
+  /** 专辑数 */
+  albumSize?: number
+  /** MV 数 */
+  mvSize?: number
+  /** 粉丝数 */
+  fansCount?: number
 }
 
 /** 平台歌单简要信息(QQ音乐 / 酷狗 搜索结果) */
@@ -758,11 +787,19 @@ export interface DesktopApi {
   neteasePlaylistMeta(id: number): Promise<ApiResponse<NeteasePlaylistMeta>>
   /** 网易云歌手详情(简介/粉丝数等) */
   neteaseArtistDetail(id: number): Promise<ApiResponse<NeteaseArtistDetail>>
+  /** 跨平台歌手详情(统一模型;各平台字段稀疏,缺失即不显示) */
+  /** 按歌手名跨平台找人(返回即被单击实体的平台+id) */
+  findArtist(name: string): Promise<ApiResponse<{ platform: ArtistPlatform; id: string }>>
+  artistDetail(platform: ArtistPlatform, id: string): Promise<ApiResponse<UnifiedArtistDetail>>
+  /** 跨平台歌手热门歌曲 */
+  artistSongs(platform: ArtistPlatform, id: string): Promise<ApiResponse<Song[]>>
   // 播放
   audioPrepare(song: Song, html5Fallback?: boolean): Promise<PreparedAudio>
   /** 音频加载进度(主进程推送,stage=resolving/downloading/done) */
   onAudioProgress(cb: (p: AudioLoadProgress) => void): () => void
   lyricsGet(song: Song): Promise<LyricsResult>
+  /** 记住某首歌的歌词偏移(ms,正值=提前;删掉传 0 会存 0,传 null 清除记忆) */
+  lyricSetOffset(songId: string, ms: number | null): Promise<boolean>
   pagesGet(bvid: string): Promise<BiliPage[]>
   commentsGet(
     song: Song,

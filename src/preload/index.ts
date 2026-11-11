@@ -28,6 +28,9 @@ const api: DesktopApi = {
   neteaseSearchArtists: (keyword) => invoke('api:neteaseSearchArtists', keyword),
   neteaseFindArtist: (name) => invoke('api:neteaseFindArtist', name),
   neteaseArtistSongs: (artistId) => invoke('api:neteaseArtistSongs', artistId),
+  artistDetail: (platform, id) => invoke('api:artistDetail', platform, id),
+  findArtist: (name) => invoke('api:findArtist', name),
+  artistSongs: (platform, id) => invoke('api:artistSongs', platform, id),
   neteasePlaylistSongs: (id) => invoke('api:neteasePlaylistSongs', id),
   neteasePersonalized: () => invoke('api:neteasePersonalized'),
   qqSearch: (keyword, page) => invoke('api:qqSearch', keyword, page),
@@ -56,6 +59,7 @@ const api: DesktopApi = {
     return () => ipcRenderer.removeListener('audio:progress', listener)
   },
   lyricsGet: (song: Song) => invoke('lyrics:get', song),
+  lyricSetOffset: (songId: string, ms: number | null) => invoke('lyrics:setSongOffset', songId, ms),
   pagesGet: (bvid: string) => invoke('pages:get', bvid),
   commentsGet: (song, offset, order, platform, aggregate) => invoke('api:comments', song, offset, order, platform, aggregate),
   songDetail: (song) => invoke('api:songDetail', song),

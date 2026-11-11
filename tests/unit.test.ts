@@ -5,6 +5,7 @@
 import { computeSyncPlan } from '../src/main/syncDelta'
 import { parsePlaylistLink } from '../src/main/api/linkImport'
 import { pagesToSongs } from '../src/renderer/src/lib/pages'
+import { assessTimelineIssue } from '../src/main/api/lyricSanity'
 import {
   calcRevealChars,
   buildCharTimes,
@@ -220,6 +221,18 @@ function eq(actual: unknown, expected: unknown, name: string): void {
   eq(resolveCharTimes('ab', undefined, undefined), null, 'ktv: 无数据回退 null')
   eq(lineEndTime(1000), 6000, 'ktv: 行末兜底+5s')
   eq(lineEndTime(1000, 2000), 2000, 'ktv: 行末取下一行')
+}
+
+// ===== assessTimelineIssue(歌词时间轴 sanity)=====
+{
+  const lines = (times: number[]) => times.map((t) => ({ timeMs: t }))
+  eq(assessTimelineIssue(lines([10000, 180000]), 200), null, 'sanity: 正常歌词(末行接近曲尾)通过')
+  eq(assessTimelineIssue(lines([10000, 215000]), 200), null, 'sanity: 末行超时长20s内通过')
+  eq(assessTimelineIssue(lines([10000, 250000]), 200) !== null, true, 'sanity: 末行超出时长+20s 否决')
+  eq(assessTimelineIssue(lines([1000, 80000]), 200) !== null, true, 'sanity: 末行早于时长45% 否决')
+  eq(assessTimelineIssue(lines([1000, 91000]), 200), null, 'sanity: 末行恰在45%边界附近通过')
+  eq(assessTimelineIssue([], 200), null, 'sanity: 空行不评')
+  eq(assessTimelineIssue(lines([10000]), undefined), null, 'sanity: 无时长不评')
 }
 
 console.log(`\nunit tests: ${passed} passed, ${failed} failed`)

@@ -25,6 +25,7 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { makeStyles } from '@fluentui/react-components'
 import type { LyricLine } from '@shared/types'
 import { useStore, getAudioElement } from '../store'
+import { lyricPosMs } from '../lib/lyricClock'
 import { lineEndTime, resolveCharTimes } from '../lib/karaoke'
 import { resolveTrans } from '../lib/transDecide'
 import {
@@ -332,7 +333,6 @@ function buildFragments(seed: number, text: string, palette: TemperaPalette): Fr
 /* ===================== 场景选项 ===================== */
 
 interface SceneOpts {
-  offset: number
   motion: number
   camAmp: number
   panAmp: number
@@ -387,7 +387,7 @@ const TemperaSceneView = memo(function TemperaSceneView({
     let raf = 0
     const paint = (): void => {
       const { scene: c, sizeW: w, sizeH: h, opts: o, onExited: done } = propsRef.current
-      const now = getAudioElement().currentTime * 1000 + 200 - o.offset
+      const now = lyricPosMs(getAudioElement().currentTime)
       const span = Math.max(w, h)
       const shortSide = Math.min(w, h)
       const carry = span * CARRIER_RATE
@@ -831,7 +831,6 @@ const MAX_SCENES = 3
 export function TemperaLyrics({ lines, activeIdx }: TemperaLyricsProps): JSX.Element {
   const styles = useStyles()
   const settings = useStore((s) => s.library?.settings)
-  const offset = settings?.lyricOffsetMs ?? 0
   const scale = settings?.pvScale ?? 1
   const motion = settings?.pvMotion ?? 1
   const showDecor = settings?.pvDecor !== false
@@ -1076,7 +1075,7 @@ export function TemperaLyrics({ lines, activeIdx }: TemperaLyricsProps): JSX.Ele
   useEffect(() => {
     let raf = 0
     const paint = (): void => {
-      const now = getAudioElement().currentTime * 1000 + 200 - offset
+      const now = lyricPosMs(getAudioElement().currentTime)
       const camEl = cameraRef.current
       if (camEl) {
         const br = breathAt(now / 1000, breathPhaseRef.current)
@@ -1095,7 +1094,7 @@ export function TemperaLyrics({ lines, activeIdx }: TemperaLyricsProps): JSX.Ele
     }
     raf = requestAnimationFrame(paint)
     return () => cancelAnimationFrame(raf)
-  }, [offset, motion, size.w, size.h])
+  }, [motion, size.w, size.h])
 
   // ===== 后处理资源(对齐听屿:颗粒/对比度/RGB色差/暗角/透镜扭曲) =====
   const grainUrl = useMemo(() => (postOn && grain > 0.01 ? makeGrainTile() : ''), [postOn, grain])
@@ -1114,7 +1113,6 @@ export function TemperaLyrics({ lines, activeIdx }: TemperaLyricsProps): JSX.Ele
 
   const sceneOpts = useMemo<SceneOpts>(
     () => ({
-      offset,
       motion,
       camAmp: motion * camMotion,
       panAmp,
@@ -1126,7 +1124,7 @@ export function TemperaLyrics({ lines, activeIdx }: TemperaLyricsProps): JSX.Ele
       offX,
       offY
     }),
-    [offset, motion, camMotion, panAmp, zoomAmp, charMotion, charTiming, invertText, rgbK, offX, offY]
+    [motion, camMotion, panAmp, zoomAmp, charMotion, charTiming, invertText, rgbK, offX, offY]
   )
 
   if (!display) {

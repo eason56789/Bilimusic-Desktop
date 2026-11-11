@@ -96,6 +96,9 @@ export function parseYrc(yrc: string): LyricLine[] {
 
 const lyricCache = new Map<string, LyricsResult>()
 
+import { assessTimelineIssue } from './lyricSanity'
+export { assessTimelineIssue }
+
 /**
  * 剥离行首行尾的音乐装饰符号(♪ ♫ ♬ ♩ 🎵 🎶 等),
  * B站AI字幕/部分LRC会给每句前后包一层这类符号。
@@ -230,6 +233,8 @@ async function enrichWithRichTiming(song: Song, lines: LyricLine[]): Promise<Lyr
         cross &&
         cross.length > 0 &&
         hasRichTiming(cross) &&
+        // 时间轴 sanity:末行明显超出/早于音频时长 = 拿错版本,不要
+        !assessTimelineIssue(cross, song.duration) &&
         (lines.length === 0 || cross.length >= Math.max(4, lines.length * 0.5)) &&
         (lines.length === 0 || Math.abs(cross[0].timeMs - lines[0].timeMs) <= 20_000)
       ) {
@@ -251,7 +256,9 @@ async function enrichWithRichTiming(song: Song, lines: LyricLine[]): Promise<Lyr
         // 行数太少说明 QRC 不完整,不值得替换
         (lines.length === 0 || rich.length >= Math.max(4, lines.length * 0.5)) &&
         // 首行时间差太大说明不是同一版本(现场版/remix)
-        (lines.length === 0 || Math.abs(rich[0].timeMs - lines[0].timeMs) <= 20_000)
+        (lines.length === 0 || Math.abs(rich[0].timeMs - lines[0].timeMs) <= 20_000) &&
+        // 精确 mid 拿到的 QRC 也过一遍时长印证:QRC 数据本身也可能异常
+        !assessTimelineIssue(rich, song.duration)
       ) {
         return stripLines(rich)
       }
@@ -264,13 +271,20 @@ async function enrichWithRichTiming(song: Song, lines: LyricLine[]): Promise<Lyr
   try {
     const r = await searchSongs(`${song.title} ${song.artist}`, 8, 0)
     if (!r.songs.length) return null
-    const firstArtist = song.artist.split(' / ')[0]?.trim() ?? ''
-    // 优先同名同歌手
+    // 优先同名;再按时长接近度排序(与播放中的音频对不上时间轴的候选没有价值)
     const ordered = [
       ...r.songs.filter((s) => s.title.trim() === song.title.trim()),
       ...r.songs.filter((s) => s.title.trim() !== song.title.trim())
-    ].filter((s) => s.neteaseId)
+    ]
+      .filter((s) => s.neteaseId)
+      .sort((a, b) => {
+        const da = song.duration > 0 && a.duration > 0 ? Math.abs(a.duration - song.duration) : Number.MAX_SAFE_INTEGER
+        const db = song.duration > 0 && b.duration > 0 ? Math.abs(b.duration - song.duration) : Number.MAX_SAFE_INTEGER
+        return da - db
+      })
     for (const cand of ordered.slice(0, 4)) {
+      // 时长差过大:几乎不可能是同一录音(现场版/加长版/翻唱)
+      if (song.duration > 0 && cand.duration > 0 && Math.abs(cand.duration - song.duration) > 15) continue
       const ly = await getLyricNew(cand.neteaseId as number)
       const rich = ly.yrc ? parseYrc(ly.yrc) : []
       if (rich.length === 0 || !hasRichTiming(rich)) continue
@@ -278,9 +292,10 @@ async function enrichWithRichTiming(song: Song, lines: LyricLine[]): Promise<Lyr
       if (rich.length < Math.max(4, lines.length * 0.5)) continue
       // 首行时间差太大说明不是同一版本(现场版/remix)
       if (lines.length > 0 && Math.abs(rich[0].timeMs - lines[0].timeMs) > 20_000) continue
+      // 时间轴 sanity:末行超出/早于音频时长过多 = 拿错版本
+      if (assessTimelineIssue(rich, song.duration)) continue
       const out = stripLines(rich)
       if (ly.tlyric) return mergeTranslation(out, ly.tlyric)
-      void firstArtist
       return out
     }
   } catch (e) {
@@ -309,37 +324,60 @@ export async function getLyrics(song: Song): Promise<LyricsResult> {
         result = { lines: qs, provider: 'qishui', title: song.title }
       }
     }
-    // 其它来源:同样先到 QQ 找一份匹配的逐字歌词(用户要求"无论从哪里播放,默认先从 QQ 拿逐字")
+    // 有精确 neteaseId 优先取网易云歌词:精确 ID 命中的是同一条录音,
+    // 远比跨源「标题+歌手」模糊搜索可靠(后者容易拿到现场/翻唱版,整条时间轴错位)。
+    // 旧顺序是 QQ 搜索在前,网易云 yrc 反而排后面,这里纠正为精确源优先。
+    if (result.lines.length === 0 && song.neteaseId) {
+      try {
+        const ly = await getLyricNew(song.neteaseId)
+        let lines = pickLines(ly)
+        if (lines.length > 0) {
+          lines = stripLines(lines)
+          if (ly.tlyric) lines = mergeTranslation(lines, ly.tlyric)
+          result = { lines, provider: 'netease', title: song.title }
+        }
+      } catch (e) {
+        console.warn('[Lyrics] netease native lookup failed', e)
+      }
+    }
+    // 没有精确 ID/原生失败:到 QQ 找一份匹配的逐字歌词(内部有时长硬过滤,
+    // 拿到结果后再过一遍时间轴 sanity,防止现场/切片版溜进来)
     if (result.lines.length === 0) {
       try {
         const cross = await findQqRichLyrics(song.title, song.artist, song.duration)
         if (cross && cross.length > 0 && hasRichTiming(cross)) {
-          result = { lines: stripLines(cross), provider: 'qq', title: song.title }
+          const issue = assessTimelineIssue(cross, song.duration)
+          if (issue) {
+            console.warn('[Lyrics] qq cross-search rejected:', issue)
+          } else {
+            result = { lines: stripLines(cross), provider: 'qq', title: song.title }
+          }
         }
       } catch (e) {
-        console.warn('[Lyrics] qq first-choice lookup failed', e)
+        console.warn('[Lyrics] qq cross lookup failed', e)
       }
     }
-    // 有 neteaseId 优先取网易云歌词(垫底/换源后的 B站流歌曲,标题元数据仍是原曲)
-    if (result.lines.length === 0 && song.neteaseId) {
-      const ly = await getLyricNew(song.neteaseId)
-      let lines = pickLines(ly)
-      if (lines.length > 0) {
-        lines = stripLines(lines)
-        if (ly.tlyric) lines = mergeTranslation(lines, ly.tlyric)
-        result = { lines, provider: 'netease', title: song.title }
-      }
-    } else if (result.lines.length === 0 && (song.source === 'QQMUSIC' || song.source === 'KUGOU')) {
-      // QQ/酷狗无自建歌词:按「标题 歌手」到网易云搜索,取最接近的一首的歌词
+    // QQ/酷狗无自建歌词:按「标题 歌手」到网易云搜索。
+    // 候选打分:艺人匹配为门槛,时长最接近者优先——旧逻辑直接取第一条,经常拿到错版本。
+    if (result.lines.length === 0 && (song.source === 'QQMUSIC' || song.source === 'KUGOU')) {
       try {
-        const r = await searchSongs(`${song.title} ${song.artist}`, 5, 0)
-        const cand =
-          r.songs.find((s) => s.artist && song.artist && s.artist.includes(song.artist.split(' / ')[0])) ??
-          r.songs[0]
+        const r = await searchSongs(`${song.title} ${song.artist}`, 8, 0)
+        const firstArtist = song.artist.split(' / ')[0]?.trim() ?? ''
+        const scored = r.songs
+          .filter((s) => s.neteaseId)
+          .map((s) => {
+            const artistOk = !firstArtist || !s.artist || s.artist.includes(firstArtist)
+            const d =
+              song.duration > 0 && s.duration > 0 ? Math.abs(s.duration - song.duration) : Number.MAX_SAFE_INTEGER
+            return { s, artistOk, d }
+          })
+          .filter((x) => x.artistOk)
+          .sort((a, b) => a.d - b.d)
+        const cand = scored[0]?.s ?? r.songs.find((s) => s.neteaseId)
         if (cand?.neteaseId) {
           const ly = await getLyricNew(cand.neteaseId)
           let lines = pickLines(ly)
-          if (lines.length > 0) {
+          if (lines.length > 0 && !assessTimelineIssue(lines, song.duration)) {
             lines = stripLines(lines)
             if (ly.tlyric) lines = mergeTranslation(lines, ly.tlyric)
             result = { lines, provider: 'netease', title: song.title }
@@ -348,7 +386,8 @@ export async function getLyrics(song: Song): Promise<LyricsResult> {
       } catch (e) {
         console.warn('[Lyrics] qq/kugou netease search failed', e)
       }
-    } else if (song.source === 'BILIBILI' && song.bvid) {
+    }
+    if (result.lines.length === 0 && song.source === 'BILIBILI' && song.bvid) {
       const bvid = bvidFromSongId(song.bvid || song.id)
       const page = song.page || pageFromSongId(song.id)
       const cid = await getCidForPage(bvid, page)

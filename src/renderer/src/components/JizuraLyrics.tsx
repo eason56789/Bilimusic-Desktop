@@ -7,8 +7,8 @@
  * 关键设计:
  *  - JIZURA 是「歌词文本 → 规划(plan)→ 按绝对时间逐帧绘制」的离线式引擎,
  *    与凝彩的 DOM/rAF 场景完全不同;这里直接把它的 Renderer 跑在 canvas 上。
- *  - 播放时间取音频 currentTime,与项目其它歌词舞台同一套 offset 约定
- *    (`+200 - lyricOffsetMs`,与 TemperaLyrics 一致)。
+ *  - 播放时间经 lib/lyricClock 统一换算(提前量 + 本歌/全局偏移 - 变调延迟),
+ *    与项目其它歌词舞台同一套约定。
  *  - plan 只在「歌词 / 画幅 / 风格设置」变化时重算,逐帧只做 frame() 绘制。
  *  - 字体加载失败不影响画面(降级到系统字体),引擎异常也只降级本区域。
  */
@@ -16,6 +16,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { makeStyles } from '@fluentui/react-components'
 import type { LyricLine } from '@shared/types'
 import { useStore, getAudioElement } from '../store'
+import { lyricPosMs } from '../lib/lyricClock'
 import { getJizura, hasJizura, type JizuraPlan, type JizuraProject } from '../lib/jizura'
 
 const useStyles = makeStyles({
@@ -95,7 +96,6 @@ const engineReady = ((): boolean => {
 export function JizuraLyrics({ lines }: JizuraLyricsProps): JSX.Element {
   const styles = useStyles()
   const settings = useStore((s) => s.library?.settings)
-  const offset = settings?.lyricOffsetMs ?? 0
   const mood = settings?.pvJizuraMood ?? 'auto'
   const styleKey = settings?.pvJizuraStyle ?? 'auto'
   const boxRef = useRef<HTMLDivElement>(null)
@@ -190,7 +190,7 @@ export function JizuraLyrics({ lines }: JizuraLyricsProps): JSX.Element {
     const paint = (): void => {
       if (dead) return
       try {
-        const t = getAudioElement().currentTime - offset / 1000
+        const t = Math.max(0, lyricPosMs(getAudioElement().currentTime) / 1000)
         renderer.frame(ctx, plan, Math.max(0, t), { scale: canvas.width / plan.W })
       } catch (e) {
         // 单帧失败不要让 rAF 断掉;连续失败由上层兜底
@@ -203,7 +203,7 @@ export function JizuraLyrics({ lines }: JizuraLyricsProps): JSX.Element {
       dead = true
       cancelAnimationFrame(raf)
     }
-  }, [plan, offset, size.w, size.h])
+  }, [plan, size.w, size.h])
 
   if (failed || !engineReady) {
     return (

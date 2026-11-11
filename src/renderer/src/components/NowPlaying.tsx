@@ -51,6 +51,7 @@ import {
 } from '@fluentui/react-icons'
 import type { Song } from '@shared/types'
 import { useStore, getAudioElement } from '../store'
+import { lyricPosMs, lyricSeekSec } from '../lib/lyricClock'
 import { api } from '../lib/api'
 import { toastSuccess, toastError } from '../lib/toast'
 import { Cover } from './Cover'
@@ -226,8 +227,6 @@ export function NowPlaying() {
   const rate = useStore((s) => s.library?.settings.playbackRate ?? 1)
   const pitch = useStore((s) => s.library?.settings.pitchSemitones ?? 0)
   const st = useStore((s) => s.library?.settings)
-  // 歌词偏移需响应式:此前经 getState() 读取,暂停时调整偏移不会立即重算当前行
-  const lyricOffset = useStore((s) => s.library?.settings.lyricOffsetMs ?? 0)
   // 歌词对齐:居中 / 靠左(手机端样式)
   const lyricAlign = useStore((s) => s.library?.settings.lyricAlign ?? 'center')
   const leftAlign = lyricAlign === 'left'
@@ -306,20 +305,21 @@ export function NowPlaying() {
   const { setNowPlayingOpen, togglePlay, next, prev, seek, setVolume, cycleMode } =
     useStore.getState()
 
-  /** 平滑播放位置(ms,含200ms提前量与歌词偏移):rAF驱动,
-   *  消除 timeupdate 4Hz 带来的 ~0.25s 切句滞后(对齐手机端帧插值) */
-  const [smoothMs, setSmoothMs] = useState(() => position * 1000 + 200 - lyricOffset)
+  /** 平滑播放位置(ms,经 lyricClock 统一换算:提前量+偏移-变调延迟):rAF驱动,
+   *  消除 timeupdate 4Hz 带来的 ~0.25s 切句滞后(对齐手机端帧插值)。
+   *  偏移/变调每帧从 store 现读,暂停时调整也能立即反映,无需依赖订阅 */
+  const [smoothMs, setSmoothMs] = useState(() => lyricPosMs(position))
   useEffect(() => {
     if (!open) return
     let raf = 0
     const tick = (): void => {
-      const v = getAudioElement().currentTime * 1000 + 200 - lyricOffset
+      const v = lyricPosMs(getAudioElement().currentTime)
       setSmoothMs((prev) => (Math.abs(prev - v) > 1 ? v : prev))
       raf = requestAnimationFrame(tick)
     }
     raf = requestAnimationFrame(tick)
     return () => cancelAnimationFrame(raf)
-  }, [open, lyricOffset])
+  }, [open])
 
   const activeIdx = useMemo(() => {
     if (!lyrics || lyrics.lines.length === 0) return -1
@@ -337,7 +337,8 @@ export function NowPlaying() {
     activeRef.current = el
   }, [])
   const seekLine = useCallback((timeMs: number) => {
-    useStore.getState().seek(timeMs / 1000)
+    // 落点 = 该行在 lyricClock 下的精确激活时刻(含提前量/偏移/变调延迟),而非行时间裸值
+    useStore.getState().seek(lyricSeekSec(timeMs))
   }, [])
 
   // 歌词手动浏览:滚轮/触摸滚动介入后暂停跟随与分层模糊,
@@ -594,10 +595,10 @@ export function NowPlaying() {
                           }}
                           onClick={async (e) => {
                             e.stopPropagation()
-                            // 先收起全屏播放(立刻响应),再后台查歌手 id;查到后跳转主页
+                            // 先收起全屏播放(立刻响应),再后台跨平台查歌手;查到后跳转主页
                             useStore.getState().setNowPlayingOpen(false)
-                            const r = await api.neteaseFindArtist(name)
-                            if (r.ok && r.data) useStore.getState().openArtistPage(r.data)
+                            const r = await api.findArtist(name)
+                            if (r.ok && r.data) useStore.getState().openArtistPage(r.data.platform, r.data.id)
                             else toastError('未找到该歌手')
                           }}
                           onKeyDown={(e) => {

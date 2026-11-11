@@ -392,12 +392,14 @@ export async function findQqRichLyrics(
       else if (ca && firstArtist && firstArtist.includes(ca)) score += 16
       // 同名但不是原版(原曲名里本身含这些词时不罚,避免误伤)
       if (isAltVersion(c.title) && !isAltVersion(title)) score -= 25
-      // 时长接近加分(同一版本通常差不到 5 秒)
+      // 时长接近加分(同一版本通常差不到 5 秒);差 >15s 直接否决 —— 现场版/加长版/
+      // 翻唱的时长几乎必然超出这个范围,旧规则只扣 20 分,照样能靠标题分过关
       if (durationSec && durationSec > 0 && c.duration > 0) {
         const d = Math.abs(c.duration - durationSec)
+        if (d > 15) continue
         if (d <= 3) score += 22
         else if (d <= 8) score += 12
-        else if (d > 40) score -= 20
+        else score -= 6
       }
       if (!best || score > best.score) best = { song: c, score }
     }

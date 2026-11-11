@@ -26,7 +26,7 @@ import {
 } from '@fluentui/react-components'
 import { DeleteRegular, ColorRegular, InfoRegular, SettingsRegular, ArrowClockwiseRegular, SaveRegular, SearchRegular } from '@fluentui/react-icons'
 import { api } from '../lib/api'
-import { useStore, applyEqSettings, getAudioElement, EQ_FREQS } from '../store'
+import { useStore, applyEqSettings, EQ_FREQS } from '../store'
 import { ACCENTS } from '../lib/theme'
 import { BiliLoginDialog, NeteaseLoginDialog, KugouLoginDialog, QishuiLoginDialog } from '../components/LoginDialogs'
 import { PageLayout } from '../components/PageHeader'
@@ -267,6 +267,10 @@ export function SettingsPage() {  const styles = useStyles()
   const library = useStore((s) => s.library)
   const refresh = useStore((s) => s.refreshLibrary)
   const update = useStore((s) => s.updateSetting)
+  // 倍速/音调统一走 store 入口(同步 playbackRate、worklet 移调比率与 preservesPitch),
+  // 不再直改 audio 元素——直改会绕过统一逻辑,与「倍速与音调」弹窗互相打架
+  const setRate = useStore((s) => s.setPlaybackRate)
+  const setPreserve = useStore((s) => s.setPreservePitch)
   /** 底图设置行(全屏播放 / 界面共用):启用开关 + 选图 + 暗化滑条 */
   const bgRow = (
     title: string,
@@ -1135,9 +1139,7 @@ export function SettingsPage() {  const styles = useStyles()
               selectedOptions={[String(s.playbackRate)]}
               onOptionSelect={(_, d) => {
                 const r = Number(d.optionValue)
-                update('playbackRate', r)
-                // audio 元素由状态层创建、未挂载到 DOM,不能用 querySelector 查找
-                getAudioElement().playbackRate = r
+                setRate(r)
               }}
               style={{ minWidth: 110 }}
             >
@@ -1148,7 +1150,7 @@ export function SettingsPage() {  const styles = useStyles()
               ))}
             </Dropdown>
           </Field>
-          <Field label="歌词偏移">
+          <Field label="歌词偏移(全局默认)">
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
               <Slider
                 min={-10000}
@@ -1162,6 +1164,10 @@ export function SettingsPage() {  const styles = useStyles()
                 {s.lyricOffsetMs === 0 ? '无偏移' : `${s.lyricOffsetMs > 0 ? '+' : ''}${(s.lyricOffsetMs / 1000).toFixed(2)}s`}
               </Text>
             </div>
+            {/* 单首歌的偏移在播放页「歌词偏移」弹窗里调,会按歌记忆并优先于这里的全局值 */}
+            <Text size={200} style={{ color: tokens.colorNeutralForeground3 }}>
+              正值=歌词提前,负值=歌词延后;对没有单独调过的歌生效
+            </Text>
           </Field>
         </div>
         <div className={styles.row}>
@@ -1169,12 +1175,7 @@ export function SettingsPage() {  const styles = useStyles()
             checked={s.preservePitch}
             label="倍速播放时保持音调"
             onChange={(_, d) => {
-              update('preservePitch', d.checked)
-              const el = getAudioElement() as HTMLAudioElement & {
-                webkitPreservesPitch?: boolean
-              }
-              el.preservesPitch = d.checked
-              el.webkitPreservesPitch = d.checked
+              setPreserve(d.checked)
             }}
           />
           <Switch

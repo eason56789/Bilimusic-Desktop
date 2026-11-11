@@ -15,6 +15,7 @@ import {
 } from 'fs'
 import { tmpdir } from 'os'
 import type {
+  ArtistPlatform,
   KugouCredential,
   KugouPlatform,
   Library,
@@ -55,6 +56,7 @@ import {
   addRecent,
   addListenTime,
   setSetting,
+  setLyricOffset,
   addSearchHistory,
   removeSearchHistory,
   setBiliCookieStore,
@@ -67,6 +69,7 @@ import {
   defaultSettings
 } from './store'
 import { setBiliCookie, onBiliCookieChange } from './api/bilibili'
+import { findArtistAcrossPlatforms, getUnifiedArtistDetail, getUnifiedArtistSongs } from './api/artist'
 import { setNeteaseCookies, onNeteaseCookieChange, getNeteaseCookies } from './api/netease'
 import { setQqAuth, getQqProfile } from './api/qqmusic'
 import {
@@ -151,6 +154,9 @@ function librarySnapshot(): Library {
     // 收藏 id 列表必须随快照下发:渲染层的行内心形/播放条/全屏页都读它判断收藏态,
     // 之前漏了这一项,导致「已收藏」永远显示成未收藏
     favoriteIds: d.favoriteIds ?? [],
+    // 每首歌的歌词偏移记忆(新字段漏下发会导致「本歌记忆」重启后失效)
+    lyricOffsets: d.lyricOffsets ?? {},
+    lyricOffsetSignMigrated: d.lyricOffsetSignMigrated,
     resumePlayback: d.resumePlayback ?? null
   }
 }
@@ -463,6 +469,34 @@ export function registerIpc(): void {
   ipcMain.handle('api:neteaseFindArtist', async (_e, name: string) => {
     try {
       return ok(await netease.findArtistIdByName(name))
+    } catch (e) {
+      return err(e)
+    }
+  })
+  // 按歌手名跨平台找人(用于歌曲详情里的歌手名点击)
+  ipcMain.handle('api:findArtist', async (_e, name: unknown) => {
+    try {
+      if (typeof name !== 'string') return { ok: false, error: '参数错误' }
+      const hit = await findArtistAcrossPlatforms(name)
+      return hit ? { ok: true, data: hit } : { ok: false, error: '未找到该歌手' }
+    } catch (e) {
+      return err(e)
+    }
+  })
+  // 跨平台歌手主页(统一模型 + 数据来源平台标识)
+  ipcMain.handle('api:artistDetail', async (_e, platform: unknown, id: unknown) => {
+    try {
+      if (typeof platform !== 'string' || typeof id !== 'string') return { ok: false, error: '参数错误' }
+      const d = await getUnifiedArtistDetail(platform as ArtistPlatform, id)
+      return d ? { ok: true, data: d } : { ok: false, error: '未找到歌手信息' }
+    } catch (e) {
+      return err(e)
+    }
+  })
+  ipcMain.handle('api:artistSongs', async (_e, platform: unknown, id: unknown) => {
+    try {
+      if (typeof platform !== 'string' || typeof id !== 'string') return { ok: false, error: '参数错误' }
+      return ok(await getUnifiedArtistSongs(platform as ArtistPlatform, id))
     } catch (e) {
       return err(e)
     }
@@ -949,6 +983,12 @@ export function registerIpc(): void {
     }
   )
   ipcMain.handle('lyrics:get', (_e, song: Song) => getLyrics(song))
+  // 每首歌的歌词偏移记忆:null=清除记忆(回退全局偏移)
+  ipcMain.handle('lyrics:setSongOffset', (_e, songId: unknown, ms: unknown) => {
+    if (typeof songId !== 'string') return false
+    if (ms !== null && typeof ms !== 'number') return false
+    return setLyricOffset(songId, ms as number | null)
+  })
   ipcMain.handle('pages:get', (_e, bvid: string) => bilibili.getVideoPages(bvid))
 
   // ===== 库 =====

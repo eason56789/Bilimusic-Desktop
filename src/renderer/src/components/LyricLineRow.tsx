@@ -8,6 +8,7 @@ import { memo, useEffect, useMemo, useRef } from 'react'
 import { makeStyles, tokens } from '@fluentui/react-components'
 import type { LyricLine } from '@shared/types'
 import { useStore, getAudioElement } from '../store'
+import { lyricPosMs } from '../lib/lyricClock'
 import { calcRevealChars, resolveCharTimes, lineEndTime } from '../lib/karaoke'
 import { resolveTrans } from '../lib/transDecide'
 
@@ -120,8 +121,6 @@ function KaraokeChars({
   const chars = useMemo(() => Array.from(text), [text])
   const refs = useRef<(HTMLSpanElement | null)[]>([])
   const litRef = useRef(-1)
-  // 歌词偏移极少变化,订阅它而不经 props(避免每帧重渲)
-  const offset = useStore((s) => s.library?.settings.lyricOffsetMs ?? 0)
 
   useEffect(() => {
     let raf = 0
@@ -145,14 +144,15 @@ function KaraokeChars({
       }
     }
     const tick = (): void => {
-      const now = getAudioElement().currentTime * 1000 + 200 - offset
+      // 偏移/变调经 lyricClock 每帧现读:极少变化,不订阅、不触发重渲
+      const now = lyricPosMs(getAudioElement().currentTime)
       paint(calcRevealChars(text, charTimes, now, lineStartMs, lineEndMs))
       raf = requestAnimationFrame(tick)
     }
     litRef.current = -1
     raf = requestAnimationFrame(tick)
     return () => cancelAnimationFrame(raf)
-  }, [text, charTimes, lineStartMs, lineEndMs, offset, chars.length])
+  }, [text, charTimes, lineStartMs, lineEndMs, chars.length])
 
   return (
     <span style={{ color: UNLIT, display: left ? 'inline' : undefined }}>

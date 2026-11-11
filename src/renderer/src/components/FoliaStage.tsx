@@ -11,6 +11,7 @@ import React, { Suspense, lazy, useEffect, useMemo, useRef, useState } from 'rea
 import { motionValue as fmMotionValue, type MotionValue } from 'framer-motion'
 import type { LyricLine } from '@shared/types'
 import { useStore, getAudioElement } from '../store'
+import { lyricPosMs } from '../lib/lyricClock'
 import { findLineIndex, toFoliaLines, toFoliaTheme, type FoliaLine, type FoliaTheme } from '../lib/folia/bridge'
 import { applyCoverTheme, loadCoverColors, peekCoverColors } from '../lib/folia/coverTheme'
 import { coverSrc } from './Cover'
@@ -191,7 +192,6 @@ export function FoliaStage({ lines, theme, styleId }: FoliaStageProps): JSX.Elem
   const customBgImage = useStore((s) => s.library?.settings.customBgImage ?? '')
   const customBgDim = useStore((s) => s.library?.settings.customBgDim ?? 45)
   const customBgBlur = useStore((s) => s.library?.settings.customBgBlur ?? 0)
-  const offset = useStore((s) => s.library?.settings.lyricOffsetMs ?? 0)
   const audioRef = useAudioFrame(playing)
   const [, force] = useState(0)
   const idxRef = useRef(-1)
@@ -201,7 +201,7 @@ export function FoliaStage({ lines, theme, styleId }: FoliaStageProps): JSX.Elem
   useEffect(() => {
     let raf = 0
     const tick = (): void => {
-      const t = Math.max(0, getAudioElement().currentTime - offset / 1000)
+      const t = Math.max(0, lyricPosMs(getAudioElement().currentTime) / 1000)
       const idx = findLineIndex(lines, t)
       if (idx !== idxRef.current) {
         idxRef.current = idx
@@ -211,7 +211,7 @@ export function FoliaStage({ lines, theme, styleId }: FoliaStageProps): JSX.Elem
     }
     raf = requestAnimationFrame(tick)
     return () => cancelAnimationFrame(raf)
-  }, [lines, offset])
+  }, [lines])
 
   // 已移除的样式(如 tilt/diorama)或未知 id 一律退回经典,避免落进"尚未移植"占位
   const Comp = STYLE_COMPONENTS[styleId] ?? STYLE_COMPONENTS.classic
@@ -237,7 +237,7 @@ export function FoliaStage({ lines, theme, styleId }: FoliaStageProps): JSX.Elem
   useEffect(() => {
     let raf = 0
     const push = (): void => {
-      const t = Math.max(0, getAudioElement().currentTime - offset / 1000)
+      const t = Math.max(0, lyricPosMs(getAudioElement().currentTime) / 1000)
       clockMV.set(t)
       const a = audioRef.current
       powerMV.set(a.power)
@@ -250,7 +250,7 @@ export function FoliaStage({ lines, theme, styleId }: FoliaStageProps): JSX.Elem
     }
     raf = requestAnimationFrame(push)
     return () => cancelAnimationFrame(raf)
-  }, [clockMV, powerMV, bandsMV, offset, audioRef])
+  }, [clockMV, powerMV, bandsMV, audioRef])
 
   return (
     <div ref={seekRef} style={{ position: 'absolute', inset: 0, overflow: 'hidden' }}>

@@ -4,10 +4,11 @@
 import { useEffect, useRef } from 'react'
 import { useStore, getAudioElement } from '../store'
 import { api } from '../lib/api'
+import { lyricPosMs, lyricSeekSec } from '../lib/lyricClock'
 import { resolveCharTimes, lineEndTime } from '../lib/karaoke'
 import type { FloatControlCmd, FloatLyricState, LyricsResult, Settings } from '@shared/types'
 
-/** 与 NowPlaying 相同的当前行判定:位置+200ms 提前量-歌词偏移 */
+/** 与 NowPlaying 相同的当前行判定:lyricPosMs(提前量+偏移-变调延迟) */
 function activeLineIndex(lyrics: { lines: { timeMs: number }[] } | null, posMs: number): number {
   if (!lyrics || lyrics.lines.length === 0) return -1
   let idx = -1
@@ -69,9 +70,8 @@ export function FloatBridge() {
         settings?.theme === 'system'
           ? window.matchMedia('(prefers-color-scheme: dark)').matches
           : settings?.theme === 'dark'
-      const offset = settings?.lyricOffsetMs ?? 0
       const el = getAudioElement()
-      const posMs = el.currentTime * 1000 + 200 - offset
+      const posMs = lyricPosMs(el.currentTime)
       const idx = activeLineIndex(s.lyrics, posMs)
       const lines = s.lyrics?.lines ?? []
       const cur = buildLine(s.lyrics, idx)
@@ -161,8 +161,7 @@ export function FloatBridge() {
           const lines = st.lyrics?.lines ?? []
           if (lines.length === 0 || !st.current) break
           const el = getAudioElement()
-          const offset = st.library?.settings.lyricOffsetMs ?? 0
-          const posMs = el.currentTime * 1000 + 200 - offset
+          const posMs = lyricPosMs(el.currentTime)
           let idx = activeLineIndex(st.lyrics, posMs)
           if (cmd === 'prevLine') {
             const intoLine = idx >= 0 ? posMs - lines[idx].timeMs : 0
@@ -174,7 +173,7 @@ export function FloatBridge() {
           } else {
             idx = Math.min(lines.length - 1, idx + 1)
           }
-          if (idx >= 0 && lines[idx]) st.seek(lines[idx].timeMs / 1000)
+          if (idx >= 0 && lines[idx]) st.seek(lyricSeekSec(lines[idx].timeMs))
           break
         }
         case 'lock':

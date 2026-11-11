@@ -1,5 +1,5 @@
 /** 播放器功能弹窗组:评论/分P/详情/歌词编辑/更换歌词/歌词偏移/播放队列/均衡器 */
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Button,
   Dialog,
@@ -500,12 +500,29 @@ export function PagesDialog({
   )
 }
 
+/** 来源 → 可公开访问的网页链接;汽水/本地暂无稳定公开链接,返回 null(详情里隐藏该行) */
+function songWebLink(song: Song): string | null {
+  if (song.neteaseId) return `https://music.163.com/song?id=${song.neteaseId}`
+  if (song.qqMid) return `https://y.qq.com/n/ryqq/songDetail/${song.qqMid}`
+  if (song.qqId) return `https://y.qq.com/n/ryqq/songDetail/${song.qqId}`
+  if (song.kugouHash) return `https://www.kugou.com/song/#hash=${song.kugouHash}`
+  if (song.bvid) {
+    return `https://www.bilibili.com/video/${song.bvid}${song.page && song.page > 1 ? `?p=${song.page}` : ''}`
+  }
+  return null
+}
+
 /** 歌曲详情 */
 export function SongInfoDialog({ song, open, onClose }: { song: Song | null; open: boolean; onClose: () => void }) {
   const [rows, setRows] = useState<Record<string, string> | null>(null)
   const [loading, setLoading] = useState(false)
   const [hot, setHot] = useState<SongHotResult | null>(null)
   const [hotLoading, setHotLoading] = useState(false)
+  // 当前播放 + 兜底链 + 每歌偏移记忆(详情弹窗可能右键队列里非当前曲,target != current)
+  const currentId = useStore((s) => s.current?.id ?? null)
+  const fallback = useStore((s) => s.fallback)
+  const rememberedOffset = useStore((s) => (song ? s.library?.lyricOffsets?.[song.id] : undefined))
+  const globalOffset = useStore((s) => s.library?.settings.lyricOffsetMs ?? 0)
 
   useEffect(() => {
     if (!open || !song) return
@@ -527,6 +544,58 @@ export function SongInfoDialog({ song, open, onClose }: { song: Song | null; ope
   }, [open, song])
 
   if (!song) return null
+  const isCurrent = song.id === currentId
+  const isFallbackTarget = !!fallback && fallback.toId === song.id
+  /** 原曲链接:兜底目标歌显示最初点播的原曲;普通歌就是它自己的来源链接 */
+  const originalLink = isFallbackTarget && fallback ? songWebLink(fallback.from) : songWebLink(song)
+  const fallbackLink = isFallbackTarget ? songWebLink(song) : null
+  const remembered =
+    typeof rememberedOffset === 'number' ? rememberedOffset : null
+  const offsetText =
+    remembered != null
+      ? `有(${remembered > 0 ? '+' : ''}${(remembered / 1000).toFixed(2)}s)`
+      : globalOffset !== 0
+        ? `无(全局 ${globalOffset > 0 ? '+' : ''}${(globalOffset / 1000).toFixed(2)}s)`
+        : '无'
+  const fmtOffset = (v: number) => `${v > 0 ? '+' : ''}${(v / 1000).toFixed(2)}s`
+  /** 歌手名点击 → 跨平台找这位歌手 → 歌手主页(网易云/酷狗/QQ 依次尝试) */
+  const goArtist = async (name: string): Promise<void> => {
+    // 先收起全屏播放:歌手主页是页面级覆盖层,全屏不收起会盖住它(与全屏歌词页同处理)
+    useStore.getState().setNowPlayingOpen(false)
+    const r = await api.findArtist(name).catch(() => null)
+    if (r && r.ok && r.data) {
+      onClose()
+      useStore.getState().openArtistPage(r.data.platform, r.data.id)
+    } else {
+      toastError('未找到该歌手', name)
+    }
+  }
+  /** 链接行:值可点开浏览器,行尾复制/浏览器两个按钮 */
+  const linkRow = (label: string, link: string): JSX.Element => (
+    <div key={label} style={{ display: 'flex', gap: 12, padding: '5px 0', alignItems: 'center', borderBottom: `1px solid ${tokens.colorNeutralStroke2}` }}>
+      <span style={{ width: 96, color: tokens.colorNeutralForeground3, flexShrink: 0 }}>{label}</span>
+      <span
+        style={{ flex: 1, minWidth: 0, wordBreak: 'break-all', color: tokens.colorBrandForeground1, cursor: 'pointer' }}
+        onClick={() => void api.appOpenExternal(link)}
+        title="在浏览器中打开"
+      >
+        {link}
+      </span>
+      <Button
+        size="small"
+        appearance="subtle"
+        onClick={async () => {
+          await api.appCopy(link)
+          toastSuccess(`已复制${label}`)
+        }}
+      >
+        复制
+      </Button>
+      <Button size="small" appearance="subtle" onClick={() => void api.appOpenExternal(link)}>
+        浏览器
+      </Button>
+    </div>
+  )
   return (
     <Dialog open={open} onOpenChange={(_, d) => !d.open && onClose()}>
       <DialogSurface style={{ maxWidth: 560, width: '90vw' }}>
@@ -537,39 +606,23 @@ export function SongInfoDialog({ song, open, onClose }: { song: Song | null; ope
               <Cover url={song.coverUrl} size={96} radius={8} iconSize={32} />
               <div style={{ display: 'flex', flexDirection: 'column', gap: 4, justifyContent: 'center' }}>
                 <Text weight="semibold" size={500}>{song.title}</Text>
-                <Text size={300} style={{ color: tokens.colorNeutralForeground3 }}>{song.artist}</Text>
-                <div style={{ display: 'flex', gap: 6 }}>
-                  <Button
-                    size="small"
-                    onClick={async () => {
-                      const url =
-                        song.neteaseId
-                          ? `https://music.163.com/song?id=${song.neteaseId}`
-                          : song.bvid
-                            ? `https://www.bilibili.com/video/${song.bvid}`
-                            : ''
-                      if (url) {
-                        await api.appCopy(url)
-                        toastSuccess('已复制链接')
-                      }
-                    }}
-                  >
-                    复制链接
-                  </Button>
-                  <Button
-                    size="small"
-                    onClick={async () => {
-                      const url =
-                        song.neteaseId
-                          ? `https://music.163.com/song?id=${song.neteaseId}`
-                          : song.bvid
-                            ? `https://www.bilibili.com/video/${song.bvid}`
-                            : ''
-                      if (url) await api.appOpenExternal(url)
-                    }}
-                  >
-                    打开网页
-                  </Button>
+                {/* 歌手可点开:多歌手按「 / 」拆分,逐个查歌手主页 */}
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '2px 8px' }}>
+                  {song.artist.split(' / ').map((name) => (
+                    <Text
+                      key={name}
+                      size={300}
+                      style={{
+                        color: tokens.colorBrandForeground1,
+                        cursor: 'pointer',
+                        textDecoration: 'underline',
+                        textDecorationColor: tokens.colorBrandForeground1
+                      }}
+                      onClick={() => void goArtist(name.trim())}
+                    >
+                      {name}
+                    </Text>
+                  ))}
                 </div>
               </div>
             </div>
@@ -623,23 +676,86 @@ export function SongInfoDialog({ song, open, onClose }: { song: Song | null; ope
                 ))}
               </div>
             )}
+            {/* 专辑:点击用专辑名跳搜索页(无独立专辑页,搜索是等效入口) */}
+            {song.album ? (
+              <div style={{ display: 'flex', gap: 12, padding: '5px 0', alignItems: 'center', borderBottom: `1px solid ${tokens.colorNeutralStroke2}` }}>
+                <span style={{ width: 96, color: tokens.colorNeutralForeground3, flexShrink: 0 }}>专辑</span>
+                <span
+                  style={{ flex: 1, minWidth: 0, wordBreak: 'break-all', color: tokens.colorBrandForeground1, cursor: 'pointer' }}
+                  onClick={() => {
+                    // 先收起全屏播放:搜索页是页面级内容,全屏不收起会盖住它
+                    useStore.getState().setNowPlayingOpen(false)
+                    onClose()
+                    useStore.getState().searchWithQuery(song.album as string)
+                  }}
+                  title="去搜索这张专辑"
+                >
+                  {song.album}
+                </span>
+                <Button
+                  size="small"
+                  appearance="subtle"
+                  onClick={async () => {
+                    await api.appCopy(song.album as string)
+                    toastSuccess('已复制专辑')
+                  }}
+                >
+                  复制
+                </Button>
+              </div>
+            ) : null}
+            {/* 歌词偏移:本歌记忆优先于全局;点进去直接调(仅当前播放的歌可调) */}
+            <div style={{ display: 'flex', gap: 12, padding: '5px 0', alignItems: 'center', borderBottom: `1px solid ${tokens.colorNeutralStroke2}` }}>
+              <span style={{ width: 96, color: tokens.colorNeutralForeground3, flexShrink: 0 }}>歌词偏移</span>
+              <span
+                style={{
+                  flex: 1,
+                  minWidth: 0,
+                  wordBreak: 'break-all',
+                  color: isCurrent ? tokens.colorBrandForeground1 : tokens.colorNeutralForeground1,
+                  cursor: isCurrent ? 'pointer' : 'default'
+                }}
+                onClick={() => {
+                  if (!isCurrent) return
+                  onClose()
+                  useStore.getState().setActiveDialog('lyricOffset')
+                }}
+                title={isCurrent ? '点击调整这首歌的歌词偏移' : undefined}
+              >
+                {offsetText}
+              </span>
+              {remembered != null && (
+                <Button size="small" appearance="subtle" onClick={async () => {
+                  await api.appCopy(fmtOffset(remembered))
+                  toastSuccess('已复制偏移值')
+                }}>
+                  复制
+                </Button>
+              )}
+            </div>
+            {/* 原曲链接:兜底目标歌显示最初点播的原曲,普通歌显示自身来源 */}
+            {originalLink ? linkRow(isFallbackTarget ? '原曲链接' : '歌曲链接', originalLink) : null}
+            {/* 兜底后的音源链接(通常为B站):仅当这首歌正是兜底目标时显示 */}
+            {fallbackLink ? linkRow('兜底音源链接', fallbackLink) : null}
             {rows &&
-              Object.entries(rows).map(([k, v]) => (
-                <div key={k} style={{ display: 'flex', gap: 12, padding: '5px 0', borderBottom: `1px solid ${tokens.colorNeutralStroke2}` }}>
-                  <span style={{ width: 96, color: tokens.colorNeutralForeground3, flexShrink: 0 }}>{k}</span>
-                  <span style={{ flex: 1, minWidth: 0, wordBreak: 'break-all' }}>{v}</span>
-                  <Button
-                    size="small"
-                    appearance="subtle"
-                    onClick={async () => {
-                      await api.appCopy(v)
-                      toastSuccess(`已复制${k}`)
-                    }}
-                  >
-                    复制
-                  </Button>
-                </div>
-              ))}
+              Object.entries(rows)
+                .filter(([k]) => k !== '链接' && k !== '专辑')
+                .map(([k, v]) => (
+                  <div key={k} style={{ display: 'flex', gap: 12, padding: '5px 0', borderBottom: `1px solid ${tokens.colorNeutralStroke2}` }}>
+                    <span style={{ width: 96, color: tokens.colorNeutralForeground3, flexShrink: 0 }}>{k}</span>
+                    <span style={{ flex: 1, minWidth: 0, wordBreak: 'break-all' }}>{v}</span>
+                    <Button
+                      size="small"
+                      appearance="subtle"
+                      onClick={async () => {
+                        await api.appCopy(v)
+                        toastSuccess(`已复制${k}`)
+                      }}
+                    >
+                      复制
+                    </Button>
+                  </div>
+                ))}
           </DialogContent>
           <DialogActions>
             <Button appearance="primary" onClick={onClose}>关闭</Button>
@@ -955,46 +1071,108 @@ export function RatePitchDialog({ open, onClose }: { open: boolean; onClose: () 
   )
 }
 /** 歌词偏移 */
+/**
+ * 歌词偏移弹窗:一键校准 + 每歌记忆。
+ * 调整写入当前播放歌曲的记忆(library.lyricOffsets,持久化),下次播放同一首自动应用;
+ * 没有记忆的歌回退全局偏移(设置页可调)。正值=歌词提前,与文案一致。
+ */
 export function LyricOffsetDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
-  const offset = useStore((s) => s.library?.settings.lyricOffsetMs ?? 0)
-  const update = useStore((s) => s.updateSetting)
-  const [local, setLocal] = useState(offset)
+  const songId = useStore((s) => s.current?.id ?? null)
+  const songOffset = useStore((s) => (s.current ? s.library?.lyricOffsets?.[s.current.id] : undefined))
+  const globalOffset = useStore((s) => s.library?.settings.lyricOffsetMs ?? 0)
+  const setSongOffset = useStore((s) => s.setSongLyricOffset)
 
-  useEffect(() => {
-    if (open) setLocal(offset)
-  }, [open, offset])
+  const remembered = typeof songOffset === 'number'
+  const current = remembered ? (songOffset as number) : globalOffset
+
+  /** 长按连发:按住 450ms 后每 130ms 重复一次(校准到听感即可,不用反复点) */
+  const delayRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const repeatRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const stopHold = useCallback(() => {
+    if (delayRef.current) {
+      clearTimeout(delayRef.current)
+      delayRef.current = null
+    }
+    if (repeatRef.current) {
+      clearInterval(repeatRef.current)
+      repeatRef.current = null
+    }
+  }, [])
+  useEffect(() => stopHold, [stopHold])
+
+  const startHold = (delta: number) => {
+    if (!songId) return
+    stopHold()
+    setSongOffset(current + delta)
+    delayRef.current = setTimeout(() => {
+      delayRef.current = null
+      // 连发时每次都从 store 现值出发,避免闭包旧值
+      repeatRef.current = setInterval(() => {
+        const s = useStore.getState()
+        const base = s.current
+          ? (s.library?.lyricOffsets?.[s.current.id] ?? s.library?.settings.lyricOffsetMs ?? 0)
+          : 0
+        s.setSongLyricOffset(base + delta)
+      }, 130)
+    }, 450)
+  }
 
   const apply = (v: number) => {
-    setLocal(v)
-    update('lyricOffsetMs', v)
+    setSongOffset(v)
   }
 
   return (
     <Dialog open={open} onOpenChange={(_, d) => !d.open && onClose()}>
       <DialogSurface style={{ maxWidth: 520, width: '90vw' }}>
         <DialogBody>
-          <DialogTitle>歌词偏移</DialogTitle>
+          <DialogTitle>歌词偏移{remembered ? '(本歌)' : ''}</DialogTitle>
           <DialogContent>
-            <div style={{ textAlign: 'center', fontSize: 40, fontWeight: 600, margin: '8px 0' }}>
-              {local === 0 ? '无偏移' : `${local > 0 ? '+' : ''}${(local / 1000).toFixed(2)}s`}
+            {/* 一键校准:听感为准,按住可连发,自动记进当前这首歌 */}
+            <div style={{ display: 'flex', gap: 10, justifyContent: 'center', margin: '4px 0 14px' }}>
+              <Button
+                appearance="primary"
+                disabled={!songId}
+                style={{ flex: 1, maxWidth: 200 }}
+                onPointerDown={() => startHold(250)}
+                onPointerUp={stopHold}
+                onPointerLeave={stopHold}
+              >
+                歌词晚了 → 提前
+              </Button>
+              <Button
+                appearance="primary"
+                disabled={!songId}
+                style={{ flex: 1, maxWidth: 200 }}
+                onPointerDown={() => startHold(-250)}
+                onPointerUp={stopHold}
+                onPointerLeave={stopHold}
+              >
+                歌词早了 → 延后
+              </Button>
             </div>
-            <Text size={200} style={{ color: tokens.colorNeutralForeground3, display: 'block', textAlign: 'center', marginBottom: 12 }}>
-              正值=歌词提前,负值=歌词延迟
+            <div style={{ textAlign: 'center', fontSize: 40, fontWeight: 600, margin: '2px 0' }}>
+              {current === 0 ? '无偏移' : `${current > 0 ? '+' : ''}${(current / 1000).toFixed(2)}s`}
+            </div>
+            <Text size={200} style={{ color: tokens.colorNeutralForeground3, display: 'block', textAlign: 'center' }}>
+              {remembered ? '已记住这首歌,下次播放自动应用' : '当前用全局偏移(可在设置页调整);下面调整会记到这首歌'}
             </Text>
             <Slider
               min={-10000}
               max={10000}
               step={250}
-              value={local}
+              value={Math.min(10000, Math.max(-10000, current))}
+              disabled={!songId}
               onChange={(_, d) => apply(d.value)}
             />
-            <div style={{ display: 'flex', gap: 8, justifyContent: 'center', marginTop: 16, flexWrap: 'wrap' }}>
-              {[-500, -250, 0, 250, 500].map((v) => (
-                <Button key={v} size="small" onClick={() => apply(local + v)}>
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'center', marginTop: 12, flexWrap: 'wrap' }}>
+              {[-500, -250, 250, 500].map((v) => (
+                <Button key={v} size="small" disabled={!songId} onClick={() => apply(current + v)}>
                   {v > 0 ? `+${v}` : v}ms
                 </Button>
               ))}
-              <Button size="small" onClick={() => apply(0)}>归零</Button>
+              <Button size="small" disabled={!songId} onClick={() => setSongOffset(null)}>
+                清除本歌记忆{remembered ? '' : '(无)'}
+              </Button>
             </div>
           </DialogContent>
           <DialogActions>
@@ -1235,7 +1413,8 @@ export function EqDialog({ open, onClose }: { open: boolean; onClose: () => void
                     step={1}
                     value={s.eqGains[i] ?? 0}
                     vertical
-                    style={{ height: 96 }}
+                    // 内联 width:auto 压回全局 .fui-Slider{width:100%}:垂直轨道不能被横向拉满
+                    style={{ height: 96, width: 'auto' }}
                     onChange={(_, d) => {
                       const gains = [...s.eqGains]
                       gains[i] = d.value
