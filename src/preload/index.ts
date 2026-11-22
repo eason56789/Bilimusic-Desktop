@@ -63,6 +63,7 @@ const api: DesktopApi = {
   pagesGet: (bvid: string) => invoke('pages:get', bvid),
   commentsGet: (song, offset, order, platform, aggregate) => invoke('api:comments', song, offset, order, platform, aggregate),
   songDetail: (song) => invoke('api:songDetail', song),
+  songWiki: (song) => invoke('api:songWiki', song),
   appCopy: (text) => invoke('app:copy', text),
   appOpenExternal: (url) => invoke('app:openExternal', url),
   appPickLyricFile: () => invoke('app:pickLyricFile'),

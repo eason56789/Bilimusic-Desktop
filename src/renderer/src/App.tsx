@@ -94,7 +94,9 @@ const useStyles = makeStyles({
     backgroundColor: 'var(--app-content-bg)',
     position: 'relative'
   },
-  /** 歌手主页覆盖层:盖在原页面上方,返回后原页面状态(搜索词/结果/滚动位置)不丢 */
+  /** 歌手主页覆盖层:盖在原页面上方,返回后原页面状态(搜索词/结果/滚动位置)不丢。
+   *  打开时下层页面 visibility:hidden(见 pageStack 渲染处),所以这里的半透明玻璃
+   *  只透出窗口的系统材质(亚克力/底图),不会看到下层内容,窗口透明不受影响。 */
   artistOverlay: {
     position: 'absolute',
     inset: 0,
@@ -407,8 +409,17 @@ function Shell({ className }: { className?: string }) {
               ]
                 .filter(Boolean)
                 .join(' ')}
-              style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}
-              aria-hidden={entry.leaving || undefined}
+              style={{
+                display: 'flex',
+                flexDirection: 'column',
+                flex: 1,
+                minHeight: 0,
+                // 歌手页覆盖层打开时隐藏下层页面:覆盖层的半透明玻璃只透出系统材质,
+                // 既看不到下层内容,又不破坏窗口的亚克力/底图透明。
+                // 用 visibility 而非 display:保留布局与滚动位置,返回后状态不丢。
+                visibility: artistPageId ? 'hidden' : undefined
+              }}
+              aria-hidden={entry.leaving || artistPageId ? true : undefined}
             >
               {renderPage(entry.page)}
             </div>

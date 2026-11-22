@@ -31,6 +31,7 @@ import type {
 } from '@shared/types'
 import * as bilibili from './api/bilibili'
 import * as netease from './api/netease'
+import { getSongWiki } from './api/neteaseWiki'
 import * as qqmusic from './api/qqmusic'
 import { getQqUserPlaylists } from './api/qqmusic'
 import * as kugou from './api/kugou'
@@ -737,6 +738,21 @@ export function registerIpc(): void {
   ipcMain.handle('api:neteasePersonalized', async () => {
     try {
       return ok(await netease.getPersonalizedPlaylists(12))
+    } catch (e) {
+      return err(e)
+    }
+  })
+  /** 歌曲百科:跨平台歌曲先匹配网易云 id(评论的同一套匹配逻辑),再拉百科数据 */
+  ipcMain.handle('api:songWiki', async (_e: unknown, song: Song) => {
+    try {
+      let id = song.neteaseId
+      if (!id) {
+        const hit = await findNeteaseMatch(song)
+        if (!hit?.neteaseId) return { ok: false as const, error: '网易云未找到对应歌曲,暂无百科' }
+        id = hit.neteaseId
+      }
+      const wiki = await getSongWiki(id)
+      return ok(wiki)
     } catch (e) {
       return err(e)
     }

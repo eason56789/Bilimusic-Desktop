@@ -772,6 +772,61 @@ export interface ChartCatalog {
   error?: string
 }
 
+/* ===== 歌曲百科(数据来自网易云音乐,参考 NeriPlayer) ===== */
+
+export interface NeteaseWikiSimilarSong {
+  songId: number
+  name: string
+  artist: string
+  coverUrl?: string
+}
+
+export interface NeteaseWikiRelatedPlaylist {
+  playlistId: number
+  name: string
+  coverUrl?: string
+  playCount?: number
+}
+
+export interface NeteaseWikiAward {
+  title: string
+  detail?: string
+}
+
+export interface NeteaseWikiCredits {
+  lyricists: string[]
+  composers: string[]
+  arrangers: string[]
+  producers: string[]
+  other: { role: string; names: string[] }[]
+}
+
+export interface NeteaseSongWiki {
+  songId: number
+  genres: string[]
+  tags: string[]
+  language?: string
+  bpm?: number
+  awards: NeteaseWikiAward[]
+  appearances: string[]
+  albumName?: string
+  albumPicUrl?: string
+  albumCompany?: string
+  publishTime?: number
+  artist?: {
+    id: number
+    name: string
+    avatar?: string
+    briefDesc?: string
+    musicSize?: number
+    albumSize?: number
+    fansCount?: number
+  }
+  credits?: NeteaseWikiCredits
+  similarSongs: NeteaseWikiSimilarSong[]
+  relatedPlaylists: NeteaseWikiRelatedPlaylist[]
+}
+
 export interface ApiResponse<T> {
   ok: boolean
   data?: T
@@ -855,6 +910,8 @@ export interface DesktopApi {
     aggregate?: boolean
   ): Promise<ApiResponse<CommentsResult>>
   songDetail(song: Song): Promise<ApiResponse<Record<string, string>>>
+  /** 歌曲百科:跨平台歌曲先匹配网易云 id,再拉百科(拿不到返回 error) */
+  songWiki(song: Song): Promise<ApiResponse<NeteaseSongWiki>>
   // 应用操作
   appCopy(text: string): Promise<void>
   appOpenExternal(url: string): Promise<void>

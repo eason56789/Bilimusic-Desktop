@@ -26,6 +26,7 @@ import {
   ChatMultipleRegular,
   DeleteRegular,
   DismissRegular,
+  BookOpenRegular,
   InfoRegular,
   LocationRegular,
   PlayRegular,
@@ -758,6 +759,16 @@ export function SongInfoDialog({ song, open, onClose }: { song: Song | null; ope
                 ))}
           </DialogContent>
           <DialogActions>
+            <Button
+              appearance="subtle"
+              icon={<BookOpenRegular />}
+              onClick={() => {
+                onClose()
+                useStore.getState().openSongDialog('wiki', song)
+              }}
+            >
+              歌曲百科
+            </Button>
             <Button appearance="primary" onClick={onClose}>关闭</Button>
           </DialogActions>
         </DialogBody>

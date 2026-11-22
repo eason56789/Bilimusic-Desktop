@@ -349,6 +349,10 @@ export function SongList({
   const openDetail = (song: Song): void => {
     useStore.getState().openSongDialog('info', song)
   }
+  /** 歌曲百科(网易云数据):同样针对被右键的那首歌 */
+  const openWiki = (song: Song): void => {
+    useStore.getState().openSongDialog('wiki', song)
+  }
   /** 更换音源:同上 */
   const openSwitch = (song: Song): void => {
     useStore.getState().openSongDialog('source', song)
@@ -387,6 +391,9 @@ export function SongList({
         </MenuItem>
         <MenuItem icon={<InfoRegular />} onClick={() => openDetail(song)}>
           歌曲详情
+        </MenuItem>
+        <MenuItem icon={<InfoRegular />} onClick={() => openWiki(song)}>
+          歌曲百科
         </MenuItem>
         <MenuItem icon={<CopyRegular />} onClick={() => copyInfo(song)}>
           复制歌名歌手

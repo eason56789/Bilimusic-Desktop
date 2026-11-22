@@ -30,6 +30,7 @@ import {
   RatePitchDialog,
   SourceSwitchDialog
 } from './PlayerDialogs'
+import { SongWikiDialog } from './SongWikiDialog'
 
 const useStyles = makeStyles({
   wheelRow: {
@@ -297,13 +298,15 @@ export function GlobalDialogs() {
   const nowPlayingOpen = useStore((s) => s.nowPlayingOpen)
   return (
     <>
+      {/* target = 右键指定的歌曲(歌曲百科/详情等入口传入),无右键目标时用当前播放 */}
       <CommentsDialog
-        song={current}
+        song={target}
         open={dlg === 'comments' && !nowPlayingOpen}
         onClose={() => setDlg(null)}
       />
       <PagesDialog open={dlg === 'pages'} onClose={() => setDlg(null)} />
       <SongInfoDialog song={target} open={dlg === 'info'} onClose={() => setDlg(null)} />
+      <SongWikiDialog song={target} open={dlg === 'wiki'} onClose={() => setDlg(null)} />
       <LyricEditDialog song={current} open={dlg === 'lyricEdit'} onClose={() => setDlg(null)} />
       <LyricReplaceDialog song={current} open={dlg === 'lyricReplace'} onClose={() => setDlg(null)} />
       <LyricOffsetDialog open={dlg === 'lyricOffset'} onClose={() => setDlg(null)} />

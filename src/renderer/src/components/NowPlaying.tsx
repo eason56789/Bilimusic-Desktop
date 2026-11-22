@@ -37,6 +37,7 @@ import {
   SettingsRegular,
   ArrowDownloadRegular,
   InfoRegular,
+  BookOpenRegular,
   NoteEditRegular,
   MusicNote2Regular,
   ArrowSyncRegular,
@@ -1022,6 +1023,9 @@ export function NowPlaying() {
                     </MenuItem>
                     <MenuItem icon={<InfoRegular />} onClick={() => setDlg('info')}>
                       歌曲详情
+                    </MenuItem>
+                    <MenuItem icon={<BookOpenRegular />} onClick={() => setDlg('wiki')}>
+                      歌曲百科
                     </MenuItem>
                     <MenuItem icon={<NoteEditRegular />} onClick={() => setDlg('lyricEdit')}>
                       歌词编辑

@@ -82,6 +82,7 @@ export function Cover({
   size,
   radius = 6,
   iconSize = 18,
+  className,
   /** 'thumb'(默认,列表/小图):CDN 缩放;'full'(全屏播放页):原始大图 */
   quality = 'thumb'
 }: {
@@ -89,6 +90,7 @@ export function Cover({
   size: number
   radius?: number
   iconSize?: number
+  className?: string
   quality?: 'thumb' | 'full'
 }) {
   const styles = useStyles()
@@ -107,7 +109,7 @@ export function Cover({
   if (!src || failed) {
     return (
       <div
-        className={styles.fallback}
+        className={`${styles.fallback} ${className ?? ''}`}
         style={{ width: size, height: size, borderRadius: radius, flexShrink: 0 }}
       >
         <MusicNote2Regular fontSize={iconSize} />
@@ -116,7 +118,7 @@ export function Cover({
   }
   return (
     <img
-      className={`${styles.img} bm-cover-img ${loaded ? 'bm-cover-loaded' : 'bm-cover-loading'}`}
+      className={`${styles.img} bm-cover-img ${className ?? ''} ${loaded ? 'bm-cover-loaded' : 'bm-cover-loading'}`}
       src={src}
       loading="lazy"
       onLoad={() => setLoaded(true)}

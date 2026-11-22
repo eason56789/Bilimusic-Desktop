@@ -30,6 +30,7 @@ export type DialogKey =
   | 'comments'
   | 'pages'
   | 'info'
+  | 'wiki'
   | 'lyricEdit'
   | 'lyricReplace'
   | 'lyricOffset'
